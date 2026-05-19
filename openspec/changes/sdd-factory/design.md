@@ -291,3 +291,18 @@ future proposal if and when the friction justifies it:
 - **Running `sdd.yaml` against minifac itself in CI.** Plumbing the
   factory into the release process is orchestration, not a feature of
   the factory. Defer.
+- **Remote-CI watch as a verify option.** Today `verify` runs the
+  target repo's verify commands directly in `cwd` — effectively a
+  local-machine version of CI. For matrix tests, infra/workflow
+  changes, and integration tests that only exist on the CI runner,
+  the only true gate is the remote pipeline (GitHub Actions, etc.).
+  A future change could add an *opt-in* CI-watch mode on the verify
+  node — e.g. `with: { mode: "watch_ci", branch: "..." }` — that
+  pushes the branch, polls the pipeline, and surfaces its result as
+  the node's status. **It must remain optional**, not required for
+  all workflows: many factories will run on a target repo with no CI
+  configured, or want the fast local-only loop. New surface area when
+  added: a git-push side effect, a `gh`-or-equivalent dependency,
+  polling logic, and substantially longer run times. Probably wants
+  to land after `serve-and-viewer` so long polls have somewhere to
+  stream their state. Defer.
