@@ -2,26 +2,44 @@
 
 ### Requirement: Start nodes
 
-The runner SHALL begin execution at every node with no inbound edges
-("start nodes"). A factory MUST contain at least one start node; the
-loader SHALL reject factories with zero start nodes.
+The runner SHALL begin execution at every "start node" — defined as a
+node with no `on_success` inbound edges. A factory MUST contain at least
+one start node; the loader SHALL reject factories with zero. `on_success`
+edges represent forward flow; `on_failure` edges represent recovery loops
+back into nodes that may have been traversed previously, so a node whose
+only inbound edges are `on_failure` is still an entry point for the
+forward flow.
 
 #### Scenario: Single start node executes first
 
-- **WHEN** a factory has nodes A, B with edges A → B and the runner
-  begins
+- **WHEN** a factory has nodes A, B with edge A → B (`on_success`) and
+  the runner begins
 - **THEN** node A is scheduled and runs before B
 
 #### Scenario: Multiple start nodes are scheduled together
 
-- **WHEN** a factory has nodes A, B, C with edges A → C and B → C and
-  the runner begins
+- **WHEN** a factory has nodes A, B, C with edges A → C and B → C (both
+  `on_success`) and the runner begins
 - **THEN** A and B are both eligible to run before C
+
+#### Scenario: Cycle entry via on_failure edge is a start node
+
+- **WHEN** a factory has nodes P, V with edges P → V (`on_success`) and
+  V → P (`on_failure`)
+- **THEN** P is a start node (V's edge back to P is `on_failure`,
+  recovery flow, so P has no `on_success` inbound)
+
+#### Scenario: Self-loop on failure does not disqualify a start node
+
+- **WHEN** a factory has node A with edges A → A (`on_failure`) and
+  A → T (`on_success`), and T is the only other node
+- **THEN** A is a start node
 
 #### Scenario: No start nodes fails at load time
 
 - **WHEN** a factory is constructed such that every node has at least one
-  inbound edge (e.g. a closed loop with no entry)
+  `on_success` inbound edge (e.g. a closed `on_success` loop with no
+  entry)
 - **THEN** the loader rejects the factory before the runner is invoked
 
 ### Requirement: Edge traversal honors `when` condition

@@ -1,0 +1,12 @@
+name: hello
+description: Single Claude node that says hello. The smallest end-to-end factory.
+
+nodes:
+  greet:
+    executor: claude
+    terminal: true
+    with:
+      prompt: |
+        Say hello in one short, friendly sentence.
+
+edges: []

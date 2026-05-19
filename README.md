@@ -49,9 +49,37 @@ is exhausted or a node flags an intractable problem.
   - `hello.yaml` — single-node, learn-the-schema example
   - `sdd.yaml` — the propose/apply/verify/archive loop
 
+## Run the example
+
+```
+npm install
+npm run build
+node dist/cli.js run examples/hello.yaml
+```
+
+`examples/hello.yaml` defines a single `claude` node, so the `claude` CLI
+must be on `$PATH`. Output from each node is streamed to the terminal with
+a `[<node_id>]` prefix; the run exits with code `0` on success, `1` on
+load/validation errors, `2` on node failure, and `3` on budget exhaustion.
+
+## Contributing / SDD workflow
+
+Every non-trivial change in this repo goes through the OpenSpec workflow:
+
+1. `/opsx:propose "<idea>"` — write the proposal, design, tasks, and any
+   spec deltas under `openspec/changes/<change-name>/`.
+2. `/opsx:apply <change-name>` — work through the tasks, keep
+   `tasks.md` in sync with reality, and run the verify gate (`npm test`,
+   `npm run build`, `npm run check`).
+3. `/opsx:archive <change-name>` — fold the change into the canonical
+   spec under `openspec/specs/`.
+
+Smaller fixes (docs, typos, formatting) can skip the dance; everything
+that changes behavior or schema goes through it.
+
 ## Status
 
-Pre-zero. The first openspec change proposal will define the v0 architecture.
+Pre-zero. The first openspec change proposal defines the v0 architecture.
 See `openspec/changes/` for active proposals and `openspec/specs/` for the
 canonical spec.
 
