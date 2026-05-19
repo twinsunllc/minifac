@@ -62,6 +62,22 @@ must be on `$PATH`. Output from each node is streamed to the terminal with
 a `[<node_id>]` prefix; the run exits with code `0` on success, `1` on
 load/validation errors, `2` on node failure, and `3` on budget exhaustion.
 
+### sdd.yaml — the propose/apply/verify/archive loop
+
+`examples/sdd.yaml` is the canonical SDD factory: four `claude` nodes
+wired into the propose → apply → verify → archive loop, with verify
+looping back to apply on failure (bounded at three retries). It is
+shipped as a **template** — copy it, edit two things, then run:
+
+1. Replace every `<CHANGE_NAME>` in the prompts with the real change
+   name.
+2. Set every node's `cwd` to the absolute path of the target repo
+   (an OpenSpec-equipped repo with verify commands like `npm test`,
+   `npm run build`, `npm run check`).
+
+See [examples/sdd.md](examples/sdd.md) for the full per-node contract,
+the copy-and-edit workflow, and known friction points.
+
 ## Contributing / SDD workflow
 
 Every non-trivial change in this repo goes through the OpenSpec workflow:

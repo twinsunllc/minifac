@@ -1,0 +1,104 @@
+name: sdd
+description: |
+  The propose → apply → verify → archive loop, expressed as a factory.
+  This is a template: copy it to sdd-<changename>.yaml and edit two things
+  per node — the literal string <CHANGE_NAME> in each prompt, and the
+  per-node `cwd` (currently a placeholder). See examples/sdd.md for the
+  per-node contract and the copy-and-edit workflow.
+
+nodes:
+  propose:
+    executor: claude
+    cwd: /path/to/target/repo
+    with:
+      prompt: |
+        You are running the propose step of the SDD loop for change
+        <CHANGE_NAME>. Work in the current directory, which is an
+        OpenSpec-equipped repo.
+
+        Do all of the following:
+
+        1. Run `openspec new change <CHANGE_NAME>` to scaffold the change.
+        2. Write `openspec/changes/<CHANGE_NAME>/proposal.md`,
+           `design.md`, the spec deltas under `specs/`, and `tasks.md`.
+        3. Run `openspec validate <CHANGE_NAME>` and iterate until it
+           exits 0.
+
+        Exit 0 when validate is clean. Exit non-zero if you cannot get
+        validate to pass; name the unresolved validation error in your
+        final output.
+
+  apply:
+    executor: claude
+    cwd: /path/to/target/repo
+    with:
+      prompt: |
+        You are running the apply step of the SDD loop for change
+        <CHANGE_NAME>. The propose step already landed the proposal,
+        design, spec deltas, and tasks under
+        `openspec/changes/<CHANGE_NAME>/`. Prior node output is in your
+        run-wide history — if this is a retry, the verify failure that
+        sent you back is in there too; read it and address it.
+
+        Do all of the following:
+
+        1. Read `openspec/changes/<CHANGE_NAME>/tasks.md`.
+        2. Work each unchecked `- [ ]` task. Make the code changes,
+           mark each task `- [x]` as you finish it.
+        3. Commit progress when it makes sense; do not push.
+
+        Exit 0 only when every checkbox in tasks.md is `- [x]`. Exit
+        non-zero if a task is structurally impossible (e.g. needs a
+        schema change not in the proposal); name the blocking task in
+        your final output.
+
+  verify:
+    executor: claude
+    cwd: /path/to/target/repo
+    with:
+      prompt: |
+        You are running the verify step of the SDD loop for change
+        <CHANGE_NAME>. Prior propose and apply output is in your
+        run-wide history.
+
+        Run the target repo's verify commands in the current directory.
+        For most Node/TS repos that is:
+
+            npm test
+            npm run build
+            npm run check
+
+        Use whatever the target repo actually has. Then run
+        `openspec validate <CHANGE_NAME>` once more to confirm the
+        change is still clean.
+
+        Exit 0 only if every command exits 0. Exit non-zero on any
+        failure; name which command failed and include the relevant
+        output. Your failure output will be in the apply node's history
+        on the next iteration.
+
+  archive:
+    executor: claude
+    cwd: /path/to/target/repo
+    terminal: true
+    with:
+      prompt: |
+        You are running the archive step of the SDD loop for change
+        <CHANGE_NAME>. Verify has passed. Prior node output is in your
+        run-wide history.
+
+        Run `openspec archive <CHANGE_NAME>`. Exit 0 on a clean exit;
+        exit non-zero and name the error otherwise. This is the
+        terminal node — success here ends the run.
+
+edges:
+  - from: propose
+    to: apply
+  - from: apply
+    to: verify
+  - from: verify
+    to: archive
+  - from: verify
+    to: apply
+    when: on_failure
+    max_traversals: 3
