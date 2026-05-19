@@ -79,4 +79,24 @@ describe("examples/sdd.yaml", () => {
       .sort();
     expect(startNodes).toEqual(["propose"]);
   });
+
+  it("declares permission_mode: bypass_permissions on every node", async () => {
+    const { factory } = await loadFactory(sddPath);
+    for (const id of ["propose", "apply", "verify", "archive"] as const) {
+      const node = factory.nodes[id];
+      expect(node, `node ${id} should be defined`).toBeDefined();
+      expect(node?.with?.permission_mode, `node ${id} permission_mode`).toBe("bypass_permissions");
+    }
+  });
+
+  it("instructs every node prompt to emit MINIFAC_STATUS", async () => {
+    const { factory } = await loadFactory(sddPath);
+    for (const id of ["propose", "apply", "verify", "archive"] as const) {
+      const prompt = factory.nodes[id]?.with?.prompt;
+      expect(typeof prompt, `node ${id} prompt should be a string`).toBe("string");
+      expect(prompt as string, `node ${id} prompt should mention MINIFAC_STATUS`).toContain(
+        "MINIFAC_STATUS",
+      );
+    }
+  });
 });

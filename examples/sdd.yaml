@@ -11,6 +11,7 @@ nodes:
     executor: claude
     cwd: /path/to/target/repo
     with:
+      permission_mode: "bypass_permissions"
       prompt: |
         You are running the propose step of the SDD loop for change
         <CHANGE_NAME>. Work in the current directory, which is an
@@ -24,14 +25,33 @@ nodes:
         3. Run `openspec validate <CHANGE_NAME>` and iterate until it
            exits 0.
 
-        Exit 0 when validate is clean. Exit non-zero if you cannot get
-        validate to pass; name the unresolved validation error in your
-        final output.
+        ## Status signaling
+
+        Your final assistant message MUST end with the literal
+        `MINIFAC_STATUS:` sentinel line. The runner parses this line to
+        decide whether to schedule the next node; it does not look at
+        your CLI exit code.
+
+        - On success (you got `openspec validate <CHANGE_NAME>` to exit
+          0 and every required artifact is on disk), end your final
+          message with exactly this line and nothing after it:
+
+              MINIFAC_STATUS: succeeded
+
+        - On failure (you could not get validate clean, or a required
+          artifact could not be written), end your final message with
+          exactly these two lines and nothing after them:
+
+              MINIFAC_STATUS: failed
+              REASON: <one-line description of the unresolved validation error>
+
+        The sentinel must be the last thing in your message.
 
   apply:
     executor: claude
     cwd: /path/to/target/repo
     with:
+      permission_mode: "bypass_permissions"
       prompt: |
         You are running the apply step of the SDD loop for change
         <CHANGE_NAME>. The propose step already landed the proposal,
@@ -47,15 +67,34 @@ nodes:
            mark each task `- [x]` as you finish it.
         3. Commit progress when it makes sense; do not push.
 
-        Exit 0 only when every checkbox in tasks.md is `- [x]`. Exit
-        non-zero if a task is structurally impossible (e.g. needs a
-        schema change not in the proposal); name the blocking task in
-        your final output.
+        ## Status signaling
+
+        Your final assistant message MUST end with the literal
+        `MINIFAC_STATUS:` sentinel line. The runner parses this line to
+        decide whether to schedule the next node; it does not look at
+        your CLI exit code.
+
+        - On success (every checkbox in
+          `openspec/changes/<CHANGE_NAME>/tasks.md` is `- [x]`), end
+          your final message with exactly this line and nothing after
+          it:
+
+              MINIFAC_STATUS: succeeded
+
+        - On failure (a task is structurally impossible, e.g. it needs
+          a schema change not in the proposal), end your final message
+          with exactly these two lines and nothing after them:
+
+              MINIFAC_STATUS: failed
+              REASON: <one-line description naming the blocking task>
+
+        The sentinel must be the last thing in your message.
 
   verify:
     executor: claude
     cwd: /path/to/target/repo
     with:
+      permission_mode: "bypass_permissions"
       prompt: |
         You are running the verify step of the SDD loop for change
         <CHANGE_NAME>. Prior propose and apply output is in your
@@ -72,24 +111,64 @@ nodes:
         `openspec validate <CHANGE_NAME>` once more to confirm the
         change is still clean.
 
-        Exit 0 only if every command exits 0. Exit non-zero on any
-        failure; name which command failed and include the relevant
-        output. Your failure output will be in the apply node's history
-        on the next iteration.
+        ## Status signaling
+
+        Your final assistant message MUST end with the literal
+        `MINIFAC_STATUS:` sentinel line. The runner parses this line to
+        decide whether to schedule the next node; it does not look at
+        your CLI exit code. Your failure output will be in the apply
+        node's history on the next iteration, so the REASON line needs
+        to be diagnosable.
+
+        - On success (every verify command exited 0 and
+          `openspec validate <CHANGE_NAME>` is still clean), end your
+          final message with exactly this line and nothing after it:
+
+              MINIFAC_STATUS: succeeded
+
+        - On failure (any verify command exited non-zero), end your
+          final message with exactly these two lines and nothing after
+          them:
+
+              MINIFAC_STATUS: failed
+              REASON: <one-line description naming the failing command and the relevant output>
+
+        The sentinel must be the last thing in your message.
 
   archive:
     executor: claude
     cwd: /path/to/target/repo
     terminal: true
     with:
+      permission_mode: "bypass_permissions"
       prompt: |
         You are running the archive step of the SDD loop for change
         <CHANGE_NAME>. Verify has passed. Prior node output is in your
         run-wide history.
 
-        Run `openspec archive <CHANGE_NAME>`. Exit 0 on a clean exit;
-        exit non-zero and name the error otherwise. This is the
-        terminal node — success here ends the run.
+        Run `openspec archive <CHANGE_NAME>`. This is the terminal
+        node — success here ends the run.
+
+        ## Status signaling
+
+        Your final assistant message MUST end with the literal
+        `MINIFAC_STATUS:` sentinel line. The runner parses this line to
+        decide whether to schedule the next node; it does not look at
+        your CLI exit code.
+
+        - On success (`openspec archive <CHANGE_NAME>` exited 0), end
+          your final message with exactly this line and nothing after
+          it:
+
+              MINIFAC_STATUS: succeeded
+
+        - On failure (the archive command errored), end your final
+          message with exactly these two lines and nothing after them:
+
+              MINIFAC_STATUS: failed
+              REASON: <one-line description naming the archive error>
+
+        The sentinel must be the last thing in your message.
 
 edges:
   - from: propose

@@ -33,6 +33,19 @@ The target repo must have OpenSpec installed and the relevant verify
 commands wired up (typically `npm test`, `npm run build`,
 `npm run check`).
 
+> **Migration note for old copies.** If you copied `examples/sdd.yaml`
+> before the `sdd-factory-uses-claude-controls` change, your copy will
+> run today but report `succeeded` on every node while doing no actual
+> work — the spawned `claude` sessions cannot write files or run
+> side-effecting Bash under the CLI's default permission policy, and
+> the prompts use the older "Exit 0 / non-zero" signaling that the
+> runner no longer relies on. To migrate, make two edits per node:
+> add `permission_mode: "bypass_permissions"` to each `with:` block,
+> and rewrite each prompt's success/failure language to instruct the
+> model on the `MINIFAC_STATUS` sentinel (see "Status signaling"
+> below). The binding contract lives in
+> `openspec/specs/sdd-factory/spec.md`.
+
 ## Per-node contract
 
 Each node is binding at the contract level — responsibility, OpenSpec
@@ -48,9 +61,11 @@ holds. The binding version lives in
 - **Invokes:** `openspec new change <CHANGE_NAME>`, then writes
   `proposal.md`, `design.md`, spec deltas, `tasks.md`. Drives
   `openspec validate <CHANGE_NAME>` until clean.
-- **Success signal:** node exits 0; validate is clean.
-- **Failure signal:** node exits non-zero with a message naming the
-  unresolved validation error.
+- **Success signal:** final assistant message ends with
+  `MINIFAC_STATUS: succeeded`; validate is clean.
+- **Failure signal:** final assistant message ends with
+  `MINIFAC_STATUS: failed` followed by `REASON: <unresolved
+  validation error>`.
 
 ### apply
 
@@ -59,11 +74,12 @@ holds. The binding version lives in
 - **Invokes:** reads `openspec/changes/<CHANGE_NAME>/tasks.md`, works
   each unchecked `- [ ]`, marks them `- [x]`. May run local
   lints/builds as it goes.
-- **Success signal:** every checkbox in `tasks.md` is `- [x]`; node
-  exits 0.
-- **Failure signal:** node exits non-zero with a message identifying
-  the blocking task. There is no `apply → propose` recovery edge —
-  failure here ends the run.
+- **Success signal:** every checkbox in `tasks.md` is `- [x]`; final
+  assistant message ends with `MINIFAC_STATUS: succeeded`.
+- **Failure signal:** final assistant message ends with
+  `MINIFAC_STATUS: failed` followed by `REASON: <blocking task>`.
+  There is no `apply → propose` recovery edge — failure here ends the
+  run.
 
 ### verify
 
@@ -71,10 +87,12 @@ holds. The binding version lives in
 - **Invokes:** the target repo's verify commands in `cwd`. For most
   Node/TS repos that is `npm test`, `npm run build`,
   `npm run check`. Then `openspec validate <CHANGE_NAME>` once more.
-- **Success signal:** every verify command exits 0; node exits 0.
-- **Failure signal:** any verify command exits non-zero; node exits
-  non-zero, output names the failing command. Failure routes back to
-  `apply` on the `verify → apply` edge (`when: on_failure`,
+- **Success signal:** every verify command exits 0; final assistant
+  message ends with `MINIFAC_STATUS: succeeded`.
+- **Failure signal:** any verify command exits non-zero; final
+  assistant message ends with `MINIFAC_STATUS: failed` followed by
+  `REASON: <failing command + relevant output>`. Failure routes back
+  to `apply` on the `verify → apply` edge (`when: on_failure`,
   `max_traversals: 3`). After three retries the budget is exhausted
   and the run ends as `failed`.
 
@@ -82,19 +100,117 @@ holds. The binding version lives in
 
 - **Inputs:** full prior run via `ctx.history`.
 - **Invokes:** `openspec archive <CHANGE_NAME>`.
-- **Success signal:** archive exits 0; node exits 0. This is the
-  terminal node — success ends the run.
-- **Failure signal:** node exits non-zero, names the archive error.
+- **Success signal:** archive exits 0; final assistant message ends
+  with `MINIFAC_STATUS: succeeded`. This is the terminal node —
+  success ends the run.
+- **Failure signal:** final assistant message ends with
+  `MINIFAC_STATUS: failed` followed by `REASON: <archive error>`.
+
+## Status signaling
+
+Each node's status is communicated by a `MINIFAC_STATUS:` sentinel
+emitted as the final line of the model's final assistant message.
+The `claude` executor parses the sentinel out of the stream-json
+`result` event; the sentinel beats the CLI exit code in both
+directions (a `succeeded` sentinel with a non-zero exit reports
+`succeeded`; a `failed` sentinel with a zero exit reports `failed`).
+If no sentinel is found, the executor falls back to exit-code
+semantics, but the SDD factory does not rely on that fallback — every
+shipped prompt mandates the sentinel.
+
+The executor matches this regex against the final `result` field:
+
+```
+/^MINIFAC_STATUS:[ \t]*(succeeded|failed)\b[ \t]*(?:\r?\nREASON:[ \t]*(.*))?/m
+```
+
+The two literal acceptable endings are:
+
+```
+MINIFAC_STATUS: succeeded
+```
+
+and
+
+```
+MINIFAC_STATUS: failed
+REASON: schema validation failed for required field 'verify-mode'
+```
+
+The sentinel SHALL be the last thing in the assistant message. The
+`m` flag anchors `^` at line starts, so a trailing newline is fine,
+but stray text after the sentinel risks confusing future tooling
+even if today's regex tolerates it — keep the sentinel last.
+
+If you author a custom node prompt, drop this block at the end so it
+remains compliant:
+
+```
+## Status signaling
+
+Your final assistant message MUST end with the literal
+`MINIFAC_STATUS:` sentinel line. End your message with exactly:
+
+    MINIFAC_STATUS: succeeded
+
+on success, or exactly:
+
+    MINIFAC_STATUS: failed
+    REASON: <one-line description of what blocked the node>
+
+on failure. The sentinel must be the last thing in your message.
+```
+
+## Security posture
+
+Every spawned `claude` session runs with
+`permission_mode: "bypass_permissions"`, which grants the session full
+authority inside its resolved `cwd`: `Write`, `Edit`, and side-effecting
+`Bash` invocations are auto-approved without prompting. This is the
+posture the four SDD nodes actually need — `propose` writes the
+change artifacts, `apply` edits arbitrary files in the target repo,
+`verify` runs `npm test` / `npm run build` / `openspec validate`,
+and `archive` runs `openspec archive`.
+
+The security model is **user-trust-cwd**:
+
+- The user chose the `cwd`. The factory grants full authority inside
+  it; the user is responsible for pointing the factory at a directory
+  whose contents they accept full-authority edits to.
+- The prompts ship in this repo and are readable before invocation —
+  there is no remote prompt-injection vector in the shipped factory.
+- The field is literally named `bypass_permissions`. Anyone copying
+  the factory and reading the YAML can see the posture.
+
+Downstream copies are free to tighten this — e.g. set
+`permission_mode: "accept_edits"` and supply an `allowed_tools`
+allowlist appropriate to the target repo (typically including
+`Bash(openspec:*)`, `Bash(npm:*)`, `Bash(git:*)`, and whatever else
+your verify commands invoke). The shipped template does not maintain
+such an allowlist because keeping it correct as the OpenSpec CLI and
+verify commands evolve would be a maintenance tax not worth paying for
+a template the user is expected to read and copy.
 
 ## Fields users edit when copying
 
-Exactly two, repeated across four nodes:
+The two required edits, repeated across four nodes:
 
 1. **`<CHANGE_NAME>` in each node's prompt.** Eight references (two per
    prompt on average). A find-and-replace across the YAML is the
    intended workflow.
 2. **`cwd` on each of the four nodes.** All four should resolve to the
    same absolute path — the target repo.
+
+One optional, advanced edit:
+
+3. **`permission_mode` on each node's `with:` block.** The shipped
+   template sets this to `"bypass_permissions"`, which grants the
+   spawned session full authority inside `cwd` (see "Security posture"
+   above). Downstream copies that want a tighter posture can lower it
+   to `"accept_edits"` and add an `allowed_tools` allowlist
+   appropriate to their target repo. Don't lower it without supplying
+   the allowlist — `accept_edits` still gates side-effecting `Bash`,
+   so an unconfigured `verify` node will fail on `npm test`.
 
 Everything else (topology, budgets, executor) is binding and is
 covered by the spec.
