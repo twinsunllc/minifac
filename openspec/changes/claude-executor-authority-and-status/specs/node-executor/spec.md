@@ -79,8 +79,13 @@ corresponding flags, preserving the pre-existing restrictive default
 behavior.
 
 - `permission_mode` (string): one of the literal values `"default"`,
-  `"accept_edits"`, or `"bypass_permissions"`. When set, the executor
-  SHALL pass `--permission-mode <value>` to the CLI.
+  `"accept_edits"`, or `"bypass_permissions"`. When set to
+  `"accept_edits"` or `"bypass_permissions"`, the executor SHALL pass
+  `--permission-mode <camelCase-value>` to the CLI, mapping snake_case
+  YAML values to the CLI's camelCase choices: `accept_edits` →
+  `acceptEdits`, `bypass_permissions` → `bypassPermissions`. The value
+  `"default"` SHALL emit no `--permission-mode` flag, so the CLI's own
+  default policy applies.
 - `allowed_tools` (string array): each element a non-empty tool pattern.
   When set, the executor SHALL pass `--allowedTools <comma-joined-list>`
   to the CLI as a single flag whose value is the array joined by `,`.
@@ -111,7 +116,14 @@ append `with.args` after them.
 #### Scenario: `permission_mode` translates to `--permission-mode`
 
 - **WHEN** a node sets `permission_mode: accept_edits`
-- **THEN** the spawned argv contains `--permission-mode accept_edits`
+- **THEN** the spawned argv contains `--permission-mode acceptEdits`
+  (snake_case YAML value mapped to the CLI's camelCase choice)
+
+#### Scenario: `permission_mode: default` emits no flag
+
+- **WHEN** a node sets `permission_mode: default`
+- **THEN** the spawned argv contains no `--permission-mode` flag, so the
+  CLI's own default policy applies
 
 #### Scenario: Unknown `permission_mode` is rejected
 
@@ -142,7 +154,7 @@ append `with.args` after them.
 
 - **WHEN** a node sets `permission_mode: bypass_permissions` and
   `args: ["--debug"]`
-- **THEN** the spawned argv contains `--permission-mode bypass_permissions`
+- **THEN** the spawned argv contains `--permission-mode bypassPermissions`
   earlier in the argv than `--debug`
 
 ### Requirement: Status signaling via sentinel marker
@@ -156,7 +168,7 @@ The sentinel format SHALL be a line within the `result` event's
 `result` field (the final assistant message text) matching the regex:
 
 ```
-/^MINIFAC_STATUS:\s*(succeeded|failed)\b\s*(?:\nREASON:\s*(.*))?/m
+/^MINIFAC_STATUS:[ \t]*(succeeded|failed)\b[ \t]*(?:\r?\nREASON:[ \t]*(.*))?/m
 ```
 
 Behavior:
