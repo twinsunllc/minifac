@@ -1,0 +1,209 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono",
+    monospace;
+  margin: 0;
+  background: #0f1115;
+  color: #e7eaf0;
+}
+
+header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid #2a2f3a;
+  background: #161922;
+}
+
+header h1 {
+  font-size: 1rem;
+  margin: 0;
+  letter-spacing: 0.05em;
+}
+
+.server-info {
+  font-size: 0.8rem;
+  color: #8a90a0;
+}
+
+main {
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  height: calc(100vh - 41px);
+}
+
+#sidebar {
+  border-right: 1px solid #2a2f3a;
+  padding: 0.75rem;
+  overflow-y: auto;
+}
+
+#sidebar h2 {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #8a90a0;
+  margin: 0.75rem 0 0.25rem;
+}
+
+.factory-list,
+.run-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.factory-list li,
+.run-list li {
+  padding: 0.35rem 0.5rem;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: #d6d9e1;
+}
+
+.factory-list li:hover,
+.run-list li:hover {
+  background: #1d2230;
+}
+
+.factory-list li.selected {
+  background: #2a3144;
+  color: #fff;
+}
+
+.factory-list li.error {
+  color: #ff7373;
+}
+
+.run-list li small {
+  display: block;
+  color: #8a90a0;
+  font-size: 0.7rem;
+}
+
+#main {
+  display: grid;
+  grid-template-rows: auto auto 1fr;
+  padding: 1rem;
+  overflow: hidden;
+  min-height: 0;
+}
+
+#factory-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+#factory-header h2 {
+  font-size: 1rem;
+  margin: 0;
+}
+
+#start-run {
+  background: #3a5ff7;
+  color: #fff;
+  border: 0;
+  border-radius: 4px;
+  padding: 0.4rem 0.85rem;
+  font-family: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+#start-run:disabled {
+  background: #2a2f3a;
+  color: #6b7080;
+  cursor: not-allowed;
+}
+
+#graph-container {
+  border: 1px solid #2a2f3a;
+  border-radius: 4px;
+  margin: 0.75rem 0;
+  padding: 0.5rem;
+  background: #131722;
+  min-height: 200px;
+  max-height: 40vh;
+  overflow: auto;
+}
+
+#graph {
+  display: block;
+  width: 100%;
+  height: 300px;
+}
+
+.node-shape {
+  fill: #1f2535;
+  stroke: #4a516a;
+  stroke-width: 1.5;
+}
+
+.node-shape.status-running {
+  stroke: #3a5ff7;
+  fill: #1c2748;
+}
+
+.node-shape.status-succeeded {
+  stroke: #4ad08e;
+  fill: #16322a;
+}
+
+.node-shape.status-failed {
+  stroke: #ff7373;
+  fill: #3a1c1c;
+}
+
+.node-shape.status-terminal {
+  stroke-dasharray: 4 3;
+}
+
+.node-label {
+  fill: #e7eaf0;
+  font-size: 12px;
+  font-family: inherit;
+  pointer-events: none;
+}
+
+.edge-path {
+  fill: none;
+  stroke: #4a516a;
+  stroke-width: 1.5;
+}
+
+.edge-path.on-failure {
+  stroke: #b06868;
+  stroke-dasharray: 4 3;
+}
+
+.event-tail {
+  background: #131722;
+  border: 1px solid #2a2f3a;
+  border-radius: 4px;
+  padding: 0.5rem;
+  margin: 0;
+  font-size: 0.75rem;
+  white-space: pre-wrap;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.event-tail .ev-status {
+  color: #8a90a0;
+}
+
+.event-tail .ev-stderr {
+  color: #ffae8a;
+}
+
+.event-tail .ev-end {
+  color: #4ad08e;
+  font-weight: bold;
+}

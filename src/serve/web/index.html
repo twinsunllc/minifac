@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>minifac</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <header>
+      <h1>minifac</h1>
+      <div class="server-info" id="server-info"></div>
+    </header>
+    <main>
+      <aside id="sidebar">
+        <h2>Factories</h2>
+        <ul id="factory-list" class="factory-list"></ul>
+        <h2>Runs</h2>
+        <ul id="run-list" class="run-list"></ul>
+      </aside>
+      <section id="main">
+        <div id="factory-header">
+          <h2 id="factory-name">Select a factory</h2>
+          <button id="start-run" disabled>Start run</button>
+        </div>
+        <div id="graph-container">
+          <svg id="graph" xmlns="http://www.w3.org/2000/svg"></svg>
+        </div>
+        <h3>Events</h3>
+        <pre id="event-tail" class="event-tail"></pre>
+      </section>
+    </main>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

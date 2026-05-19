@@ -5,6 +5,7 @@ import { ClaudeExecutor } from "./executor/claude.js";
 import { ExecutorRegistry } from "./executor/registry.js";
 import { FactoryLoadError, loadFactory } from "./factory/loader.js";
 import { runFactory } from "./runner/run.js";
+import { type DaemonHandle, startDaemon } from "./serve/server.js";
 
 export interface CliIO {
   stdout: NodeJS.WritableStream;
@@ -14,6 +15,16 @@ export interface CliIO {
    * that don't want the real Claude executor wired up.
    */
   buildRegistry?: () => ExecutorRegistry;
+  /**
+   * Optional override for the daemon-start function (tests). When set, the
+   * `serve` subcommand calls this instead of the real `startDaemon`.
+   */
+  startDaemon?: typeof startDaemon;
+  /**
+   * When true, the `serve` subcommand returns immediately after the daemon
+   * is listening instead of waiting for SIGINT/SIGTERM. Tests use this.
+   */
+  serveReturnImmediately?: boolean;
 }
 
 function defaultRegistry(): ExecutorRegistry {
@@ -97,6 +108,46 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
         }
         exitCode = 1;
       }
+    });
+
+  program
+    .command("serve")
+    .description("Start the local minifac daemon (web viewer + HTTP API).")
+    .argument("[dir]", "directory to watch for factory YAML files", ".")
+    .option("--port <number>", "TCP port to bind", "4280")
+    .option("--host <string>", "loopback host to bind", "127.0.0.1")
+    .action(async (dir: string, opts: { port: string; host: string }) => {
+      const port = Number.parseInt(opts.port, 10);
+      if (!Number.isFinite(port) || port <= 0 || port > 65535) {
+        io.stderr.write(`Invalid --port: ${opts.port}\n`);
+        exitCode = 1;
+        return;
+      }
+      const start = io.startDaemon ?? startDaemon;
+      let handle: DaemonHandle;
+      try {
+        handle = await start({ dir, host: opts.host, port });
+      } catch (err) {
+        io.stderr.write(`Failed to start daemon: ${(err as Error).message}\n`);
+        exitCode = 1;
+        return;
+      }
+      io.stderr.write(
+        `minifac serve listening on http://${handle.host}:${handle.port} (watching ${dir})\n`,
+      );
+      if (io.serveReturnImmediately) {
+        await handle.close();
+        return;
+      }
+      await new Promise<void>((resolve) => {
+        const stop = (sig: NodeJS.Signals) => {
+          io.stderr.write(`received ${sig}, shutting down\n`);
+          handle.close().finally(() => resolve());
+        };
+        process.once("SIGINT", stop);
+        process.once("SIGTERM", stop);
+      });
+      exitCode = 0;
     });
 
   try {

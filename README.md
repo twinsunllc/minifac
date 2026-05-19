@@ -37,9 +37,11 @@ is exhausted or a node flags an intractable problem.
 
 ## What's in the box (planned v0)
 
-- `minifac serve` — daemon that watches `.minifac/` for factory YAML, exposes a
-  local web UI for running factories and streaming agent output
 - `minifac run <factory>` — kick off a run from the CLI
+- `minifac serve [dir]` — local daemon that watches a directory for factory
+  YAML, exposes a live web viewer at `http://127.0.0.1:4280` for picking a
+  factory, kicking off a run, and tailing node events over SSE
+  (localhost-only, no auth)
 - Factory schema (YAML): typed nodes, directed edges (cycles allowed),
   per-node executor (`claude` by default; pluggable for codex / opencode / etc.)
 - Pluggable storage with [beads](https://github.com/steveyegge/beads) (work items)
@@ -61,6 +63,53 @@ node dist/cli.js run examples/hello.yaml
 must be on `$PATH`. Output from each node is streamed to the terminal with
 a `[<node_id>]` prefix; the run exits with code `0` on success, `1` on
 load/validation errors, `2` on node failure, and `3` on budget exhaustion.
+
+Alternatively, use `minifac serve` for a live web viewer of the same run
+(see the [`minifac serve`](#minifac-serve--web-viewer) section below).
+
+## `minifac serve` — web viewer
+
+`minifac serve` starts a local daemon that watches a directory for
+factory YAML files and exposes a small web viewer. It uses the same
+loader and runner as `minifac run`, so any factory that runs in the
+terminal will run identically under the daemon.
+
+```
+node dist/cli.js serve examples/
+# minifac serve listening on http://127.0.0.1:4280 (watching examples/)
+```
+
+Then open <http://127.0.0.1:4280/> in a browser. You'll see:
+
+- a list of factories discovered in the watched directory,
+- the selected factory's graph (nodes + edges, with the verify→apply
+  retry edge styled as a back-edge),
+- a "Start run" button that POSTs to `/api/runs` and opens a live
+  Server-Sent Events stream of node events,
+- per-node status indicators that turn green on `succeeded` and red on
+  `failed` as the runner reports them.
+
+**Security posture:** the daemon binds `127.0.0.1` by default and
+**refuses any non-loopback `--host`**. There is no authentication,
+TLS, or audit log. It is intended for single-user local use. If you
+need to expose minifac on a network interface, that lives behind a
+separate proposal (we'll add auth before we add wider binding).
+
+**v0 scope:** the viewer can list factories, render the graph, start a
+run, and tail its events. There is no in-browser YAML editing, no
+pause/resume/cancel/retry-from-node controls, and no persistent run
+history — closing the daemon discards all run state. Each is a future
+proposal when justified.
+
+Flags:
+
+- `--port <number>` (default `4280`)
+- `--host <string>` (default `127.0.0.1`; loopback-only)
+- positional directory (default `.`)
+
+Point it at `examples/` to dogfood with `hello.yaml` and `sdd.yaml`;
+see [examples/sdd.md](examples/sdd.md) for the SDD factory's per-node
+contract.
 
 ### sdd.yaml — the propose/apply/verify/archive loop
 

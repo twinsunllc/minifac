@@ -161,6 +161,26 @@ edges:
     expect(code).toBe(3);
   });
 
+  it("serve --help describes the subcommand", async () => {
+    const out = new BufferStream();
+    const err = new BufferStream();
+    const code = await runCli(["serve", "--help"], { stdout: out, stderr: err });
+    expect(code).toBe(0);
+    expect(out.text() + err.text()).toMatch(/serve/i);
+  });
+
+  it("serve refuses a non-loopback host (via the real startDaemon path)", async () => {
+    const out = new BufferStream();
+    const err = new BufferStream();
+    const code = await runCli(["serve", "--host", "0.0.0.0", "."], {
+      stdout: out,
+      stderr: err,
+      serveReturnImmediately: true,
+    });
+    expect(code).toBe(1);
+    expect(err.text()).toMatch(/non-loopback|refuses|0\.0\.0\.0/);
+  });
+
   it("stderr events get a node prefix", async () => {
     const file = await writeTmp(`name: ok
 nodes:
