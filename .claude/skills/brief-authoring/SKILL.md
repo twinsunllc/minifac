@@ -58,6 +58,16 @@ When the brief file exists, hand off to the user with: "Run
    step-1 description suggested a different factory (e.g. a
    custom factory in their repo).
 
+   The `factory:` value accepts two forms:
+   - `<name>` — resolves against `.minifac/factories/<name>.yaml`
+     first (the repo's custom or extended factory), then falls back
+     to a built-in `examples/<name>.yaml`. Use this when the repo
+     might have customizations and you want them applied.
+   - `minifac:<name>` — always the built-in, ignoring any local
+     `.minifac/factories/<name>.yaml`. Use this only when a specific
+     brief needs the canonical factory regardless of repo
+     customization.
+
 3. **Ask Background**
 
    AskUserQuestion: "What problem does this change address, and why

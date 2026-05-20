@@ -705,4 +705,136 @@ mode: in-place
       expect(out.text()).toMatch(/Pruned:/);
     });
   });
+
+  describe("factory composition", () => {
+    it("brief with `factory: sdd` resolves to the local custom when present", async () => {
+      const dir = await makeFixtureDir();
+      // Built-in `examples/sdd.yaml` with one prompt.
+      await writeFixture(
+        dir,
+        "examples/sdd.yaml",
+        `name: sdd
+brief: required
+nodes:
+  a:
+    executor: test
+    terminal: true
+    with:
+      prompt: from-builtin
+edges: []
+`,
+      );
+      // Local custom factory overrides the prompt.
+      await writeFixture(
+        dir,
+        ".minifac/factories/sdd.yaml",
+        `extends: "minifac:sdd"
+nodes:
+  a:
+    executor: test
+    terminal: true
+    with:
+      prompt: from-local
+`,
+      );
+      await writeFixture(
+        dir,
+        "inputs/my-change.md",
+        `---
+change: my-change
+factory: sdd
+mode: in-place
+---
+the body
+`,
+      );
+      const captured: string[] = [];
+      const buildRegistry = (): ExecutorRegistry => {
+        const reg = new ExecutorRegistry();
+        const exec: NodeExecutor = {
+          type: "test",
+          async *run(node: ResolvedNode): AsyncIterable<NodeEvent> {
+            captured.push(typeof node.with?.prompt === "string" ? node.with.prompt : "");
+            yield { kind: "status", status: "succeeded" };
+          },
+        };
+        reg.register(exec);
+        return reg;
+      };
+      const out = new BufferStream();
+      const err = new BufferStream();
+      const code = await runCli(["run", "my-change"], {
+        stdout: out,
+        stderr: err,
+        runCwd: dir,
+        buildRegistry,
+      });
+      expect(code).toBe(0);
+      expect(captured).toEqual(["from-local"]);
+    });
+
+    it("brief with `factory: minifac:sdd` resolves to the built-in even when a local exists", async () => {
+      const dir = await makeFixtureDir();
+      await writeFixture(
+        dir,
+        "examples/sdd.yaml",
+        `name: sdd
+brief: required
+nodes:
+  a:
+    executor: test
+    terminal: true
+    with:
+      prompt: from-builtin
+edges: []
+`,
+      );
+      await writeFixture(
+        dir,
+        ".minifac/factories/sdd.yaml",
+        `extends: "minifac:sdd"
+nodes:
+  a:
+    executor: test
+    terminal: true
+    with:
+      prompt: from-local
+`,
+      );
+      await writeFixture(
+        dir,
+        "inputs/my-change.md",
+        `---
+change: my-change
+factory: minifac:sdd
+mode: in-place
+---
+the body
+`,
+      );
+      const captured: string[] = [];
+      const buildRegistry = (): ExecutorRegistry => {
+        const reg = new ExecutorRegistry();
+        const exec: NodeExecutor = {
+          type: "test",
+          async *run(node: ResolvedNode): AsyncIterable<NodeEvent> {
+            captured.push(typeof node.with?.prompt === "string" ? node.with.prompt : "");
+            yield { kind: "status", status: "succeeded" };
+          },
+        };
+        reg.register(exec);
+        return reg;
+      };
+      const out = new BufferStream();
+      const err = new BufferStream();
+      const code = await runCli(["run", "my-change"], {
+        stdout: out,
+        stderr: err,
+        runCwd: dir,
+        buildRegistry,
+      });
+      expect(code).toBe(0);
+      expect(captured).toEqual(["from-builtin"]);
+    });
+  });
 });

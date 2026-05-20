@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { Command } from "commander";
 import { BriefLoadError } from "./brief/loader.js";
 import { briefCommandAction } from "./cli/brief.js";
+import { initAction } from "./cli/init.js";
 import { RunArgResolutionError, resolveRunArg } from "./cli/resolve.js";
 import { ClaudeExecutor } from "./executor/claude.js";
 import { ExecutorRegistry } from "./executor/registry.js";
@@ -90,7 +91,7 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
 
       try {
         const resolved = await resolveRunArg(arg, cwd);
-        const loaded = await loadFactory(resolved.factoryPath);
+        const loaded = await loadFactory(resolved.factoryPath, cwd);
         const factoryName = loaded.factory.name;
         const briefMode = loaded.factory.brief;
         const brief = resolved.kind === "brief" ? resolved.brief : undefined;
@@ -251,6 +252,21 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
           }
         }
       }
+    });
+
+  program
+    .command("init")
+    .description(
+      "Bootstrap minifac's directory layout in cwd: inputs/, .minifac/, and .minifac/factories/.",
+    )
+    .option("--with-sdd", "Also write a starter .minifac/factories/sdd.yaml extending minifac:sdd")
+    .action(async (opts: { withSdd?: boolean }) => {
+      const cwd = io.runCwd ?? process.cwd();
+      exitCode = await initAction({
+        cwd,
+        withSdd: opts.withSdd === true,
+        io: { stdout: io.stdout, stderr: io.stderr },
+      });
     });
 
   program

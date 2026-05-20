@@ -26,10 +26,33 @@ function isPathLike(arg: string): boolean {
   return arg.includes(path.sep) || arg.includes("/") || arg.endsWith(".md");
 }
 
-async function resolveFactoryByName(name: string, cwd: string): Promise<string> {
-  const candidate = path.resolve(cwd, "examples", `${name}.yaml`);
-  if (await exists(candidate)) return candidate;
-  throw new RunArgResolutionError(`Could not resolve factory \`${name}\` — tried ${candidate}`);
+/**
+ * Resolve a factory reference to an absolute path.
+ *
+ * Two forms are accepted:
+ *
+ *   - `minifac:<name>` — built-in factory; resolved against
+ *     `<cwd>/examples/<name>.yaml` only. The local lookup is skipped.
+ *   - `<name>` (no prefix) — try `<cwd>/.minifac/factories/<name>.yaml`
+ *     first, then fall back to `<cwd>/examples/<name>.yaml`. The first
+ *     existing file wins.
+ *
+ * On miss, a `RunArgResolutionError` is thrown naming every path tried.
+ */
+async function resolveFactoryByName(ref: string, cwd: string): Promise<string> {
+  if (ref.startsWith("minifac:")) {
+    const name = ref.slice("minifac:".length);
+    const candidate = path.resolve(cwd, "examples", `${name}.yaml`);
+    if (await exists(candidate)) return candidate;
+    throw new RunArgResolutionError(`Could not resolve factory \`${ref}\` — tried ${candidate}`);
+  }
+  const localCandidate = path.resolve(cwd, ".minifac", "factories", `${ref}.yaml`);
+  if (await exists(localCandidate)) return localCandidate;
+  const exampleCandidate = path.resolve(cwd, "examples", `${ref}.yaml`);
+  if (await exists(exampleCandidate)) return exampleCandidate;
+  throw new RunArgResolutionError(
+    `Could not resolve factory \`${ref}\` — tried ${localCandidate} and ${exampleCandidate}`,
+  );
 }
 
 /**
@@ -38,11 +61,14 @@ async function resolveFactoryByName(name: string, cwd: string): Promise<string> 
  * Precedence (per the run-cli spec):
  *   1. Path-like → brief path.
  *   2. inputs/<thing>.md exists → brief by name.
- *   3. examples/<thing>.yaml exists → factory by name (brief-less).
+ *   3. Factory by name. Resolved via the two-step lookup described on
+ *      `resolveFactoryByName`: `<thing>` is tried as
+ *      `.minifac/factories/<thing>.yaml` first, then `examples/<thing>.yaml`.
  *   4. Else → error.
  *
- * In cases 1 and 2, the brief's `factory:` field is further resolved to
- * `examples/<factory>.yaml`; a missing factory is a usage error.
+ * In cases 1 and 2, the brief's `factory:` field is further resolved using
+ * the same factory-by-name lookup (and accepts the `minifac:<name>` prefix);
+ * a missing factory is a usage error.
  */
 export async function resolveRunArg(arg: string, cwd: string): Promise<ResolvedRun> {
   if (isPathLike(arg)) {
@@ -62,13 +88,21 @@ export async function resolveRunArg(arg: string, cwd: string): Promise<ResolvedR
     return { kind: "brief", brief, factoryPath };
   }
 
-  const factoryCandidate = path.resolve(cwd, "examples", `${arg}.yaml`);
-  if (await exists(factoryCandidate)) {
-    return { kind: "factory", factoryPath: factoryCandidate };
+  // Factory by name — uses the same two-step lookup as the brief's
+  // `factory:` field. Don't accept the `minifac:` prefix at the CLI arg
+  // level (the prefix lives on the brief's `factory:` for durability); but
+  // the bare name does fall through to local-then-built-in.
+  try {
+    const factoryPath = await resolveFactoryByName(arg, cwd);
+    return { kind: "factory", factoryPath };
+  } catch {
+    // Fall through to the unified error.
   }
 
+  const localCandidate = path.resolve(cwd, ".minifac", "factories", `${arg}.yaml`);
+  const exampleCandidate = path.resolve(cwd, "examples", `${arg}.yaml`);
   throw new RunArgResolutionError(
-    `Could not resolve \`${arg}\` as a brief path, brief name (${briefCandidate}), or factory name (${factoryCandidate})`,
+    `Could not resolve \`${arg}\` as a brief path, brief name (${briefCandidate}), or factory name (${localCandidate}, ${exampleCandidate})`,
   );
 }
 

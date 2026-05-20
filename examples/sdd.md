@@ -304,3 +304,31 @@ its own future proposal so it gets the scope it deserves:
 
 If any of those start blocking you for real work, that's the signal to
 open a proposal — not before.
+
+## Customizing the SDD factory for your repo
+
+The built-in SDD factory is one shape that works for minifac itself.
+Your repo probably runs verify a different way (`bun test`, `pytest`,
+`cargo test`, etc.). Rather than copying the whole YAML, extend it.
+
+1. From your repo root, run `minifac init` to create `inputs/`,
+   `.minifac/`, and `.minifac/factories/`. Add `--with-sdd` to get a
+   starter `.minifac/factories/sdd.yaml` you can edit.
+2. Edit `.minifac/factories/sdd.yaml`. Keep the `extends:
+   "minifac:sdd"` line at the top and redeclare only the node(s) you
+   want to change. See `docs/concepts/Factory.md` for the worked
+   example.
+
+How `factory:` resolves from a brief:
+
+- `factory: sdd` → tries `.minifac/factories/sdd.yaml` first, falls
+  back to the built-in (`examples/sdd.yaml`). Use this for the normal
+  case: your customizations apply automatically.
+- `factory: minifac:sdd` → always the built-in, skipping any local
+  override. Use this when a specific brief needs the canonical loop
+  regardless of repo customizations.
+
+The override is **replace-at-node-level**: redeclaring `verify`
+replaces the whole node from the base, not just the field you want to
+change. Copy the base's `with.permission_mode` / `allowed_tools` /
+etc. into your override if you still need them.

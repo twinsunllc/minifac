@@ -54,6 +54,32 @@ first, then falls back to a built-in `minifac:<name>`. Custom factories
 can `extends:` a built-in and override per node. See
 [[0008-File-Per-Factory-Composition]].
 
+### Worked example: customize SDD's verify step
+
+`minifac init` bootstraps the layout. A consumer repo whose tests run
+via `bun test` instead of `npm test` would create
+`.minifac/factories/sdd.yaml`:
+
+```yaml
+extends: "minifac:sdd"
+nodes:
+  verify:
+    executor: claude
+    with:
+      prompt: |
+        Run `bun test` and report any failures. If tests pass, end
+        with `MINIFAC_STATUS: succeeded`. Otherwise end with
+        `MINIFAC_STATUS: failed` and a one-line REASON.
+      allowed_tools: ["Bash"]
+      permission_mode: accept_edits
+```
+
+The override redeclares the entire `verify` node — `with.prompt`,
+`allowed_tools`, `permission_mode`. Other nodes (`propose`, `apply`,
+`archive`) and all `edges:` are inherited from `minifac:sdd`. A brief
+whose `factory:` is `sdd` (or `minifac:sdd` to force the built-in)
+will run this composed factory.
+
 ## Brief-driven vs brief-less
 
 Most factories consume a [[Brief]] (the [[SDD-Loop]] does). Some

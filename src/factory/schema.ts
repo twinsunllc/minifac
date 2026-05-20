@@ -21,6 +21,26 @@ export const EdgeSchema = z
   })
   .strict();
 
+// Raw schema accepted on disk: the merged-from-disk shape, which may carry
+// `extends:` at the top level. Edges and most nodes/top-level fields may be
+// omitted in a derived layer (then inherited from the base). The loader runs
+// chain resolution → merge → strict layer-level validation through
+// `FactoryLayerSchema`; the resolved factory is then validated through
+// `FactorySchema` (which forbids `extends:`).
+export const FactoryLayerSchema = z
+  .object({
+    name: z.string().min(1).optional(),
+    description: z.string().optional(),
+    brief: z.enum(["required", "optional", "none"]).optional(),
+    nodes: z.record(NodeSchema).optional(),
+    edges: z.array(EdgeSchema).optional(),
+    extends: z.string().min(1).optional(),
+  })
+  .strict();
+
+// Resolved (post-merge) factory shape. `extends:` is stripped before this
+// validates so downstream code never sees it. `name`, `nodes`, `edges` and
+// `brief` are required at this stage (with `brief` defaulting).
 export const FactorySchema = z
   .object({
     name: z.string().min(1),
@@ -31,6 +51,7 @@ export const FactorySchema = z
   })
   .strict();
 
+export type FactoryLayer = z.infer<typeof FactoryLayerSchema>;
 export type Factory = z.infer<typeof FactorySchema>;
 export type FactoryNode = z.infer<typeof NodeSchema>;
 export type FactoryEdge = z.infer<typeof EdgeSchema>;

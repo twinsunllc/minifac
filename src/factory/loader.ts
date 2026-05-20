@@ -1,9 +1,10 @@
-import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { parseDocument } from "yaml";
-import { ZodError } from "zod";
 import { findUncoveredCycles } from "./cycles.js";
-import { type Factory, FactorySchema } from "./schema.js";
+import { resolveExtendsChain } from "./extends.js";
+import { FactoryLoadError } from "./loader-error.js";
+import type { Factory } from "./schema.js";
+
+export { FactoryLoadError };
 
 export interface LoadedFactory {
   factory: Factory;
@@ -11,57 +12,27 @@ export interface LoadedFactory {
   sourceDir: string;
 }
 
-export class FactoryLoadError extends Error {
-  constructor(
-    message: string,
-    readonly sourcePath: string,
-    readonly location?: { line: number; col?: number },
-  ) {
-    super(message);
-    this.name = "FactoryLoadError";
-  }
-}
-
-export async function loadFactory(sourcePath: string): Promise<LoadedFactory> {
+/**
+ * Load and validate a factory from `sourcePath`.
+ *
+ * If the file declares a top-level `extends:` field, the chain is resolved
+ * (with the calling repo's cwd, `callerCwd`, used to locate `minifac:<name>`
+ * built-ins and bare `<name>` local factories) and merged using
+ * replace-at-node-level semantics. Post-schema validation runs against the
+ * resolved factory; errors continue to cite the entry-point file as
+ * `sourcePath` so the operator knows what to edit.
+ */
+export async function loadFactory(
+  sourcePath: string,
+  callerCwd: string = process.cwd(),
+): Promise<LoadedFactory> {
   const absolute = path.resolve(sourcePath);
-  let raw: string;
-  try {
-    raw = await readFile(absolute, "utf8");
-  } catch (err) {
-    throw new FactoryLoadError(`Could not read factory file: ${(err as Error).message}`, absolute);
-  }
+  const resolved = await resolveExtendsChain(absolute, callerCwd);
 
-  const doc = parseDocument(raw, { prettyErrors: true });
-  if (doc.errors.length > 0) {
-    const e = doc.errors[0];
-    if (!e) throw new FactoryLoadError("YAML parse error", absolute);
-    const linePos = e.linePos?.[0];
-    throw new FactoryLoadError(
-      `YAML parse error: ${e.message}`,
-      absolute,
-      linePos ? { line: linePos.line, col: linePos.col } : undefined,
-    );
-  }
-
-  const data = doc.toJS();
-
-  let factory: Factory;
-  try {
-    factory = FactorySchema.parse(data);
-  } catch (err) {
-    if (err instanceof ZodError) {
-      const issue = err.issues[0];
-      const dotted = issue ? issue.path.join(".") : "(root)";
-      const detail = issue ? issue.message : "schema validation failed";
-      throw new FactoryLoadError(`Schema error at ${dotted}: ${detail}`, absolute);
-    }
-    throw err;
-  }
-
-  validatePostSchema(factory, absolute);
+  validatePostSchema(resolved.factory, absolute);
 
   return {
-    factory,
+    factory: resolved.factory,
     sourcePath: absolute,
     sourceDir: path.dirname(absolute),
   };
