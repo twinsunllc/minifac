@@ -4,6 +4,7 @@ import type { RunHistoryEntry } from "../executor/types.js";
 import type { LoadedFactory } from "../factory/loader.js";
 import type { RunResult } from "../runner/result.js";
 import { runFactory } from "../runner/run.js";
+import type { SseWriter } from "./sse.js";
 
 export type RunStatus = "pending" | "running" | "succeeded" | "failed";
 
@@ -45,6 +46,7 @@ type Sink = (entry: RunEventEntry) => void;
 
 interface Subscriber {
   sink: Sink;
+  writer?: SseWriter;
 }
 
 export type BuildRegistry = () => ExecutorRegistry;
@@ -114,6 +116,7 @@ export class RunRegistry {
     runId: string,
     lastIndex: number | undefined,
     sink: Sink,
+    writer?: SseWriter,
   ): { unsubscribe(): void } | undefined {
     const run = this.runs.get(runId);
     if (!run) return undefined;
@@ -136,13 +139,29 @@ export class RunRegistry {
       set = new Set();
       this.subscribers.set(runId, set);
     }
-    const sub: Subscriber = { sink };
+    const sub: Subscriber = writer ? { sink, writer } : { sink };
     set.add(sub);
     return {
       unsubscribe: () => {
         set?.delete(sub);
       },
     };
+  }
+
+  closeAllSubscribers(): void {
+    for (const set of this.subscribers.values()) {
+      for (const sub of set) {
+        if (sub.writer && !sub.writer.closed) {
+          try {
+            sub.writer.close();
+          } catch {
+            // ignore
+          }
+        }
+      }
+      set.clear();
+    }
+    this.subscribers.clear();
   }
 
   private recordEvent(runId: string, entry: RunHistoryEntry): void {

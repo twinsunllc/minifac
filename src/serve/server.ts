@@ -87,6 +87,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<DaemonHa
     port: boundPort,
     async close(): Promise<void> {
       watcher.close();
+      runs.closeAllSubscribers();
       await new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()));
       });
@@ -275,6 +276,19 @@ async function handlePostRun(
   });
 }
 
+type LastEventIdParse =
+  | { kind: "absent" }
+  | { kind: "ok"; index: number }
+  | { kind: "invalid"; raw: string };
+
+function parseLastEventId(raw: string | undefined): LastEventIdParse {
+  if (raw === undefined) return { kind: "absent" };
+  if (!/^-?\d+$/.test(raw)) return { kind: "invalid", raw };
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isFinite(n) || n < 0) return { kind: "invalid", raw };
+  return { kind: "ok", index: n };
+}
+
 function handleRunEvents(
   req: IncomingMessage,
   res: ServerResponse,
@@ -289,18 +303,30 @@ function handleRunEvents(
 
   const lastIdHeader = req.headers["last-event-id"];
   const lastIdRaw = Array.isArray(lastIdHeader) ? lastIdHeader[0] : lastIdHeader;
-  const lastId = lastIdRaw === undefined ? undefined : Number.parseInt(lastIdRaw, 10);
-  const lastIndex = Number.isFinite(lastId) ? (lastId as number) : undefined;
+  const parsed = parseLastEventId(lastIdRaw);
+  if (parsed.kind === "invalid") {
+    sendJson(res, 400, {
+      error: "invalid_last_event_id",
+      message: "Last-Event-ID must be a non-negative integer",
+    });
+    return;
+  }
+  const lastIndex = parsed.kind === "ok" ? parsed.index : undefined;
 
   const writer = sseResponse(res);
-  const sub = deps.runs.subscribe(id, lastIndex, (entry) => {
-    if (entry.kind === "run_end") {
-      writer.send("run_end", { status: entry.result.status, result: entry.result }, entry.index);
-      writer.close();
-    } else {
-      writer.send(entry.kind, entry, entry.index);
-    }
-  });
+  const sub = deps.runs.subscribe(
+    id,
+    lastIndex,
+    (entry) => {
+      if (entry.kind === "run_end") {
+        writer.send("run_end", { status: entry.result.status, result: entry.result }, entry.index);
+        writer.close();
+      } else {
+        writer.send(entry.kind, entry, entry.index);
+      }
+    },
+    writer,
+  );
   if (!sub) {
     writer.close();
     return;

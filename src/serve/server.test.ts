@@ -273,4 +273,125 @@ describe("startDaemon http API", () => {
     expect(body.runs.length).toBeGreaterThan(0);
     expect(body.runs[0]?.factoryId).toBe("hello");
   });
+
+  it("shutdown actively terminates in-flight SSE subscribers", async () => {
+    await writeFile(path.join(dir, "hello.yaml"), HELLO_YAML);
+    const handle = await startDaemon({
+      dir,
+      host: "127.0.0.1",
+      port: 0,
+      webRoot: webDir,
+      buildRegistry: () => {
+        const reg = new ExecutorRegistry();
+        const exec: NodeExecutor = {
+          type: "test",
+          async *run(): AsyncIterable<NodeEvent> {
+            yield { kind: "stdout", line: "starting" };
+            await new Promise((r) => setTimeout(r, 10_000));
+            yield { kind: "status", status: "succeeded" };
+          },
+        };
+        reg.register(exec);
+        return reg;
+      },
+    });
+    try {
+      const base = `http://127.0.0.1:${handle.port}`;
+      const post = await fetch(`${base}/api/runs`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ factoryId: "hello" }),
+      });
+      expect(post.status).toBe(201);
+      const { id: runId } = (await post.json()) as { id: string };
+
+      // Give the runner time to emit the first stdout event so SSE has
+      // something to send and is in live-tail mode.
+      await new Promise((r) => setTimeout(r, 100));
+
+      const ac = new AbortController();
+      const sseResp = await fetch(`${base}/api/runs/${runId}/events`, { signal: ac.signal });
+      expect(sseResp.status).toBe(200);
+      expect(sseResp.headers.get("content-type")).toBe("text/event-stream");
+      const reader = sseResp.body?.getReader();
+      expect(reader).toBeTruthy();
+      if (!reader) return;
+
+      // Drain until we see the live subscriber registered + first frame arrived.
+      // Without blocking forever, just read one chunk so we know the stream is live.
+      const firstRead = await reader.read();
+      expect(firstRead.done).toBe(false);
+
+      // Now close the daemon and assert the stream ends within a small bound.
+      const closePromise = handle.close();
+      const drainPromise = (async () => {
+        while (true) {
+          const r = await reader.read();
+          if (r.done) return;
+        }
+      })();
+      const timeout = new Promise<"timeout">((resolve) =>
+        setTimeout(() => resolve("timeout"), 1500),
+      );
+      const result = await Promise.race([
+        Promise.all([closePromise, drainPromise]).then(() => "ok" as const),
+        timeout,
+      ]);
+      expect(result).toBe("ok");
+      ac.abort();
+    } finally {
+      // Best-effort second close (no-op if already closed).
+      try {
+        await handle.close();
+      } catch {
+        // ignore
+      }
+    }
+  });
+
+  it("Last-Event-ID with garbage value returns 400 without SSE upgrade", async () => {
+    await writeFile(path.join(dir, "hello.yaml"), HELLO_YAML);
+    h = await start({ dir, web: webDir });
+    const post = await fetch(`${h.base}/api/runs`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ factoryId: "hello" }),
+    });
+    expect(post.status).toBe(201);
+    const { id: runId } = (await post.json()) as { id: string };
+    await new Promise((r) => setTimeout(r, 50));
+
+    const r = await fetch(`${h.base}/api/runs/${runId}/events`, {
+      headers: { "Last-Event-ID": "not-a-number" },
+    });
+    expect(r.status).toBe(400);
+    expect(r.headers.get("content-type") || "").not.toContain("text/event-stream");
+    const body = (await r.json()) as { error: string };
+    expect(body.error).toBe("invalid_last_event_id");
+  });
+
+  it("Last-Event-ID: 0 replays from index 1 (skips event 0)", async () => {
+    await writeFile(path.join(dir, "hello.yaml"), HELLO_YAML);
+    h = await start({ dir, web: webDir });
+    const post = await fetch(`${h.base}/api/runs`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ factoryId: "hello" }),
+    });
+    expect(post.status).toBe(201);
+    const { id: runId } = (await post.json()) as { id: string };
+
+    // Let the run finish so SSE replays a full buffered log to EOF.
+    await new Promise((r) => setTimeout(r, 150));
+
+    const r = await fetch(`${h.base}/api/runs/${runId}/events`, {
+      headers: { "Last-Event-ID": "0" },
+    });
+    expect(r.status).toBe(200);
+    expect(r.headers.get("content-type")).toBe("text/event-stream");
+    const text = await r.text();
+    // The event at index 0 must not appear; events at index >= 1 must.
+    expect(text).not.toMatch(/^id: 0$/m);
+    expect(text).toMatch(/^id: 1$/m);
+  });
 });
