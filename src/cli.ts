@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import { fileURLToPath } from "node:url";
 import { Command } from "commander";
+import { BriefLoadError } from "./brief/loader.js";
+import { RunArgResolutionError, resolveRunArg } from "./cli/resolve.js";
 import { ClaudeExecutor } from "./executor/claude.js";
 import { ExecutorRegistry } from "./executor/registry.js";
 import { FactoryLoadError, loadFactory } from "./factory/loader.js";
@@ -25,6 +27,12 @@ export interface CliIO {
    * is listening instead of waiting for SIGINT/SIGTERM. Tests use this.
    */
   serveReturnImmediately?: boolean;
+  /**
+   * Optional override for the cwd the `run` subcommand resolves arguments
+   * against. Defaults to `process.cwd()`. Tests use this so the
+   * lookup-precedence rules can be exercised against a fixture directory.
+   */
+  runCwd?: string;
 }
 
 function defaultRegistry(): ExecutorRegistry {
@@ -53,14 +61,35 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
 
   program
     .command("run")
-    .description("Run a factory YAML file end-to-end.")
-    .argument("<factory>", "path to a factory YAML file")
-    .action(async (factoryPath: string) => {
+    .description("Run a factory by brief path, brief name, or factory name.")
+    .argument("<thing>", "brief path, brief name, or factory name")
+    .action(async (arg: string) => {
+      const cwd = io.runCwd ?? process.cwd();
       try {
-        const loaded = await loadFactory(factoryPath);
+        const resolved = await resolveRunArg(arg, cwd);
+        const loaded = await loadFactory(resolved.factoryPath);
+        const factoryName = loaded.factory.name;
+        const briefMode = loaded.factory.brief;
+
+        if (resolved.kind === "brief" && briefMode === "none") {
+          io.stderr.write(
+            `Factory \`${factoryName}\` declares \`brief: none\` but was invoked with a brief at ${resolved.brief.sourcePath}.\n`,
+          );
+          exitCode = 1;
+          return;
+        }
+        if (resolved.kind === "factory" && briefMode === "required") {
+          io.stderr.write(
+            `Factory \`${factoryName}\` requires a brief; invoke as \`minifac run <brief-name>\` with a brief at inputs/<name>.md.\n`,
+          );
+          exitCode = 1;
+          return;
+        }
+
         const registry = (io.buildRegistry ?? defaultRegistry)();
         const result = await runFactory(loaded, {
           registry,
+          brief: resolved.kind === "brief" ? resolved.brief : undefined,
           onEvent: (entry) => {
             const prefix = `[${entry.nodeId}]`;
             const e = entry.event;
@@ -103,6 +132,13 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
             ? ` (line ${err.location.line}${err.location.col ? `, col ${err.location.col}` : ""})`
             : "";
           io.stderr.write(`Error loading factory ${err.sourcePath}${loc}: ${err.message}\n`);
+        } else if (err instanceof BriefLoadError) {
+          const loc = err.location
+            ? ` (line ${err.location.line}${err.location.col ? `, col ${err.location.col}` : ""})`
+            : "";
+          io.stderr.write(`Error loading brief ${err.sourcePath}${loc}: ${err.message}\n`);
+        } else if (err instanceof RunArgResolutionError) {
+          io.stderr.write(`${err.message}\n`);
         } else {
           io.stderr.write(`Error: ${(err as Error).message}\n`);
         }

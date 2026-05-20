@@ -1,6 +1,8 @@
 name: hello
 description: Single Claude node that says hello. The smallest end-to-end factory.
 
+brief: none
+
 nodes:
   greet:
     executor: claude

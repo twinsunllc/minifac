@@ -25,6 +25,7 @@ export const FactorySchema = z
   .object({
     name: z.string().min(1),
     description: z.string().optional(),
+    brief: z.enum(["required", "optional", "none"]).default("required"),
     nodes: z.record(NodeSchema),
     edges: z.array(EdgeSchema),
   })

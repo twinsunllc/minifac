@@ -13,65 +13,40 @@ propose ──▶ apply ──▶ verify ──▶ archive (terminal)
 
 ## How to use it
 
-The shipped file is a **template**, not a runnable singleton. Running
-`minifac run examples/sdd.yaml` unedited is not the intended workflow —
-you'll get prompts that talk about a literal change called
-`<CHANGE_NAME>` and a `cwd` pointing at `/path/to/target/repo`.
+The SDD factory is **brief-driven**. You don't edit `examples/sdd.yaml`
+per change; instead you author a brief at `inputs/<change-name>.md`
+and invoke the factory by name:
 
-To use it on a real change:
+1. Author `inputs/<change-name>.md`. Frontmatter must declare
+   `change: <change-name>` and `factory: sdd`; the body is free-form
+   markdown describing what the change should do. See
+   [`sample-brief.md`](./sample-brief.md) for the canonical shape.
+2. Invoke `minifac run <change-name>`. The CLI's lookup precedence
+   resolves the bare name to `inputs/<change-name>.md`, loads the
+   brief, resolves `factory: sdd` to `examples/sdd.yaml`, and runs
+   the factory with the brief in scope.
+3. The runner substitutes `{{ brief.change }}` (the change name) and
+   `{{ brief.body }}` (the brief body) into the node prompts before
+   dispatch.
 
-1. Copy `examples/sdd.yaml` to something like `sdd-my-change.yaml`
-   (anywhere on your machine; `minifac run` takes a path).
-2. Replace every occurrence of `<CHANGE_NAME>` in the file with the
-   real change name (e.g. `add-shell-executor`). It appears inside
-   each node's `prompt`.
-3. Set every node's `cwd` to the absolute path of the target repo.
-   All four nodes need the same value (see "Friction" below).
-4. Run `minifac run path/to/sdd-my-change.yaml`.
+The target repo (whichever directory each node's `cwd` points at) must
+have OpenSpec installed and the relevant verify commands wired up
+(typically `npm test`, `npm run build`, `npm run check`).
 
-The target repo must have OpenSpec installed and the relevant verify
-commands wired up (typically `npm test`, `npm run build`,
-`npm run check`).
-
-> **Migration note for old copies.** If you copied `examples/sdd.yaml`
-> before the `sdd-factory-uses-claude-controls` change, your copy will
-> run today but report `succeeded` on every node while doing no actual
-> work — the spawned `claude` sessions cannot write files or run
-> side-effecting Bash under the CLI's default permission policy, and
-> the prompts use the older "Exit 0 / non-zero" signaling that the
-> runner no longer relies on. To migrate, make two edits per node:
-> add `permission_mode: "bypass_permissions"` to each `with:` block,
-> and rewrite each prompt's success/failure language to instruct the
-> model on the `MINIFAC_STATUS` sentinel (see "Status signaling"
-> below). The binding contract lives in
-> `openspec/specs/sdd-factory/spec.md`.
-
-> **Migration note for old copies (archive commit).** If you copied
-> `examples/sdd.yaml` before the `sdd-factory-archive-commits`
-> change, your archive node will run `openspec archive <CHANGE_NAME>`
-> cleanly and emit `MINIFAC_STATUS: succeeded`, but it will leave
-> the resulting moves and spec folds uncommitted in your target
-> repo's working tree. The fix is one edit: rewrite the archive
-> node's prompt so that, after `openspec archive` exits 0 and before
-> the sentinel, it runs `git add -A` followed by
-> `git commit -m "Archive: <CHANGE_NAME>"` (with a short body and
-> the `Co-Authored-By:` trailer). Treat a commit failure as a node
-> failure. The binding contract lives in
-> `openspec/specs/sdd-factory/spec.md`; the shipped
-> `examples/sdd.yaml` is the reference implementation.
-
-> **Migration note for old copies (sentinel boilerplate).** If you
-> copied `examples/sdd.yaml` before the `runner-sentinel-injection`
-> change, your copy will carry a `## Status signaling` block at the
-> end of every node's prompt. Those blocks are now redundant — the
-> runner auto-injects the same instructions before sending the
-> prompt to the CLI. You can delete the block from every node; the
-> per-node responsibility prose stays. Existing copies that still
-> carry the block continue to work (the model sees the redundant
-> instructions twice, which is harmless), so the migration is
-> aesthetic, not correctness-driven. The binding contract lives in
-> `openspec/specs/node-executor/spec.md` (requirement: "Status
-> signaling via sentinel marker") and
+> **Migration from pre-`factory-inputs-core` copies.** If you have a
+> hand-copied `sdd-<name>.yaml` from before the `factory-inputs-core`
+> change, you have two options:
+>
+> 1. Delete your copy and use the shipped `examples/sdd.yaml`. Author
+>    a brief at `inputs/<name>.md` and invoke `minifac run <name>`.
+>    This is the intended workflow.
+> 2. Convert your copy in place: replace every `<CHANGE_NAME>` with
+>    `{{ brief.change }}`, add `brief: required` at the top level, and
+>    author a brief alongside. Invoke it by brief path
+>    (`minifac run path/to/your/brief.md`).
+>
+> Direct factory-YAML invocation (`minifac run examples/sdd.yaml`) is
+> no longer supported. The binding contract lives in
 > `openspec/specs/sdd-factory/spec.md`.
 
 ## Per-node contract
@@ -84,13 +59,14 @@ holds. The binding version lives in
 
 ### propose
 
-- **Inputs:** the change name and rough intent (carried in the prompt
-  itself, edited per copy).
-- **Invokes:** `openspec new change <CHANGE_NAME>`, then writes
+- **Inputs:** the change name (`{{ brief.change }}`) and the brief
+  body (`{{ brief.body }}`), both substituted into the prompt at
+  dispatch time by the runner.
+- **Invokes:** `openspec new change {{ brief.change }}`, then writes
   `proposal.md`, `design.md`, spec deltas, `tasks.md`. Drives
-  `openspec validate <CHANGE_NAME>` until clean.
-- **Success criterion:** `openspec validate <CHANGE_NAME>` exits 0
-  and every required artifact (proposal, design, spec deltas, tasks)
+  `openspec validate {{ brief.change }}` until clean.
+- **Success criterion:** `openspec validate {{ brief.change }}` exits
+  0 and every required artifact (proposal, design, spec deltas, tasks)
   is on disk.
 - **Failure criterion:** validate could not be made clean, or a
   required artifact could not be written. The failure description
@@ -100,8 +76,8 @@ holds. The binding version lives in
 
 - **Inputs:** propose's output via `ctx.history`. On a retry, verify's
   failure output is also in history.
-- **Invokes:** reads `openspec/changes/<CHANGE_NAME>/tasks.md`, works
-  each unchecked `- [ ]`, marks them `- [x]`. May run local
+- **Invokes:** reads `openspec/changes/{{ brief.change }}/tasks.md`,
+  works each unchecked `- [ ]`, marks them `- [x]`. May run local
   lints/builds as it goes.
 - **Success criterion:** every checkbox in `tasks.md` is `- [x]`.
 - **Failure criterion:** a task is structurally blocked (for example,
@@ -114,9 +90,10 @@ holds. The binding version lives in
 - **Inputs:** propose + apply output via `ctx.history`.
 - **Invokes:** the target repo's verify commands in `cwd`. For most
   Node/TS repos that is `npm test`, `npm run build`,
-  `npm run check`. Then `openspec validate <CHANGE_NAME>` once more.
+  `npm run check`. Then `openspec validate {{ brief.change }}` once
+  more.
 - **Success criterion:** every verify command exits 0 (and
-  `openspec validate <CHANGE_NAME>` is still clean).
+  `openspec validate {{ brief.change }}` is still clean).
 - **Failure criterion:** any verify command exits non-zero. The
   failure description must name the failing command and the
   diagnosable output — the next `apply` iteration reads that text
@@ -129,13 +106,14 @@ holds. The binding version lives in
 
 - **Inputs:** full prior run via `ctx.history`.
 - **Invokes (in strict order):**
-  1. `openspec archive <CHANGE_NAME>`.
+  1. `openspec archive {{ brief.change }}`.
   2. If and only if step 1 exited 0, `git add -A` followed by
-     `git commit -m "Archive: <CHANGE_NAME>"` with a 2–3 line body
-     summarising which capability specs were folded and which change
-     directory was moved into `openspec/changes/archive/`, plus the
-     repo-standard `Co-Authored-By: Claude Opus 4.7 (1M context)
-     <noreply@anthropic.com>` trailer.
+     `git commit -m "Archive: {{ brief.change }}"` with a 2–3 line
+     body summarising which capability specs were folded and which
+     change directory was moved into `openspec/changes/archive/`,
+     plus the repo-standard
+     `Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>`
+     trailer.
 
   The commit step is part of the node's contract, not an
   afterthought: `openspec archive` rewrites files on disk and moves
@@ -144,9 +122,9 @@ holds. The binding version lives in
   dirty for the next loop to inherit and a human to disentangle.
 - **Does not invoke:** `git push`. The factory never pushes; that is
   a human decision.
-- **Success criterion:** both `openspec archive <CHANGE_NAME>` and
-  the subsequent `git commit` exit 0. This is the terminal node —
-  success ends the run.
+- **Success criterion:** both `openspec archive {{ brief.change }}`
+  and the subsequent `git commit` exit 0. This is the terminal
+  node — success ends the run.
 - **Failure criterion:** either step exits non-zero. The failure
   description should name which step (`openspec archive` or
   `git commit`) failed, and the relevant error. The failure path
@@ -232,29 +210,40 @@ such an allowlist because keeping it correct as the OpenSpec CLI and
 verify commands evolve would be a maintenance tax not worth paying for
 a template the user is expected to read and copy.
 
-## Fields users edit when copying
+## Fields the brief supplies
 
-The two required edits, repeated across four nodes:
+The brief supplies what used to be hand-edits:
 
-1. **`<CHANGE_NAME>` in each node's prompt.** Eight references (two per
-   prompt on average). A find-and-replace across the YAML is the
-   intended workflow.
-2. **`cwd` on each of the four nodes.** All four should resolve to the
-   same absolute path — the target repo.
+1. **`{{ brief.change }}`** — the change name. The brief's frontmatter
+   `change:` field is substituted everywhere `{{ brief.change }}`
+   appears in any node's `prompt`.
+2. **`{{ brief.body }}`** — the brief's markdown body, dropped into
+   the propose node's `## Intent for this change` section. This is
+   how per-change intent reaches the propose prompt without
+   per-change YAML edits.
 
-One optional, advanced edit:
+The per-node `cwd` is still a YAML field for now; cwd-from-brief
+(via worktree management) is deferred to a later phase.
 
-3. **`permission_mode` on each node's `with:` block.** The shipped
-   template sets this to `"bypass_permissions"`, which grants the
-   spawned session full authority inside `cwd` (see "Security posture"
-   above). Downstream copies that want a tighter posture can lower it
-   to `"accept_edits"` and add an `allowed_tools` allowlist
-   appropriate to their target repo. Don't lower it without supplying
-   the allowlist — `accept_edits` still gates side-effecting `Bash`,
-   so an unconfigured `verify` node will fail on `npm test`.
+Everything else (topology, budgets, executor, permission mode) is
+binding and is covered by the spec.
 
-Everything else (topology, budgets, executor) is binding and is
-covered by the spec.
+## Template tokens
+
+The runner reserves the following `{{ brief.<field> }}` tokens for
+substitution inside any node `with.prompt`:
+
+| Token                     | Source                            |
+|---------------------------|-----------------------------------|
+| `{{ brief.change }}`      | brief frontmatter `change:`       |
+| `{{ brief.body }}`        | brief body (markdown after fence) |
+| `{{ brief.factory }}`     | brief frontmatter `factory:`      |
+| `{{ brief.base_branch }}` | brief frontmatter `base_branch:` (empty when absent) |
+| `{{ brief.model }}`       | brief frontmatter `model:` (empty when absent)       |
+
+Unknown identifiers inside `{{ brief.* }}` braces pass through
+verbatim (no substitution, no error). This leaves room for future
+fields without surprising existing factories.
 
 ## Friction (known and deferred)
 
@@ -265,10 +254,6 @@ its own future proposal so it gets the scope it deserves:
   node is repetitive. A top-level `cwd:` with node-level override
   would clean it up, but it introduces resolve-order and override
   precedence questions that earn their own proposal.
-- **Templating (`--var change=<name>`).** A real variable-substitution
-  mechanism would remove the find-and-replace step. It's a feature
-  with syntax, escaping rules, and per-field opt-in/opt-out
-  decisions — also its own proposal.
 - **Native `shell` executor for verify.** Running `npm test` via a
   `claude` node is slower and noisier than spawning a process. A
   `shell` executor would be a drop-in replacement at this node: change

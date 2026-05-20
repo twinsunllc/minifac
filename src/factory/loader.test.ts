@@ -272,4 +272,81 @@ extra: { open
       loadFactory(path.join(tmpdir(), "no-such-minifac-factory-xyz.yaml")),
     ).rejects.toThrowError(/Could not read/);
   });
+
+  it("defaults the top-level `brief:` field to `required` when omitted", async () => {
+    const file = await writeFactory(
+      "default-brief.yaml",
+      `name: f
+nodes:
+  a:
+    executor: claude
+    terminal: true
+edges: []
+`,
+    );
+    const loaded = await loadFactory(file);
+    expect(loaded.factory.brief).toBe("required");
+  });
+
+  it("accepts `brief: optional`", async () => {
+    const file = await writeFactory(
+      "opt-brief.yaml",
+      `name: f
+brief: optional
+nodes:
+  a:
+    executor: claude
+    terminal: true
+edges: []
+`,
+    );
+    const loaded = await loadFactory(file);
+    expect(loaded.factory.brief).toBe("optional");
+  });
+
+  it("accepts `brief: none`", async () => {
+    const file = await writeFactory(
+      "none-brief.yaml",
+      `name: f
+brief: none
+nodes:
+  a:
+    executor: claude
+    terminal: true
+edges: []
+`,
+    );
+    const loaded = await loadFactory(file);
+    expect(loaded.factory.brief).toBe("none");
+  });
+
+  it("rejects an unknown `brief:` literal", async () => {
+    const file = await writeFactory(
+      "bad-brief.yaml",
+      `name: f
+brief: yolo
+nodes:
+  a:
+    executor: claude
+    terminal: true
+edges: []
+`,
+    );
+    await expect(loadFactory(file)).rejects.toThrowError(/brief/);
+  });
+
+  it("still rejects unknown top-level keys (strict)", async () => {
+    const file = await writeFactory(
+      "extra-top.yaml",
+      `name: f
+briefs: required
+nodes:
+  a:
+    executor: claude
+    terminal: true
+edges: []
+`,
+    );
+    await expect(loadFactory(file)).rejects.toThrowError(/briefs/);
+  });
 });

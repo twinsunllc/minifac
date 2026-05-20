@@ -37,32 +37,55 @@ is exhausted or a node flags an intractable problem.
 
 ## What's in the box (planned v0)
 
-- `minifac run <factory>` — kick off a run from the CLI
+- `minifac run <thing>` — kick off a run from the CLI by brief path,
+  brief name (`inputs/<name>.md`), or factory name (`examples/<name>.yaml`)
 - `minifac serve [dir]` — local daemon that watches a directory for factory
   YAML, exposes a live web viewer at `http://127.0.0.1:4280` for picking a
   factory, kicking off a run, and tailing node events over SSE
   (localhost-only, no auth)
 - Factory schema (YAML): typed nodes, directed edges (cycles allowed),
-  per-node executor (`claude` by default; pluggable for codex / opencode / etc.)
+  per-node executor (`claude` by default; pluggable for codex / opencode / etc.),
+  top-level `brief: required | optional | none`
+- Brief schema (markdown + YAML frontmatter): per-change input authored
+  at `inputs/<change>.md`; substituted into factory prompts via
+  `{{ brief.change }}` and `{{ brief.body }}` tokens
 - Pluggable storage with [beads](https://github.com/steveyegge/beads) (work items)
   and [Dolt](https://www.dolthub.com/) (run history) as the default impl.
   SQLite-only fallback for environments without either.
 - Two example factories:
-  - `hello.yaml` — single-node, learn-the-schema example
-  - `sdd.yaml` — the propose/apply/verify/archive loop
+  - `hello.yaml` — single-node, learn-the-schema example (brief-less)
+  - `sdd.yaml` — the propose/apply/verify/archive loop (brief-driven)
 
 ## Run the example
 
 ```
 npm install
 npm run build
-node dist/cli.js run examples/hello.yaml
+node dist/cli.js run hello
 ```
 
-`examples/hello.yaml` defines a single `claude` node, so the `claude` CLI
-must be on `$PATH`. Output from each node is streamed to the terminal with
-a `[<node_id>]` prefix; the run exits with code `0` on success, `1` on
-load/validation errors, `2` on node failure, and `3` on budget exhaustion.
+This invokes `examples/hello.yaml` by name. The factory declares
+`brief: none`, so no brief is needed. `examples/hello.yaml` defines a
+single `claude` node, so the `claude` CLI must be on `$PATH`. Output
+from each node is streamed to the terminal with a `[<node_id>]` prefix;
+the run exits with code `0` on success, `1` on load/validation errors,
+`2` on node failure, and `3` on budget exhaustion.
+
+To run the SDD loop on a real change, author a brief and invoke it by
+name:
+
+```
+# Author inputs/my-change.md (see examples/sample-brief.md for the shape).
+node dist/cli.js run my-change
+```
+
+The CLI looks for `inputs/my-change.md`, resolves its `factory:` field
+(usually `sdd`) to `examples/sdd.yaml`, and runs the factory with the
+brief in scope. The runner substitutes `{{ brief.change }}` and
+`{{ brief.body }}` into each node's prompt before dispatch. See
+[`examples/sdd.md`](examples/sdd.md) for the full per-node contract
+and [`examples/sample-brief.md`](examples/sample-brief.md) for the
+brief template.
 
 Alternatively, use `minifac serve` for a live web viewer of the same run
 (see the [`minifac serve`](#minifac-serve--web-viewer) section below).
@@ -116,16 +139,18 @@ contract.
 `examples/sdd.yaml` is the canonical SDD factory: four `claude` nodes
 wired into the propose → apply → verify → archive loop, with verify
 looping back to apply on failure (bounded at three retries). It is
-shipped as a **template** — copy it, edit two things, then run:
+**brief-driven**: you don't edit the YAML per change. Instead:
 
-1. Replace every `<CHANGE_NAME>` in the prompts with the real change
-   name.
-2. Set every node's `cwd` to the absolute path of the target repo
-   (an OpenSpec-equipped repo with verify commands like `npm test`,
-   `npm run build`, `npm run check`).
+1. Author a brief at `inputs/<change>.md` with `change:` and
+   `factory: sdd` in the frontmatter and the change intent in the
+   body. See [examples/sample-brief.md](examples/sample-brief.md).
+2. Set every node's `cwd` in `examples/sdd.yaml` to the absolute path
+   of the target repo (an OpenSpec-equipped repo with verify commands
+   like `npm test`, `npm run build`, `npm run check`).
+3. Invoke `node dist/cli.js run <change>`.
 
 See [examples/sdd.md](examples/sdd.md) for the full per-node contract,
-the copy-and-edit workflow, and known friction points.
+the brief-driven workflow, and known friction points.
 
 ## Contributing / SDD workflow
 

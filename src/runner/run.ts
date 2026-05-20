@@ -1,13 +1,19 @@
 import path from "node:path";
+import type { Brief } from "../brief/loader.js";
 import type { ExecutorRegistry } from "../executor/registry.js";
 import type { NodeEvent, ResolvedNode, RunContext, RunHistoryEntry } from "../executor/types.js";
 import type { LoadedFactory } from "../factory/loader.js";
 import type { ExecutionLogEntry, RunResult } from "./result.js";
+import { substituteBriefTokens } from "./substitute.js";
 
 export interface RunOptions {
   registry: ExecutorRegistry;
   /** Called for every event yielded by any node, in order. */
   onEvent?: (entry: RunHistoryEntry) => void;
+  /** Optional brief in scope for this run. When set, the runner substitutes
+   * `{{ brief.<field> }}` tokens in each node's `with.prompt` string
+   * immediately before dispatch. */
+  brief?: Brief;
 }
 
 interface QueueItem {
@@ -16,7 +22,7 @@ interface QueueItem {
 
 export async function runFactory(loaded: LoadedFactory, options: RunOptions): Promise<RunResult> {
   const { factory, sourceDir } = loaded;
-  const { registry, onEvent } = options;
+  const { registry, onEvent, brief } = options;
 
   const runStart = Date.now();
   const history: RunHistoryEntry[] = [];
@@ -80,7 +86,18 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
     const iteration = usedIterations + 1;
     iterations.set(nodeId, iteration);
 
-    const resolvedNode: ResolvedNode = { ...node, id: nodeId };
+    // Build a shallow-cloned node for dispatch so we never mutate the
+    // factory's node objects (they're reused across iterations). When a brief
+    // is in scope and the node has a string `with.prompt`, substitute brief
+    // tokens before handing the node to the executor.
+    let resolvedNode: ResolvedNode = { ...node, id: nodeId };
+    if (brief && node.with && typeof node.with.prompt === "string") {
+      const substituted = substituteBriefTokens(node.with.prompt, brief);
+      resolvedNode = {
+        ...resolvedNode,
+        with: { ...node.with, prompt: substituted },
+      };
+    }
     const snapshot: readonly RunHistoryEntry[] = Object.freeze(history.slice());
 
     const ctx: RunContext = {

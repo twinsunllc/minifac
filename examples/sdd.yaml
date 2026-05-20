@@ -1,10 +1,12 @@
 name: sdd
 description: |
   The propose → apply → verify → archive loop, expressed as a factory.
-  This is a template: copy it to sdd-<changename>.yaml and edit two things
-  per node — the literal string <CHANGE_NAME> in each prompt, and the
-  per-node `cwd` (currently a placeholder). See examples/sdd.md for the
-  per-node contract and the copy-and-edit workflow.
+  Brief-driven: author `inputs/<change>.md` referencing
+  `factory: sdd`, then invoke `minifac run <change>`. The runner
+  substitutes `{{ brief.change }}` and `{{ brief.body }}` from the
+  brief before dispatching each node. See examples/sdd.md.
+
+brief: required
 
 nodes:
   propose:
@@ -14,18 +16,22 @@ nodes:
       permission_mode: "bypass_permissions"
       prompt: |
         You are running the propose step of the SDD loop for change
-        <CHANGE_NAME>. Work in the current directory, which is an
+        {{ brief.change }}. Work in the current directory, which is an
         OpenSpec-equipped repo.
+
+        ## Intent for this change
+
+        {{ brief.body }}
 
         Do all of the following:
 
-        1. Run `openspec new change <CHANGE_NAME>` to scaffold the change.
-        2. Write `openspec/changes/<CHANGE_NAME>/proposal.md`,
+        1. Run `openspec new change {{ brief.change }}` to scaffold the change.
+        2. Write `openspec/changes/{{ brief.change }}/proposal.md`,
            `design.md`, the spec deltas under `specs/`, and `tasks.md`.
-        3. Run `openspec validate <CHANGE_NAME>` and iterate until it
+        3. Run `openspec validate {{ brief.change }}` and iterate until it
            exits 0.
 
-        Success means `openspec validate <CHANGE_NAME>` exits 0 and
+        Success means `openspec validate {{ brief.change }}` exits 0 and
         every required artifact (proposal, design, spec deltas, tasks)
         is on disk. Failure means validate could not be made clean or
         a required artifact could not be written.
@@ -37,21 +43,21 @@ nodes:
       permission_mode: "bypass_permissions"
       prompt: |
         You are running the apply step of the SDD loop for change
-        <CHANGE_NAME>. The propose step already landed the proposal,
+        {{ brief.change }}. The propose step already landed the proposal,
         design, spec deltas, and tasks under
-        `openspec/changes/<CHANGE_NAME>/`. Prior node output is in your
+        `openspec/changes/{{ brief.change }}/`. Prior node output is in your
         run-wide history — if this is a retry, the verify failure that
         sent you back is in there too; read it and address it.
 
         Do all of the following:
 
-        1. Read `openspec/changes/<CHANGE_NAME>/tasks.md`.
+        1. Read `openspec/changes/{{ brief.change }}/tasks.md`.
         2. Work each unchecked `- [ ]` task. Make the code changes,
            mark each task `- [x]` as you finish it.
         3. Commit progress when it makes sense; do not push.
 
         Success means every `- [ ]` checkbox in
-        `openspec/changes/<CHANGE_NAME>/tasks.md` is `- [x]`. Failure
+        `openspec/changes/{{ brief.change }}/tasks.md` is `- [x]`. Failure
         means a task is structurally blocked (for example, it requires
         a schema change not in the proposal).
 
@@ -62,7 +68,7 @@ nodes:
       permission_mode: "bypass_permissions"
       prompt: |
         You are running the verify step of the SDD loop for change
-        <CHANGE_NAME>. Prior propose and apply output is in your
+        {{ brief.change }}. Prior propose and apply output is in your
         run-wide history.
 
         Run the target repo's verify commands in the current directory.
@@ -73,11 +79,11 @@ nodes:
             npm run check
 
         Use whatever the target repo actually has. Then run
-        `openspec validate <CHANGE_NAME>` once more to confirm the
+        `openspec validate {{ brief.change }}` once more to confirm the
         change is still clean.
 
         Success means every verify command exited 0 (and
-        `openspec validate <CHANGE_NAME>` is still clean). Failure
+        `openspec validate {{ brief.change }}` is still clean). Failure
         means any verify command exited non-zero. On failure, name the
         failing command and the diagnosable output — that text is what
         the next `apply` iteration reads out of `ctx.history`, so make
@@ -91,14 +97,14 @@ nodes:
       permission_mode: "bypass_permissions"
       prompt: |
         You are running the archive step of the SDD loop for change
-        <CHANGE_NAME>. Verify has passed. Prior node output is in your
+        {{ brief.change }}. Verify has passed. Prior node output is in your
         run-wide history.
 
         Do all of the following, in this strict order:
 
-        1. Run `openspec archive <CHANGE_NAME>`. This moves the change
-           directory from `openspec/changes/<CHANGE_NAME>/` to
-           `openspec/changes/archive/<dated>-<CHANGE_NAME>/` and folds
+        1. Run `openspec archive {{ brief.change }}`. This moves the change
+           directory from `openspec/changes/{{ brief.change }}/` to
+           `openspec/changes/archive/<dated>-{{ brief.change }}/` and folds
            the change's spec deltas into
            `openspec/specs/<capability>/spec.md`.
         2. If and only if step 1 exited 0, stage and commit the
@@ -106,7 +112,7 @@ nodes:
 
                git add -A
                git commit -m "$(cat <<'EOF'
-               Archive: <CHANGE_NAME>
+               Archive: {{ brief.change }}
 
                <2–3 line body summarising which capability specs were
                folded and which change directory was moved into
@@ -121,7 +127,7 @@ nodes:
         Do not push. This is a terminal node — success here ends the
         run; pushing to a remote is a human decision.
 
-        Success means `openspec archive <CHANGE_NAME>` exited 0 AND
+        Success means `openspec archive {{ brief.change }}` exited 0 AND
         the subsequent `git commit` exited 0. Failure means either
         step exited non-zero (for example, a pre-commit hook in the
         target repo rejecting the commit). On failure, name which

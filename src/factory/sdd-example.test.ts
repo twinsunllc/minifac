@@ -11,6 +11,29 @@ describe("examples/sdd.yaml", () => {
     expect(loaded.sourcePath).toBe(sddPath);
   });
 
+  it("declares brief: required", async () => {
+    const { factory } = await loadFactory(sddPath);
+    expect(factory.brief).toBe("required");
+  });
+
+  it("uses brief template tokens, not the old <CHANGE_NAME> placeholder", async () => {
+    const { factory } = await loadFactory(sddPath);
+    const propose = factory.nodes.propose?.with?.prompt as string;
+    expect(propose).toContain("{{ brief.change }}");
+    expect(propose).toContain("{{ brief.body }}");
+    for (const id of ["apply", "verify", "archive"] as const) {
+      const p = factory.nodes[id]?.with?.prompt as string;
+      expect(typeof p, `${id} prompt should be a string`).toBe("string");
+      expect(p, `${id} prompt should reference brief.change`).toContain("{{ brief.change }}");
+    }
+    for (const [id, node] of Object.entries(factory.nodes)) {
+      const p = node.with?.prompt;
+      if (typeof p === "string") {
+        expect(p, `${id} prompt should not contain <CHANGE_NAME>`).not.toContain("<CHANGE_NAME>");
+      }
+    }
+  });
+
   it("declares exactly the four documented nodes", async () => {
     const { factory } = await loadFactory(sddPath);
     expect(new Set(Object.keys(factory.nodes))).toEqual(

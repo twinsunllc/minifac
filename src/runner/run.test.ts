@@ -1,5 +1,6 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import type { Brief } from "../brief/loader.js";
 import { ExecutorRegistry } from "../executor/registry.js";
 import type {
   NodeEvent,
@@ -20,6 +21,9 @@ class FakeExecutor implements NodeExecutor {
   scripts: Map<string, Script>;
   /** Optional capture of contexts seen, per node id. */
   contexts: Map<string, RunContext[]> = new Map();
+  /** Capture of resolved nodes seen, per node id (used to assert against the
+   * prompt the runner handed to the executor). */
+  nodes: Map<string, ResolvedNode[]> = new Map();
 
   constructor(type: string, scripts: Record<string, Script>) {
     this.type = type;
@@ -27,9 +31,12 @@ class FakeExecutor implements NodeExecutor {
   }
 
   async *run(node: ResolvedNode, ctx: RunContext): AsyncIterable<NodeEvent> {
-    const list = this.contexts.get(node.id) ?? [];
-    list.push(ctx);
-    this.contexts.set(node.id, list);
+    const cList = this.contexts.get(node.id) ?? [];
+    cList.push(ctx);
+    this.contexts.set(node.id, cList);
+    const nList = this.nodes.get(node.id) ?? [];
+    nList.push(node);
+    this.nodes.set(node.id, nList);
     const script = this.scripts.get(node.id);
     if (!script) {
       yield { kind: "status", status: "failed", meta: { reason: "no_script" } };
@@ -388,5 +395,74 @@ describe("runFactory", () => {
     expect(result.status).toBe("failed");
     expect(result.reason).toBe("unknown_executor");
     expect(result.proximateNodeId).toBe("a");
+  });
+
+  it("substitutes brief tokens in `with.prompt` before dispatch when a brief is in scope", async () => {
+    const factory: Factory = {
+      name: "f",
+      nodes: {
+        a: {
+          executor: "fake",
+          terminal: true,
+          with: { prompt: "Work on {{ brief.change }}.\n\n{{ brief.body }}" },
+        },
+      },
+      edges: [],
+    };
+    const exec = new FakeExecutor("fake", { a: () => [succeeded] });
+    const reg = new ExecutorRegistry();
+    reg.register(exec);
+    const brief: Brief = {
+      frontmatter: { change: "foo", factory: "sdd" },
+      body: "intent paragraph",
+      sourcePath: "/inputs/foo.md",
+    };
+    await runFactory(wrap(factory), { registry: reg, brief });
+    const node = exec.nodes.get("a")?.[0];
+    expect(node?.with?.prompt).toBe("Work on foo.\n\nintent paragraph");
+  });
+
+  it("does not mutate the factory's node when substituting", async () => {
+    const factory: Factory = {
+      name: "f",
+      nodes: {
+        a: {
+          executor: "fake",
+          terminal: true,
+          with: { prompt: "Hello {{ brief.change }}." },
+        },
+      },
+      edges: [],
+    };
+    const exec = new FakeExecutor("fake", { a: () => [succeeded] });
+    const reg = new ExecutorRegistry();
+    reg.register(exec);
+    const brief: Brief = {
+      frontmatter: { change: "foo", factory: "sdd" },
+      body: "",
+      sourcePath: "/inputs/foo.md",
+    };
+    await runFactory(wrap(factory), { registry: reg, brief });
+    expect(factory.nodes.a?.with?.prompt).toBe("Hello {{ brief.change }}.");
+  });
+
+  it("leaves tokens verbatim when no brief is supplied", async () => {
+    const factory: Factory = {
+      name: "f",
+      nodes: {
+        a: {
+          executor: "fake",
+          terminal: true,
+          with: { prompt: "Work on {{ brief.change }}." },
+        },
+      },
+      edges: [],
+    };
+    const exec = new FakeExecutor("fake", { a: () => [succeeded] });
+    const reg = new ExecutorRegistry();
+    reg.register(exec);
+    await runFactory(wrap(factory), { registry: reg });
+    const node = exec.nodes.get("a")?.[0];
+    expect(node?.with?.prompt).toBe("Work on {{ brief.change }}.");
   });
 });
