@@ -10,10 +10,10 @@ the `executor` field in a node definition) and a `run(node, ctx)` method
 that returns an async iterable of node events. Event kinds SHALL be
 limited to `stdout`, `stderr`, and `status`. A `status` event of
 `succeeded` or `failed` SHALL be the final event yielded for any given
-node execution. The `ctx` argument SHALL include the run-wide history
-(see graph-runner spec), the current node's iteration count, and the
-resolved `cwd` for this node (factory-relative paths resolved to
-absolute).
+node execution. The `ctx` argument SHALL include the run-wide
+`priorResults` array (see graph-runner spec), the current node's
+iteration count, and the resolved `cwd` for this node (factory-relative
+paths resolved to absolute).
 
 #### Scenario: Executor identifier matches node executor field
 
@@ -49,12 +49,12 @@ errors SHALL be reported as a `failed` status event with a clear message.
 
 The `claude` executor SHALL spawn the `claude` CLI as a child process
 with `--input-format stream-json` and `--output-format stream-json`. It
-SHALL serialize the node's `prompt` (from `with:`) together with the run
-history from `ctx` as stream-json input on the child's stdin. It SHALL
-parse the CLI's stream-json output line-by-line, yielding each line as
-an `stdout` event with the raw JSON line as its content. stderr from
-the CLI SHALL be forwarded as `stderr` events. It SHALL respect the
-node's resolved `cwd` if provided.
+SHALL serialize the node's `prompt` (from `with:`) together with the
+`priorResults` array from `ctx` as stream-json input on the child's
+stdin. It SHALL parse the CLI's stream-json output line-by-line,
+yielding each line as an `stdout` event with the raw JSON line as its
+content. stderr from the CLI SHALL be forwarded as `stderr` events. It
+SHALL respect the node's resolved `cwd` if provided.
 
 The executor's terminal status SHALL be derived in the following
 precedence order:
@@ -73,12 +73,28 @@ In all cases, the `meta` field of the terminal status event SHALL carry
 the raw child exit code under the key `exitCode` so debugging is
 unambiguous when sentinel and exit code disagree.
 
-#### Scenario: Run history is sent on stdin as stream-json
+#### Scenario: Prior results are sent on stdin as stream-json
 
-- **WHEN** a `claude` node runs with a non-empty `ctx.history`
-- **THEN** the executor writes a stream-json document to the child
-  stdin that encodes the prior events (in order) plus the node's
+- **WHEN** a `claude` node runs with a non-empty `ctx.priorResults`
+- **THEN** the executor writes a single stream-json user-message line
+  to the child stdin whose `message.content` is the JSON-serialized
+  `priorResults` array followed by `\n\n---\n\n` and then the node's
   prompt, then closes stdin
+
+#### Scenario: Empty prior results still framed as JSON array
+
+- **WHEN** a `claude` node runs as the first node of a run (so
+  `ctx.priorResults` is `[]`)
+- **THEN** the user-message content sent to stdin starts with the
+  literal `[]\n\n---\n\n` preamble before the prompt
+
+#### Scenario: Prior-results JSON keys match the NodeResult shape
+
+- **WHEN** the executor serializes a `priorResults` entry into the
+  stdin preamble
+- **THEN** the serialized object contains exactly the keys `nodeId`,
+  `iteration`, `status`, `reason`, `startedAt`, `endedAt` with the
+  values the runner provided in `ctx.priorResults`
 
 #### Scenario: Streaming output appears event-by-event
 
