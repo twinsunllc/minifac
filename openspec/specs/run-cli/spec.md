@@ -17,19 +17,40 @@ the CLI was invoked from (cwd):
    exit `1` with an error naming the resolved path.
 2. **Brief by name.** Else, if `inputs/<thing>.md` exists in cwd, treat
    it as a brief by name and load it via that path.
-3. **Factory by name.** Else, if `examples/<thing>.yaml` exists in
-   cwd, treat the run as a brief-less factory invocation of that
-   factory. (The `examples/` prefix is a v0 stopgap until
-   factory-composition ships per the roadmap.)
+3. **Factory by name.** Else, treat the run as a brief-less factory
+   invocation. Resolve `<thing>` as a factory name using the two-step
+   precedence defined below; if neither candidate exists, fall
+   through to step 4.
 4. **Else.** Write an error to stderr explaining that `<thing>` could
    not be resolved as a brief path, brief name, or factory name and
    exit `1`.
 
-When a brief is resolved (steps 1 or 2), the CLI SHALL further resolve
-the brief's frontmatter `factory:` field as a factory name using the
-same step-3 logic (try `examples/<factory>.yaml`). A brief whose
-`factory:` field does not resolve SHALL exit `1` with an error naming
-the missing factory.
+**Factory-by-name resolution** (used both by step 3 above and by the
+brief's `factory:` field when the brief is loaded via step 1 or 2)
+SHALL accept two forms:
+
+- `minifac:<name>` — the `minifac:` prefix SHALL skip the local
+  lookup and resolve directly to `<cwd>/examples/<name>.yaml`. For
+  v0, "built-in" means "in `examples/` of the calling repo"; a
+  future packaging change MAY relocate built-ins without changing
+  this brief syntax.
+- `<name>` (no prefix) — try `<cwd>/.minifac/factories/<name>.yaml`
+  first; if that path does not exist, fall back to
+  `<cwd>/examples/<name>.yaml`. A `<name>` lookup succeeds at
+  whichever path exists; if neither exists, factory-by-name
+  resolution fails.
+
+A brief whose `factory:` field uses the `minifac:` prefix SHALL
+resolve directly to the built-in even when an equally-named
+`.minifac/factories/<name>.yaml` exists. A brief whose `factory:`
+field is a bare `<name>` SHALL prefer the local file when present.
+
+When a brief is resolved (steps 1 or 2), the CLI SHALL further
+resolve the brief's frontmatter `factory:` field using the same
+factory-by-name resolution above. A brief whose `factory:` field
+does not resolve to any candidate path SHALL exit `1` with an error
+naming the missing factory (and, for the bare `<name>` form, naming
+both paths tried).
 
 The CLI SHALL enforce the factory's declared brief mode (per the
 `factory-schema` capability's "Factory brief-mode declaration"
@@ -150,8 +171,9 @@ output, not a replacement for it.
 #### Scenario: Missing thing reports a clear resolution error
 
 - **WHEN** the user invokes `minifac run nonexistent` and none of
-  `nonexistent`, `inputs/nonexistent.md`, or `examples/nonexistent.yaml`
-  resolves
+  `nonexistent`, `inputs/nonexistent.md`,
+  `.minifac/factories/nonexistent.yaml`, or
+  `examples/nonexistent.yaml` resolves
 - **THEN** the CLI writes an error to stderr explaining that
   `nonexistent` could not be resolved as a brief path, brief name, or
   factory name, and exits `1`
@@ -159,8 +181,9 @@ output, not a replacement for it.
 #### Scenario: Brief whose factory does not resolve is rejected
 
 - **WHEN** the user invokes `minifac run inputs/foo.md`, the brief
-  loads cleanly, its `factory:` field is `nonexistent`, and
-  `examples/nonexistent.yaml` does not exist
+  loads cleanly, its `factory:` field is `nonexistent`, and neither
+  `.minifac/factories/nonexistent.yaml` nor
+  `examples/nonexistent.yaml` exists
 - **THEN** the CLI exits `1` with an error naming the missing factory
 
 #### Scenario: --in-place skips worktree creation
@@ -198,6 +221,48 @@ output, not a replacement for it.
 - **THEN** an entry is appended to `~/.minifac/failed-runs.json`
   whose `worktreeDir` is `process.cwd()` at run time and whose
   `status` is `failed`
+
+#### Scenario: Brief's bare `factory:` prefers local custom over built-in
+
+- **WHEN** the user invokes `minifac run inputs/foo.md`, the brief's
+  frontmatter declares `factory: sdd`, and both
+  `.minifac/factories/sdd.yaml` and `examples/sdd.yaml` exist
+- **THEN** the CLI loads `.minifac/factories/sdd.yaml` (the local
+  custom factory), not `examples/sdd.yaml`
+
+#### Scenario: Brief's bare `factory:` falls back to built-in when no local exists
+
+- **WHEN** the user invokes `minifac run inputs/foo.md`, the brief's
+  frontmatter declares `factory: sdd`,
+  `.minifac/factories/sdd.yaml` does not exist, and
+  `examples/sdd.yaml` exists
+- **THEN** the CLI loads `examples/sdd.yaml`
+
+#### Scenario: Brief's `minifac:<name>` prefix skips local lookup
+
+- **WHEN** the user invokes `minifac run inputs/foo.md`, the brief's
+  frontmatter declares `factory: minifac:sdd`, and both
+  `.minifac/factories/sdd.yaml` and `examples/sdd.yaml` exist
+- **THEN** the CLI loads `examples/sdd.yaml` (the built-in),
+  ignoring the local file
+
+#### Scenario: Brief's `minifac:<name>` with no matching built-in fails
+
+- **WHEN** the user invokes `minifac run inputs/foo.md`, the brief's
+  frontmatter declares `factory: minifac:nonexistent`, and
+  `examples/nonexistent.yaml` does not exist
+- **THEN** the CLI exits `1` with an error naming
+  `minifac:nonexistent` and the absolute path tried, even if a
+  `.minifac/factories/nonexistent.yaml` happens to exist
+
+#### Scenario: Brief-less factory by name resolves from local first
+
+- **WHEN** the user invokes `minifac run sdd-fast`,
+  `inputs/sdd-fast.md` does not exist, and
+  `.minifac/factories/sdd-fast.yaml` exists
+- **THEN** the CLI loads `.minifac/factories/sdd-fast.yaml` as a
+  brief-less factory invocation; `examples/sdd-fast.yaml` (if any)
+  is not consulted
 
 ### Requirement: Event output format
 
@@ -448,4 +513,94 @@ non-TTY environments (CI, piped invocations).
 
 - **WHEN** the user invokes `minifac brief my-change` (interactive or `--from`) on a machine with no network
 - **THEN** the CLI runs to completion without attempting any HTTP, LLM, or other network call
+
+### Requirement: `minifac init` subcommand
+
+The CLI SHALL expose an `init` subcommand that bootstraps the
+minifac directory layout in the directory the CLI was invoked from
+(cwd). The subcommand SHALL:
+
+- Create `inputs/` if it does not exist.
+- Create `.minifac/` if it does not exist.
+- Create `.minifac/factories/` if it does not exist, populating it
+  with a small README file (e.g. `.minifac/factories/README.md`)
+  that explains the convention: each file is a custom or extended
+  factory referenced by name from a brief.
+
+The subcommand SHALL be idempotent: re-running it on a repo that
+already has any subset of the above SHALL fill in only the missing
+pieces without error and SHALL NOT overwrite files that already
+exist.
+
+The subcommand SHALL accept an optional `--with-sdd` flag. When
+supplied, the subcommand SHALL additionally write a starter file at
+`.minifac/factories/sdd.yaml` containing `extends: "minifac:sdd"`
+and no other overrides (so the user has a template to edit). If
+`.minifac/factories/sdd.yaml` already exists, the `--with-sdd` flag
+SHALL be a no-op for that file (it SHALL NOT overwrite the existing
+content) and the subcommand SHALL still exit `0`.
+
+The subcommand SHALL NOT make any network call, SHALL NOT invoke
+`git`, and SHALL NOT touch any files outside the listed paths.
+
+The subcommand SHALL exit `0` on success (including on no-op
+re-runs) and SHALL write a brief one-line summary of what was
+created (or "already initialized" when nothing changed) to stdout.
+
+The subcommand SHALL exit `1` on a fatal I/O error (e.g. permission
+denied on the target directory), with a stderr message naming the
+offending path and the underlying error.
+
+#### Scenario: Init on an empty repo creates the layout
+
+- **WHEN** the user invokes `minifac init` in a directory with
+  neither `inputs/` nor `.minifac/`
+- **THEN** the CLI creates `inputs/`, `.minifac/`, and
+  `.minifac/factories/` (with a README file inside the factories
+  directory), writes a one-line summary to stdout, and exits `0`
+
+#### Scenario: Init is idempotent
+
+- **WHEN** the user invokes `minifac init` twice in a row in the
+  same directory
+- **THEN** the second invocation creates no new files, leaves
+  existing files untouched, writes a one-line "already initialized"
+  (or equivalent) summary to stdout, and exits `0`
+
+#### Scenario: Init fills in only missing pieces
+
+- **WHEN** the user invokes `minifac init` in a directory where
+  `inputs/` already exists but `.minifac/` does not
+- **THEN** the CLI creates `.minifac/` and `.minifac/factories/`
+  (with the README), leaves the existing `inputs/` directory
+  untouched, and exits `0`
+
+#### Scenario: --with-sdd writes a starter factory
+
+- **WHEN** the user invokes `minifac init --with-sdd` and
+  `.minifac/factories/sdd.yaml` does not exist
+- **THEN** the CLI creates the directory layout and additionally
+  writes `.minifac/factories/sdd.yaml` containing
+  `extends: "minifac:sdd"` (and no other overrides), and exits `0`
+
+#### Scenario: --with-sdd does not overwrite an existing sdd.yaml
+
+- **WHEN** the user invokes `minifac init --with-sdd` and
+  `.minifac/factories/sdd.yaml` already exists with custom content
+- **THEN** the CLI does not modify the existing file, writes a
+  stdout line noting the file was preserved, and exits `0`
+
+#### Scenario: Init does not invoke external services
+
+- **WHEN** the user invokes `minifac init` on a machine with no
+  network
+- **THEN** the CLI runs to completion without attempting any HTTP,
+  LLM, or `git` call
+
+#### Scenario: Init reports a fatal I/O error clearly
+
+- **WHEN** the user invokes `minifac init` in a directory where
+  the process lacks write permission
+- **THEN** the CLI exits `1` with a stderr message naming the
+  unwritable path and the underlying error
 
