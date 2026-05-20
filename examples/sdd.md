@@ -60,6 +60,20 @@ commands wired up (typically `npm test`, `npm run build`,
 > `openspec/specs/sdd-factory/spec.md`; the shipped
 > `examples/sdd.yaml` is the reference implementation.
 
+> **Migration note for old copies (sentinel boilerplate).** If you
+> copied `examples/sdd.yaml` before the `runner-sentinel-injection`
+> change, your copy will carry a `## Status signaling` block at the
+> end of every node's prompt. Those blocks are now redundant — the
+> runner auto-injects the same instructions before sending the
+> prompt to the CLI. You can delete the block from every node; the
+> per-node responsibility prose stays. Existing copies that still
+> carry the block continue to work (the model sees the redundant
+> instructions twice, which is harmless), so the migration is
+> aesthetic, not correctness-driven. The binding contract lives in
+> `openspec/specs/node-executor/spec.md` (requirement: "Status
+> signaling via sentinel marker") and
+> `openspec/specs/sdd-factory/spec.md`.
+
 ## Per-node contract
 
 Each node is binding at the contract level — responsibility, OpenSpec
@@ -75,11 +89,12 @@ holds. The binding version lives in
 - **Invokes:** `openspec new change <CHANGE_NAME>`, then writes
   `proposal.md`, `design.md`, spec deltas, `tasks.md`. Drives
   `openspec validate <CHANGE_NAME>` until clean.
-- **Success signal:** final assistant message ends with
-  `MINIFAC_STATUS: succeeded`; validate is clean.
-- **Failure signal:** final assistant message ends with
-  `MINIFAC_STATUS: failed` followed by `REASON: <unresolved
-  validation error>`.
+- **Success criterion:** `openspec validate <CHANGE_NAME>` exits 0
+  and every required artifact (proposal, design, spec deltas, tasks)
+  is on disk.
+- **Failure criterion:** validate could not be made clean, or a
+  required artifact could not be written. The failure description
+  should name the unresolved validation error.
 
 ### apply
 
@@ -88,12 +103,11 @@ holds. The binding version lives in
 - **Invokes:** reads `openspec/changes/<CHANGE_NAME>/tasks.md`, works
   each unchecked `- [ ]`, marks them `- [x]`. May run local
   lints/builds as it goes.
-- **Success signal:** every checkbox in `tasks.md` is `- [x]`; final
-  assistant message ends with `MINIFAC_STATUS: succeeded`.
-- **Failure signal:** final assistant message ends with
-  `MINIFAC_STATUS: failed` followed by `REASON: <blocking task>`.
-  There is no `apply → propose` recovery edge — failure here ends the
-  run.
+- **Success criterion:** every checkbox in `tasks.md` is `- [x]`.
+- **Failure criterion:** a task is structurally blocked (for example,
+  it requires a schema change not in the proposal). The failure
+  description should name the blocking task. There is no
+  `apply → propose` recovery edge — failure here ends the run.
 
 ### verify
 
@@ -101,11 +115,12 @@ holds. The binding version lives in
 - **Invokes:** the target repo's verify commands in `cwd`. For most
   Node/TS repos that is `npm test`, `npm run build`,
   `npm run check`. Then `openspec validate <CHANGE_NAME>` once more.
-- **Success signal:** every verify command exits 0; final assistant
-  message ends with `MINIFAC_STATUS: succeeded`.
-- **Failure signal:** any verify command exits non-zero; final
-  assistant message ends with `MINIFAC_STATUS: failed` followed by
-  `REASON: <failing command + relevant output>`. Failure routes back
+- **Success criterion:** every verify command exits 0 (and
+  `openspec validate <CHANGE_NAME>` is still clean).
+- **Failure criterion:** any verify command exits non-zero. The
+  failure description must name the failing command and the
+  diagnosable output — the next `apply` iteration reads that text
+  out of `ctx.history`, so make it actionable. Failure routes back
   to `apply` on the `verify → apply` edge (`when: on_failure`,
   `max_traversals: 3`). After three retries the budget is exhausted
   and the run ends as `failed`.
@@ -129,17 +144,17 @@ holds. The binding version lives in
   dirty for the next loop to inherit and a human to disentangle.
 - **Does not invoke:** `git push`. The factory never pushes; that is
   a human decision.
-- **Success signal:** both `openspec archive` and the subsequent
-  `git commit` exit 0; final assistant message ends with
-  `MINIFAC_STATUS: succeeded`. This is the terminal node — success
-  ends the run.
-- **Failure signal:** final assistant message ends with
-  `MINIFAC_STATUS: failed` followed by `REASON: <step that failed +
-  its error>`. The failure path covers both `openspec archive`
-  errors and `git commit` errors (e.g. a target-repo pre-commit hook
-  rejecting the commit). A hook rejection at this stage is a human
-  concern — there is no `on_failure` edge from `archive` and adding
-  one would be the wrong fix.
+- **Success criterion:** both `openspec archive <CHANGE_NAME>` and
+  the subsequent `git commit` exit 0. This is the terminal node —
+  success ends the run.
+- **Failure criterion:** either step exits non-zero. The failure
+  description should name which step (`openspec archive` or
+  `git commit`) failed, and the relevant error. The failure path
+  covers both `openspec archive` errors and `git commit` errors
+  (e.g. a target-repo pre-commit hook rejecting the commit). A hook
+  rejection at this stage is a human concern — there is no
+  `on_failure` edge from `archive` and adding one would be the
+  wrong fix.
 
 ## Status signaling
 
@@ -150,10 +165,18 @@ The `claude` executor parses the sentinel out of the stream-json
 directions (a `succeeded` sentinel with a non-zero exit reports
 `succeeded`; a `failed` sentinel with a zero exit reports `failed`).
 If no sentinel is found, the executor falls back to exit-code
-semantics, but the SDD factory does not rely on that fallback — every
-shipped prompt mandates the sentinel.
+semantics, but the SDD factory does not rely on that fallback.
 
-The executor matches this regex against the final `result` field:
+**The runner owns the mechanics.** The `claude` executor
+auto-injects a canonical sentinel-emission instruction block into
+every outgoing prompt before sending it to the CLI. Factory authors
+do NOT re-state the regex, the literal endings, or the
+"must-be-last" rule in their YAML prompts. Each node's prompt only
+declares its per-node success and failure *criteria* (e.g. "every
+verify command exits 0").
+
+For reference, the executor matches this regex against the final
+`result` field:
 
 ```
 /^MINIFAC_STATUS:[ \t]*(succeeded|failed)\b[ \t]*(?:\r?\nREASON:[ \t]*(.*))?/m
@@ -172,29 +195,12 @@ MINIFAC_STATUS: failed
 REASON: schema validation failed for required field 'verify-mode'
 ```
 
-The sentinel SHALL be the last thing in the assistant message. The
-`m` flag anchors `^` at line starts, so a trailing newline is fine,
-but stray text after the sentinel risks confusing future tooling
-even if today's regex tolerates it — keep the sentinel last.
-
-If you author a custom node prompt, drop this block at the end so it
-remains compliant:
-
-```
-## Status signaling
-
-Your final assistant message MUST end with the literal
-`MINIFAC_STATUS:` sentinel line. End your message with exactly:
-
-    MINIFAC_STATUS: succeeded
-
-on success, or exactly:
-
-    MINIFAC_STATUS: failed
-    REASON: <one-line description of what blocked the node>
-
-on failure. The sentinel must be the last thing in your message.
-```
+If you author a custom node prompt, you don't need to add a
+sentinel-instructions block — the runner appends one for you. If you
+explicitly opt out via `emit_sentinel_instructions: false` in the
+node's `with:` block, then teaching the model to emit the marker
+becomes your responsibility (response-side parsing is unaffected by
+the knob).
 
 ## Security posture
 

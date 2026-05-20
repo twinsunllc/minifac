@@ -57,7 +57,7 @@
 // 1. Sentinel marker in the FINAL stream-json `result` event's `result`
 //    field (the model's final assistant text), matching:
 //
-//      /^MINIFAC_STATUS:\s*(succeeded|failed)\b\s*(?:\nREASON:\s*(.*))?/m
+//      /^MINIFAC_STATUS:[ \t]*(succeeded|failed)\b[ \t]*(?:\r?\nREASON:[ \t]*(.*))?/m
 //
 //    If matched, the captured status determines the terminal event,
 //    REGARDLESS of the child's exit code (sentinel wins in both
@@ -75,15 +75,35 @@
 // keeping a rolling "last `result.result` seen" string and scanning it
 // once after stream drain.
 //
-// The executor does NOT mutate the prompt to inject sentinel instructions.
-// Prompts that want to fail the node from inside the model MUST include
-// the sentinel themselves; prompts that don't (e.g. `hello.yaml`) keep
-// relying on exit-code semantics.
+// ## Sentinel instruction auto-injection
+//
+// By default the executor auto-appends a canonical sentinel-emission
+// instruction block (`SENTINEL_INSTRUCTIONS`, defined below) to the
+// outgoing prompt, after a blank-line separator and before the prompt
+// is wrapped in the stream-json envelope. The injected block teaches
+// the model the two acceptable trailing shapes
+// (`MINIFAC_STATUS: succeeded` and `MINIFAC_STATUS: failed` + `REASON:`),
+// that the marker must appear in its final assistant message, and that
+// the marker must be the last thing in the message.
+//
+// The runner owns both halves of the sentinel contract: it instructs
+// the model on emission (via the appended block) and parses the response
+// (via `SENTINEL_REGEX`). The two are defined adjacently below so a
+// future format change touches one file.
+//
+// ### Sentinel knob (sentinel-side, not authority-side)
+//
+// - `emit_sentinel_instructions` (boolean, optional, default `true`):
+//   set to `false` to opt out of the auto-injection. The executor still
+//   scans the response for the sentinel marker per the parse rules
+//   above — opting out is a prompt-side knob only; response-side
+//   parsing is unaffected.
 //
 // See the canonical spec under `openspec/specs/node-executor/spec.md`
 // (requirements: "Claude executor uses stream-json...",
 // "Per-node authority controls in claude executor `with:`",
-// "Status signaling via sentinel marker").
+// "Status signaling via sentinel marker",
+// "Per-node sentinel-injection opt-out in claude executor `with:`").
 
 import { spawn as nodeSpawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
@@ -108,10 +128,46 @@ const WithSchema = z
     // (non-empty strings) rather than collection size.
     allowed_tools: z.array(z.string().min(1)).optional(),
     add_dirs: z.array(z.string().min(1)).optional(),
+    // Sentinel-injection opt-out. Default (omitted or `true`) → executor
+    // appends `SENTINEL_INSTRUCTIONS` to the outgoing prompt. `false`
+    // suppresses the appended block. Response-side parsing is unaffected
+    // by this knob — see `SENTINEL_REGEX` below.
+    emit_sentinel_instructions: z.boolean().optional(),
   })
   .strict();
 
 export type ClaudeWith = z.infer<typeof WithSchema>;
+
+/**
+ * Canonical sentinel-emission instruction block appended to outgoing
+ * prompts by default. The runner owns this contract (see decision
+ * `docs/decisions/0007-Sentinel-Runner-Injects.md`): factories declare
+ * per-node success/failure criteria; the runner teaches the model the
+ * mechanics.
+ *
+ * Cross-reference: `SENTINEL_REGEX` (below) parses the response side
+ * of the same contract — the two MUST stay in sync.
+ */
+export const SENTINEL_INSTRUCTIONS = `## Status signaling
+
+Your final assistant message MUST end with a \`MINIFAC_STATUS:\` line
+that tells the runner whether this node succeeded or failed. The
+runner reads this line out of your final assistant text; nothing
+else in the message decides the outcome.
+
+- On success, end your final message with exactly this line and
+  nothing after it:
+
+      MINIFAC_STATUS: succeeded
+
+- On failure, end your final message with exactly these two lines
+  and nothing after them:
+
+      MINIFAC_STATUS: failed
+      REASON: <one-line description of what blocked the node>
+
+The \`MINIFAC_STATUS:\` line MUST be the last thing in your final
+assistant message.`;
 
 /**
  * Sentinel regex for in-band status signaling from the spawned model.
@@ -129,6 +185,9 @@ export type ClaudeWith = z.infer<typeof WithSchema>;
  * We narrow the trailing whitespace class to `[ \t]*` (horizontal
  * whitespace only) so the optional REASON line is reachable. Decision
  * pinned by the sentinel tests below.
+ *
+ * Cross-reference: `SENTINEL_INSTRUCTIONS` (above) is the prompt-side
+ * counterpart that teaches the model the format this regex parses.
  */
 export const SENTINEL_REGEX =
   /^MINIFAC_STATUS:[ \t]*(succeeded|failed)\b[ \t]*(?:\r?\nREASON:[ \t]*(.*))?/m;
@@ -227,6 +286,13 @@ export class ClaudeExecutor implements NodeExecutor {
     }
 
     const { prompt } = parsed.data;
+    // Auto-inject the sentinel-emission instruction block by default.
+    // Opt out with `emit_sentinel_instructions: false`. Response-side
+    // parsing (see SENTINEL_REGEX) is unaffected by this knob.
+    const effectivePrompt =
+      parsed.data.emit_sentinel_instructions === false
+        ? prompt
+        : `${prompt}\n\n${SENTINEL_INSTRUCTIONS}`;
     const cliArgs = buildCliArgs(parsed.data);
 
     let child: ChildProcess;
@@ -274,7 +340,7 @@ export class ClaudeExecutor implements NodeExecutor {
 
     // Write stdin synchronously then close it. Suppress EPIPE if the child
     // already exited (e.g. spawn ENOENT).
-    const payload = buildStreamJsonInput(ctx.history, prompt);
+    const payload = buildStreamJsonInput(ctx.history, effectivePrompt);
     if (child.stdin) {
       child.stdin.on("error", () => {
         /* ignore; surfaced via child error/exit */

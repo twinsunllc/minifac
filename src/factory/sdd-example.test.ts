@@ -89,22 +89,29 @@ describe("examples/sdd.yaml", () => {
     }
   });
 
-  it("instructs every node prompt to emit MINIFAC_STATUS", async () => {
+  it("declares per-node success/failure criteria in prose", async () => {
+    // Sentinel mechanics are the runner's job now — the factory only
+    // declares what success and failure *mean* for each node. See
+    // openspec/specs/node-executor/spec.md ("Status signaling via
+    // sentinel marker") and openspec/specs/sdd-factory/spec.md
+    // ("SDD factory prompts declare per-node success/failure criteria").
     const { factory } = await loadFactory(sddPath);
-    for (const id of ["propose", "apply", "verify", "archive"] as const) {
-      const prompt = factory.nodes[id]?.with?.prompt;
-      expect(typeof prompt, `node ${id} prompt should be a string`).toBe("string");
-      expect(prompt as string, `node ${id} prompt should mention MINIFAC_STATUS`).toContain(
-        "MINIFAC_STATUS",
-      );
-    }
-  });
+    const propose = factory.nodes.propose?.with?.prompt;
+    expect(typeof propose, "propose prompt should be a string").toBe("string");
+    expect(propose as string, "propose mentions openspec validate").toContain("openspec validate");
 
-  it("instructs the archive node to commit the archive moves", async () => {
-    const { factory } = await loadFactory(sddPath);
-    const prompt = factory.nodes.archive?.with?.prompt;
-    expect(typeof prompt, "archive prompt should be a string").toBe("string");
-    expect(prompt as string, "archive prompt should mention git commit").toContain("git commit");
+    const apply = factory.nodes.apply?.with?.prompt;
+    expect(typeof apply, "apply prompt should be a string").toBe("string");
+    expect(apply as string, "apply mentions tasks.md").toContain("tasks.md");
+
+    const verify = factory.nodes.verify?.with?.prompt;
+    expect(typeof verify, "verify prompt should be a string").toBe("string");
+    expect(verify as string, "verify mentions verify command criterion").toContain("verify");
+
+    const archive = factory.nodes.archive?.with?.prompt;
+    expect(typeof archive, "archive prompt should be a string").toBe("string");
+    expect(archive as string, "archive mentions openspec archive").toContain("openspec archive");
+    expect(archive as string, "archive mentions git commit").toContain("git commit");
   });
 
   it("pins the archive commit subject-line convention", async () => {

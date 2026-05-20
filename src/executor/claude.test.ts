@@ -1,7 +1,12 @@
 import { EventEmitter } from "node:events";
 import { Readable, Writable } from "node:stream";
 import { describe, expect, it } from "vitest";
-import { ClaudeExecutor, buildCliArgs, buildStreamJsonInput } from "./claude.js";
+import {
+  ClaudeExecutor,
+  SENTINEL_INSTRUCTIONS,
+  buildCliArgs,
+  buildStreamJsonInput,
+} from "./claude.js";
 import type { ResolvedNode, RunContext } from "./types.js";
 
 interface FakeChild extends EventEmitter {
@@ -554,6 +559,38 @@ describe("ClaudeExecutor sentinel status", () => {
     expect(last).toEqual({ kind: "status", status: "succeeded", meta: { exitCode: 0 } });
   });
 
+  it("response-side sentinel parse is unaffected by emit_sentinel_instructions: false", async () => {
+    // Injection and parsing are independent: opting out of the appended
+    // block does NOT disable the executor's scan of the final result event.
+    const executor = new ClaudeExecutor({
+      spawn: () => {
+        const c = makeFakeChild();
+        setImmediate(() => {
+          c.emitOutput(
+            resultEventLine("Did the work.\nMINIFAC_STATUS: failed\nREASON: opted out anyway"),
+          );
+          c.finish(0);
+        });
+        return c as unknown as ReturnType<typeof import("node:child_process").spawn>;
+      },
+    });
+    const events = await collect(
+      executor,
+      makeNode({ with: { prompt: "hi", emit_sentinel_instructions: false } }),
+      makeCtx(),
+    );
+    const last = events[events.length - 1];
+    expect(last).toMatchObject({
+      kind: "status",
+      status: "failed",
+      meta: {
+        reason: "sentinel_failed",
+        sentinel: "opted out anyway",
+        exitCode: 0,
+      },
+    });
+  });
+
   it("non-result stream-json events do not affect sentinel detection", async () => {
     // Lines that parse as JSON but are not `type: result` are ignored for
     // sentinel purposes — even if their text contains MINIFAC_STATUS.
@@ -575,5 +612,107 @@ describe("ClaudeExecutor sentinel status", () => {
     const events = await collect(executor, makeNode(), makeCtx());
     const last = events[events.length - 1];
     expect(last).toEqual({ kind: "status", status: "succeeded", meta: { exitCode: 0 } });
+  });
+});
+
+/**
+ * Pull the user-message content out of the stdin envelope an executor would
+ * have written. Mirrors the shape `buildStreamJsonInput` writes — see the
+ * wire-format comment at the top of `src/executor/claude.ts`.
+ */
+function userMessageContentFromStdin(stdin: string): string {
+  const line = stdin.endsWith("\n") ? stdin.slice(0, -1) : stdin;
+  const parsed = JSON.parse(line) as {
+    type: string;
+    message: { role: string; content: string };
+  };
+  return parsed.message.content;
+}
+
+describe("ClaudeExecutor sentinel-instruction injection", () => {
+  it("auto-appends SENTINEL_INSTRUCTIONS by default (omitted field) — snapshot", async () => {
+    let captured: FakeChild | null = null;
+    const executor = new ClaudeExecutor({
+      spawn: () => {
+        const c = makeFakeChild();
+        captured = c;
+        setImmediate(() => c.finish(0));
+        return c as unknown as ReturnType<typeof import("node:child_process").spawn>;
+      },
+    });
+    await collect(executor, makeNode({ with: { prompt: "do X" } }), makeCtx());
+    const stdin = captured ? (captured as FakeChild).stdinWritten : "";
+    expect(stdin).toMatchInlineSnapshot(`
+      "{"type":"user","message":{"role":"user","content":"[]\\n\\n---\\n\\ndo X\\n\\n## Status signaling\\n\\nYour final assistant message MUST end with a \`MINIFAC_STATUS:\` line\\nthat tells the runner whether this node succeeded or failed. The\\nrunner reads this line out of your final assistant text; nothing\\nelse in the message decides the outcome.\\n\\n- On success, end your final message with exactly this line and\\n  nothing after it:\\n\\n      MINIFAC_STATUS: succeeded\\n\\n- On failure, end your final message with exactly these two lines\\n  and nothing after them:\\n\\n      MINIFAC_STATUS: failed\\n      REASON: <one-line description of what blocked the node>\\n\\nThe \`MINIFAC_STATUS:\` line MUST be the last thing in your final\\nassistant message."}}
+      "
+    `);
+    // Sanity: the injected block is byte-identical to the exported constant.
+    const content = userMessageContentFromStdin(stdin);
+    expect(content.endsWith(SENTINEL_INSTRUCTIONS)).toBe(true);
+  });
+
+  it("emit_sentinel_instructions: false sends the bare prompt", async () => {
+    let captured: FakeChild | null = null;
+    const executor = new ClaudeExecutor({
+      spawn: () => {
+        const c = makeFakeChild();
+        captured = c;
+        setImmediate(() => c.finish(0));
+        return c as unknown as ReturnType<typeof import("node:child_process").spawn>;
+      },
+    });
+    await collect(
+      executor,
+      makeNode({ with: { prompt: "do X", emit_sentinel_instructions: false } }),
+      makeCtx(),
+    );
+    const stdin = captured ? (captured as FakeChild).stdinWritten : "";
+    const content = userMessageContentFromStdin(stdin);
+    expect(content).toBe("[]\n\n---\n\ndo X");
+    expect(content).not.toContain("MINIFAC_STATUS");
+  });
+
+  it("emit_sentinel_instructions: true produces the same payload as omitted", async () => {
+    const captureStdin = async (withPayload: Record<string, unknown>): Promise<string> => {
+      let captured: FakeChild | null = null;
+      const executor = new ClaudeExecutor({
+        spawn: () => {
+          const c = makeFakeChild();
+          captured = c;
+          setImmediate(() => c.finish(0));
+          return c as unknown as ReturnType<typeof import("node:child_process").spawn>;
+        },
+      });
+      await collect(executor, makeNode({ with: withPayload }), makeCtx());
+      return captured ? (captured as FakeChild).stdinWritten : "";
+    };
+    const omitted = await captureStdin({ prompt: "do X" });
+    const explicitTrue = await captureStdin({ prompt: "do X", emit_sentinel_instructions: true });
+    expect(explicitTrue).toBe(omitted);
+  });
+
+  it("non-boolean emit_sentinel_instructions yields invalid_with and no spawn", async () => {
+    let spawned = false;
+    const executor = new ClaudeExecutor({
+      spawn: () => {
+        spawned = true;
+        const c = makeFakeChild();
+        setImmediate(() => c.finish(0));
+        return c as unknown as ReturnType<typeof import("node:child_process").spawn>;
+      },
+    });
+    const events = await collect(
+      executor,
+      // biome-ignore lint/suspicious/noExplicitAny: deliberately invalid `with:` for the test
+      makeNode({ with: { prompt: "hi", emit_sentinel_instructions: "yes" as any } }),
+      makeCtx(),
+    );
+    expect(spawned).toBe(false);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      kind: "status",
+      status: "failed",
+      meta: { reason: "invalid_with" },
+    });
   });
 });
