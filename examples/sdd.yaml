@@ -102,8 +102,12 @@ nodes:
 
         Do all of the following, in this strict order:
 
-        1. Run `openspec archive {{ brief.change }}`. This moves the change
-           directory from `openspec/changes/{{ brief.change }}/` to
+        1. Run `openspec archive {{ brief.change }} --yes`. (The
+           `--yes` flag is required: the CLI prompts interactively
+           for confirmation when a change has many spec deltas, and
+           a spawned non-interactive session cannot answer.) This
+           moves the change directory from
+           `openspec/changes/{{ brief.change }}/` to
            `openspec/changes/archive/<dated>-{{ brief.change }}/` and folds
            the change's spec deltas into
            `openspec/specs/<capability>/spec.md`.
