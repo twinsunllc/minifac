@@ -8,6 +8,22 @@ minifac is a small graph-based workflow runner — directed graphs (cycles
 allowed) of agent + tool nodes, defined in YAML, executed by a TypeScript
 daemon with a live web viewer. See `README.md` for the full pitch.
 
+## Project knowledge vault
+
+Before doing substantive work, browse `docs/`:
+
+- `docs/README.md` — entry point / map of content
+- `docs/concepts/` — what core concepts are ([[Factory]], [[Brief]],
+  [[Worktree]], [[Executor]], [[Runner]], [[Sentinel]], [[Cycle]],
+  [[Run]], [[SDD-Loop]], [[Runs-DB]])
+- `docs/decisions/` — append-only log of architectural decisions
+  with rationale and rejected alternatives
+- `docs/Roadmap.md` — current proposal sequence and status
+- `docs/Open-Questions.md` — deferred decisions with named triggers
+
+Notes use Obsidian-style `[[wikilinks]]`. They render as plain text on
+GitHub and are navigable in Obsidian or any markdown editor.
+
 ## How we work here
 
 **This repo uses Spec-Driven Development.** Every non-trivial change goes
