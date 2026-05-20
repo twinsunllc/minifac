@@ -1,6 +1,6 @@
 ## MODIFIED Requirements
 
-### Requirement: SDD factory prompts declare per-node success/failure criteria
+### Requirement: SDD factory prompts instruct the model to emit MINIFAC_STATUS
 
 Each of the four shipped SDD node prompts SHALL declare, in prose,
 what success and failure mean for that node — the per-node
