@@ -118,9 +118,17 @@ the factory does not rely on it.
   `MINIFAC_STATUS: succeeded` only when every verify command exits
   zero, and `MINIFAC_STATUS: failed` (with a `REASON:` naming the
   failing command) otherwise.
-- `archive` SHALL drive `openspec archive <name>` and emit
-  `MINIFAC_STATUS: succeeded` only on a clean exit. `archive` is
-  terminal; its success terminates the run.
+- `archive` SHALL drive `openspec archive <name>`. On a clean exit
+  from `openspec archive`, `archive` SHALL stage and commit the
+  resulting file moves and spec folds in the resolved `cwd` with a
+  subject line of the form `Archive: <name>` before emitting
+  `MINIFAC_STATUS: succeeded`. If `openspec archive` exits non-zero,
+  `archive` SHALL NOT attempt the commit and SHALL emit
+  `MINIFAC_STATUS: failed`. If the commit itself fails (for
+  example, a pre-commit hook in the target repo rejects it),
+  `archive` SHALL emit `MINIFAC_STATUS: failed` with a `REASON:`
+  line naming the commit failure. `archive` is terminal; its
+  success terminates the run.
 
 #### Scenario: Verify failure routes back to apply within budget
 
@@ -160,6 +168,25 @@ the factory does not rely on it.
   proceeds along `on_failure` (for `verify`) or ends the run as
   `failed` (for `propose`, `apply`, `archive`, which have no
   `on_failure` edge)
+
+#### Scenario: Archive commits after openspec archive succeeds
+
+- **WHEN** the `archive` node runs `openspec archive <name>` and
+  the command exits 0, leaving the resulting moves and spec folds
+  staged-but-uncommitted in `cwd`
+- **THEN** the node SHALL run `git add` and `git commit` (with a
+  subject line of the form `Archive: <name>`) before emitting
+  `MINIFAC_STATUS: succeeded`, and the working tree in `cwd` SHALL
+  be clean of the archive-produced diff after the node returns
+
+#### Scenario: Archive commit failure surfaces as a node failure
+
+- **WHEN** the `archive` node runs `openspec archive <name>`
+  cleanly but the subsequent `git commit` exits non-zero (for
+  example, a pre-commit hook in `cwd` rejects the commit)
+- **THEN** the node SHALL emit `MINIFAC_STATUS: failed` followed by
+  a `REASON:` line that names the commit failure, and SHALL NOT
+  emit `MINIFAC_STATUS: succeeded`
 
 ### Requirement: SDD factory ships per-node documentation
 
