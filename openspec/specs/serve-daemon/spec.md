@@ -17,8 +17,18 @@ The daemon SHALL bind only to a loopback address. If `--host` is not a
 loopback address (e.g. not `127.0.0.1`, not `::1`, not `localhost`),
 the daemon SHALL refuse to start and exit non-zero with an error
 message naming the rejected host. The daemon SHALL run until it
-receives SIGINT or SIGTERM, at which point it SHALL stop accepting new
-HTTP connections, close in-flight SSE streams cleanly, and exit `0`.
+receives SIGINT or SIGTERM. On signal, the daemon SHALL:
+
+1. stop accepting new HTTP connections,
+2. **actively terminate** any in-flight SSE responses by calling each
+   live `SseWriter`'s close path (writing `res.end()` against the
+   underlying response), rather than waiting for the client to
+   disconnect, and
+3. exit `0` once all sockets are closed.
+
+Closing the daemon SHALL NOT block on long-lived SSE subscribers; the
+daemon SHALL end those responses itself so that `server.close()` can
+resolve promptly.
 
 #### Scenario: Default invocation starts on 127.0.0.1:4280
 
@@ -36,8 +46,18 @@ HTTP connections, close in-flight SSE streams cleanly, and exit `0`.
 #### Scenario: SIGINT shuts the daemon down cleanly
 
 - **WHEN** the daemon is running and receives SIGINT
-- **THEN** the daemon stops accepting new HTTP connections, closes any
-  open SSE streams, and exits `0`
+- **THEN** the daemon stops accepting new HTTP connections, actively
+  ends every in-flight SSE response, and exits `0` without waiting
+  for SSE clients to disconnect
+
+#### Scenario: Shutdown ends an active SSE subscriber
+
+- **WHEN** a client is currently subscribed to `GET /api/runs/:id/events`
+  for a run that is still `running`, and the daemon receives SIGINT (or
+  the in-process `DaemonHandle.close()` is invoked)
+- **THEN** the subscriber's SSE response stream ends within a small
+  bounded time and the daemon process exits `0`; the daemon does not
+  hang waiting for the subscriber to disconnect on its own
 
 ### Requirement: Factory discovery via directory watch
 
@@ -163,8 +183,17 @@ When the connection opens, the server SHALL replay any buffered prior
 events the client has not yet seen, then keep the connection open and
 push new events as the runner emits them. The client MAY include a
 `Last-Event-ID` request header (set by the browser `EventSource` on
-auto-reconnect); when present, the server SHALL replay only events
-with index strictly greater than that value.
+auto-reconnect); when present and well-formed, the server SHALL replay
+only events with index strictly greater than that value.
+
+`Last-Event-ID` SHALL be considered well-formed when it is a string
+representing a non-negative decimal integer (e.g. `0`, `5`, `42`). A
+present-but-malformed `Last-Event-ID` (e.g. `abc`, `1.5`, `-1`, an
+empty string, `NaN`) SHALL cause the server to respond with HTTP `400`
+and a JSON body of `{ error: "invalid_last_event_id", message: <string> }`
+and SHALL NOT upgrade the response to `text/event-stream`. An *absent*
+`Last-Event-ID` SHALL behave as a fresh subscription (replay the full
+buffer, then live tail).
 
 When the run ends, the server SHALL push a final frame with `event:`
 equal to `run_end` whose `data:` payload contains the run's
@@ -194,6 +223,21 @@ If the requested run id does not exist, the endpoint SHALL respond
   `Last-Event-ID: 5`
 - **THEN** the client receives only events with index `> 5`,
   followed by any new events as they arrive
+
+#### Scenario: Reconnect with Last-Event-ID 0 skips event 0
+
+- **WHEN** a client opens an SSE stream and sends `Last-Event-ID: 0`
+- **THEN** the client receives only events with index `> 0`; the
+  event at index `0` is NOT replayed
+
+#### Scenario: Malformed Last-Event-ID is rejected with 400
+
+- **WHEN** a client opens an SSE request to `GET /api/runs/:id/events`
+  with `Last-Event-ID: not-a-number` (or any value that is not a
+  non-negative decimal integer)
+- **THEN** the server responds HTTP `400` with a JSON body whose
+  `error` is `"invalid_last_event_id"`, does NOT set `Content-Type:
+  text/event-stream`, and does NOT subscribe the client to the run
 
 #### Scenario: Terminal frame closes the stream
 
