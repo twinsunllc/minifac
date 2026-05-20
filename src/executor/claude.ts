@@ -3,17 +3,23 @@
 // ## Wire format — stdin
 //
 // The `claude` CLI runs in stream-json mode (both input and output). For v0 we
-// frame the prior run history plus the node's prompt as a SINGLE user message.
-// The message's `content` is a string that starts with a JSON-serialized
-// preamble of `ctx.history` (each entry is
-// `{ nodeId, iteration, emittedAt, event }`) followed by a separator and the
-// raw prompt. Concretely the line we write to stdin looks like:
+// frame the structured prior-results plus the node's prompt as a SINGLE user
+// message. The message's `content` is a string that starts with a JSON-
+// serialized preamble of `ctx.priorResults` (each entry is a `NodeResult`:
+// `{ nodeId, iteration, status, reason, startedAt, endedAt }`) followed by a
+// separator and the raw prompt. Concretely the line we write to stdin looks
+// like:
 //
-//   {"type":"user","message":{"role":"user","content":"<history JSON>\n\n---\n\n<prompt>"}}
+//   {"type":"user","message":{"role":"user","content":"<priorResults JSON>\n\n---\n\n<prompt>"}}
 //
-// followed by a newline; stdin is then closed.
+// followed by a newline; stdin is then closed. For the first node in a run
+// the preamble is the empty array literal `[]`.
 //
 // The wire format is snapshot-tested so any change is deliberate.
+//
+// See `docs/decisions/0014-Structured-Prior-Results.md` — this replaced
+// the prior run-wide event-history preamble, which inflated per-node
+// prompts past the model's context window.
 //
 // ## Wire format — argv
 //
@@ -111,9 +117,9 @@ import { z } from "zod";
 import type {
   NodeEvent,
   NodeExecutor,
+  NodeResult,
   ResolvedNode,
   RunContext,
-  RunHistoryEntry,
 } from "./types.js";
 
 const WithSchema = z
@@ -212,10 +218,13 @@ export interface ClaudeExecutorOptions {
   binary?: string;
 }
 
-export function buildStreamJsonInput(history: readonly RunHistoryEntry[], prompt: string): string {
-  // Single JSON line. We serialize history as a JSON array preamble inside
-  // the user message content. Newline terminates the frame.
-  const preamble = JSON.stringify(history);
+export function buildStreamJsonInput(
+  priorResults: readonly NodeResult[],
+  prompt: string,
+): string {
+  // Single JSON line. We serialize priorResults as a JSON array preamble
+  // inside the user message content. Newline terminates the frame.
+  const preamble = JSON.stringify(priorResults);
   const content = `${preamble}\n\n---\n\n${prompt}`;
   const envelope = {
     type: "user",
@@ -340,7 +349,7 @@ export class ClaudeExecutor implements NodeExecutor {
 
     // Write stdin synchronously then close it. Suppress EPIPE if the child
     // already exited (e.g. spawn ENOENT).
-    const payload = buildStreamJsonInput(ctx.history, effectivePrompt);
+    const payload = buildStreamJsonInput(ctx.priorResults, effectivePrompt);
     if (child.stdin) {
       child.stdin.on("error", () => {
         /* ignore; surfaced via child error/exit */

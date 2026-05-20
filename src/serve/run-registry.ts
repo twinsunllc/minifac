@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { ExecutorRegistry } from "../executor/registry.js";
-import type { RunHistoryEntry } from "../executor/types.js";
+import type { EmittedEvent } from "../executor/types.js";
 import type { LoadedFactory } from "../factory/loader.js";
 import type { RunResult } from "../runner/result.js";
 import { runFactory } from "../runner/run.js";
@@ -14,7 +14,7 @@ export type RunStatus = "pending" | "running" | "succeeded" | "failed";
  * `run_end` marker we emit when the run terminates.
  */
 export type RunEventEntry =
-  | ({ index: number; kind: "stdout" | "stderr" | "status" } & RunHistoryEntry)
+  | ({ index: number; kind: "stdout" | "stderr" | "status" } & EmittedEvent)
   | {
       index: number;
       kind: "run_end";
@@ -298,7 +298,7 @@ export class RunRegistry {
     this.subscribers.clear();
   }
 
-  private recordEvent(runId: string, entry: RunHistoryEntry): void {
+  private recordEvent(runId: string, entry: EmittedEvent): void {
     const run = this.runs.get(runId);
     if (!run) return;
     const idx = run.events.length;
@@ -371,6 +371,6 @@ function storedEventToEntry(e: StoredEvent, index: number, stored: StoredRun): R
     nodeId: e.nodeId ?? "",
     iteration: e.iteration,
     emittedAt: e.emittedAt,
-    event: e.payload as RunHistoryEntry["event"],
+    event: e.payload as EmittedEvent["event"],
   } as RunEventEntry;
 }

@@ -34,17 +34,24 @@ in the cycle. The loader rejects unbounded cycles. See
 This is enforced at load time, not runtime — so a buggy factory can't
 sneak through.
 
-## History accumulates across iterations
+## Results accumulate across iterations
 
-A node's second iteration in a cycle sees its own prior outputs *and*
-everything emitted in between. The [[Runner]] passes the full run-wide
-history into each node's `RunContext`. So `apply` on iteration 2 has:
+A node's second iteration in a cycle sees one `NodeResult` entry per
+completed node execution that came before it. The [[Runner]] passes
+the structured `priorResults` array into each scheduled node's
+`RunContext`. So `apply` on iteration 2 has:
 
-- `apply` iter 1 events
-- `verify` iter 1 failure events (the reason we're back)
+- `apply` iter 1 result (status: `succeeded`, reason: `null`)
+- `verify` iter 1 result (status: `failed`, reason: the [[Sentinel]]
+  REASON line — *the* feedback channel the cycle iterates against)
 
-This is what makes cycles actually iterative rather than just "re-run
-with the same inputs."
+The REASON line is load-bearing here: it's how a failing node tells
+the next iteration what to do differently. Without a meaningful
+REASON, the cycle still iterates but `apply` doesn't know what
+broke. The runner-injected sentinel block
+([[0007-Sentinel-Runner-Injects]]) ensures every claude-executor
+node ships with that requirement by default. See
+[[0014-Structured-Prior-Results]].
 
 ## Budget exhaustion
 

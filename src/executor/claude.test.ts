@@ -71,7 +71,7 @@ function makeCtx(overrides: Partial<RunContext> = {}): RunContext {
       nodes: { n1: { executor: "claude", terminal: false } },
       edges: [],
     },
-    history: [],
+    priorResults: [],
     nodeId: "n1",
     iteration: 1,
     cwd: "/tmp",
@@ -88,7 +88,7 @@ async function collect(executor: ClaudeExecutor, node: ResolvedNode, ctx: RunCon
 }
 
 describe("buildStreamJsonInput", () => {
-  it("matches the v0 wire-format snapshot for an empty history", () => {
+  it("matches the v0 wire-format snapshot for empty priorResults", () => {
     const out = buildStreamJsonInput([], "say hi");
     expect(out).toMatchInlineSnapshot(`
       "{"type":"user","message":{"role":"user","content":"[]\\n\\n---\\n\\nsay hi"}}
@@ -96,20 +96,30 @@ describe("buildStreamJsonInput", () => {
     `);
   });
 
-  it("matches the v0 wire-format snapshot for a populated history", () => {
+  it("matches the v0 wire-format snapshot for populated priorResults", () => {
     const out = buildStreamJsonInput(
       [
         {
           nodeId: "a",
           iteration: 1,
-          emittedAt: 12,
-          event: { kind: "stdout", line: "prior" },
+          status: "succeeded",
+          reason: null,
+          startedAt: 0,
+          endedAt: 12,
+        },
+        {
+          nodeId: "v",
+          iteration: 1,
+          status: "failed",
+          reason: "verify hit error",
+          startedAt: 13,
+          endedAt: 20,
         },
       ],
       "prompt here",
     );
     expect(out).toMatchInlineSnapshot(`
-      "{"type":"user","message":{"role":"user","content":"[{\\"nodeId\\":\\"a\\",\\"iteration\\":1,\\"emittedAt\\":12,\\"event\\":{\\"kind\\":\\"stdout\\",\\"line\\":\\"prior\\"}}]\\n\\n---\\n\\nprompt here"}}
+      "{"type":"user","message":{"role":"user","content":"[{\\"nodeId\\":\\"a\\",\\"iteration\\":1,\\"status\\":\\"succeeded\\",\\"reason\\":null,\\"startedAt\\":0,\\"endedAt\\":12},{\\"nodeId\\":\\"v\\",\\"iteration\\":1,\\"status\\":\\"failed\\",\\"reason\\":\\"verify hit error\\",\\"startedAt\\":13,\\"endedAt\\":20}]\\n\\n---\\n\\nprompt here"}}
       "
     `);
   });
@@ -228,19 +238,21 @@ describe("ClaudeExecutor", () => {
     });
     const ctx = makeCtx({
       cwd: "/some/workdir",
-      history: [
+      priorResults: [
         {
           nodeId: "prev",
           iteration: 1,
-          emittedAt: 1,
-          event: { kind: "stdout", line: "earlier output" },
+          status: "failed",
+          reason: "earlier failure",
+          startedAt: 0,
+          endedAt: 1,
         },
       ],
     });
     await collect(executor, makeNode({ with: { prompt: "what next?" } }), ctx);
     expect(cwdSeen).toBe("/some/workdir");
     const stdinSent = captured ? (captured as FakeChild).stdinWritten : "";
-    expect(stdinSent).toContain("earlier output");
+    expect(stdinSent).toContain("earlier failure");
     expect(stdinSent).toContain("what next?");
     expect(stdinSent.endsWith("\n")).toBe(true);
   });

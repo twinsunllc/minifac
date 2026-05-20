@@ -2,7 +2,12 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import type { Brief } from "../brief/loader.js";
 import type { ExecutorRegistry } from "../executor/registry.js";
-import type { NodeEvent, ResolvedNode, RunContext, RunHistoryEntry } from "../executor/types.js";
+import type {
+  EmittedEvent,
+  NodeResult,
+  ResolvedNode,
+  RunContext,
+} from "../executor/types.js";
 import type { LoadedFactory } from "../factory/loader.js";
 import type { RunStore, StoredEventKind } from "../storage/run-store.js";
 import type { ExecutionLogEntry, RunResult } from "./result.js";
@@ -11,7 +16,7 @@ import { type Substitutions, substitute } from "./substitute.js";
 export interface RunOptions {
   registry: ExecutorRegistry;
   /** Called for every event yielded by any node, in order. */
-  onEvent?: (entry: RunHistoryEntry) => void;
+  onEvent?: (entry: EmittedEvent) => void;
   /** Optional brief in scope for this run. When set, the runner substitutes
    * `{{ brief.<field> }}` tokens in each node's `with.prompt` string
    * immediately before dispatch. */
@@ -44,7 +49,7 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
 
   const runStart = Date.now();
   const runId = options.runId ?? randomUUID();
-  const history: RunHistoryEntry[] = [];
+  const priorResults: NodeResult[] = [];
   const log: ExecutionLogEntry[] = [];
 
   if (store) {
@@ -60,7 +65,7 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
         startedAt: runStart,
       });
     } catch (err) {
-      reportStoreError(history, onEvent, runStart, err);
+      reportStoreError(onEvent, runStart, err);
     }
   }
 
@@ -81,7 +86,7 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
         emittedAt,
       });
     } catch (err) {
-      reportStoreError(history, onEvent, runStart, err);
+      reportStoreError(onEvent, runStart, err);
     }
   };
 
@@ -106,11 +111,6 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
   let result: RunResult | null = null;
 
   const resolveCwd = (nodeCwd: string | undefined): string => {
-    // Apply template substitution (brief.*, run.*) before fallbacks. Tokens
-    // with no in-scope value pass through verbatim per the substitute()
-    // contract; the empty-string check below catches the "intentional empty"
-    // case but not the "still a literal token" case (which we leave to the
-    // executor to surface).
     let effective = nodeCwd;
     if (typeof effective === "string" && effective.length > 0) {
       effective = substitute(effective, subs);
@@ -144,7 +144,7 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
             at: Date.now(),
           });
         } catch (err) {
-          reportStoreError(history, onEvent, runStart, err);
+          reportStoreError(onEvent, runStart, err);
         }
       }
       continue;
@@ -169,15 +169,10 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
       try {
         await store.recordNodeStart(runId, nodeId, iteration, Date.now());
       } catch (err) {
-        reportStoreError(history, onEvent, runStart, err);
+        reportStoreError(onEvent, runStart, err);
       }
     }
 
-    // Build a shallow-cloned node for dispatch so we never mutate the
-    // factory's node objects (they're reused across iterations). When any
-    // substitution namespace is in scope and the node has a string
-    // `with.prompt`, substitute tokens before handing the node to the
-    // executor.
     let resolvedNode: ResolvedNode = { ...node, id: nodeId };
     if ((subs.brief || subs.run) && node.with && typeof node.with.prompt === "string") {
       const substituted = substitute(node.with.prompt, subs);
@@ -186,11 +181,11 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
         with: { ...node.with, prompt: substituted },
       };
     }
-    const snapshot: readonly RunHistoryEntry[] = Object.freeze(history.slice());
+    const snapshot: readonly NodeResult[] = Object.freeze(priorResults.slice());
 
     const ctx: RunContext = {
       factory,
-      history: snapshot,
+      priorResults: snapshot,
       nodeId,
       iteration,
       cwd: resolveCwd(node.cwd),
@@ -198,22 +193,23 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
 
     const startedAt = Date.now() - runStart;
     let finalStatus: "succeeded" | "failed" | null = null;
+    let terminalMeta: unknown = undefined;
 
     for await (const event of executor.run(resolvedNode, ctx)) {
       const emittedAt = Date.now() - runStart;
-      const entry: RunHistoryEntry = {
+      const entry: EmittedEvent = {
         nodeId,
         iteration,
         emittedAt,
         event,
       };
-      history.push(entry);
       onEvent?.(entry);
       await appendStoreEvent(nodeId, iteration, event.kind, event, emittedAt);
 
       if (event.kind === "status") {
         if (event.status === "succeeded" || event.status === "failed") {
           finalStatus = event.status;
+          terminalMeta = event.meta;
         }
       }
     }
@@ -227,6 +223,18 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
 
     log.push({ nodeId, iteration, status: finalStatus, startedAt, endedAt });
 
+    // Append a NodeResult entry for this execution. The reason is captured
+    // from the terminal status event's `meta.sentinel` field when the
+    // executor reports `meta.reason === "sentinel_failed"`; otherwise null.
+    priorResults.push({
+      nodeId,
+      iteration,
+      status: finalStatus,
+      reason: extractReason(finalStatus, terminalMeta),
+      startedAt,
+      endedAt,
+    });
+
     if (store) {
       try {
         await store.recordNodeEnd(runId, nodeId, iteration, {
@@ -234,7 +242,7 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
           at: Date.now(),
         });
       } catch (err) {
-        reportStoreError(history, onEvent, runStart, err);
+        reportStoreError(onEvent, runStart, err);
       }
     }
 
@@ -267,9 +275,6 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
         continue;
       }
 
-      // Also skip if successor has exhausted its node iteration budget — we
-      // could enqueue + drop at pop time, but eagerly checking gives a more
-      // accurate "graph drained vs budget hit" classification.
       const succ = factory.nodes[edge.to];
       if (succ?.max_iterations !== undefined) {
         const succUsed = iterations.get(edge.to) ?? 0;
@@ -286,7 +291,6 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
     }
 
     if (finalStatus === "failed" && !traversedAny) {
-      // No recovery available.
       result = {
         status: "failed",
         reason: skippedDueToBudget ? "budget_exhausted" : "node_failed",
@@ -316,20 +320,31 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
         endedAt: Date.now(),
       });
     } catch (err) {
-      reportStoreError(history, onEvent, runStart, err);
+      reportStoreError(onEvent, runStart, err);
     }
   }
 
   return result;
 }
 
+function extractReason(status: "succeeded" | "failed", meta: unknown): string | null {
+  if (status !== "failed") return null;
+  if (!meta || typeof meta !== "object") return null;
+  const m = meta as { reason?: unknown; sentinel?: unknown };
+  if (m.reason !== "sentinel_failed") return null;
+  if (typeof m.sentinel !== "string") return null;
+  return m.sentinel.replace(/\s+$/, "");
+}
+
 function reportStoreError(
-  history: RunHistoryEntry[],
-  onEvent: ((entry: RunHistoryEntry) => void) | undefined,
+  onEvent: ((entry: EmittedEvent) => void) | undefined,
   runStart: number,
   err: unknown,
 ): void {
-  const entry: RunHistoryEntry = {
+  // Surface store failures as a synthetic stderr event via the streaming
+  // callback. Do NOT append to priorResults — that array is for real node
+  // executions only.
+  const entry: EmittedEvent = {
     nodeId: "__store__",
     iteration: 0,
     emittedAt: Date.now() - runStart,
@@ -338,6 +353,5 @@ function reportStoreError(
       line: `store error: ${(err as Error).message}`,
     },
   };
-  history.push(entry);
   onEvent?.(entry);
 }

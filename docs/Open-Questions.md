@@ -12,24 +12,6 @@ When a question becomes a decision, write the decision note and remove
 it from here. When a question's premise turns out wrong, capture that
 in a decision note.
 
-## Runner & history
-
-### Run-wide history exceeds context window
-**Question:** How does the [[Runner]] keep the per-node prompt under
-the model's context limit when a long-running, multi-iteration, or
-large-implementation run produces history beyond the budget? Today
-the entire run-wide history is concatenated and sent to every node;
-the `run-history-persistence` dogfood hit "Prompt is too long" at
-the verify node because apply's accumulated history blew past the
-1M-token window.
-**Trigger:** Already firing. This already broke one dogfood; the
-manual workaround was to finish verify+archive by hand. Surface a
-real proposal next.
-**Likely shape:** Per-node history filters (each node declares what
-it actually needs — e.g., `history: ["verify"]` or `history:
-"last-iter"`); summarization of older iterations; or a side-channel
-where history is written to a file and the node reads what it wants.
-
 ## Brief authoring & input
 
 ### Brief dependencies and state

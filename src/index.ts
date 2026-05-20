@@ -7,7 +7,8 @@ export type {
   NodeExecutor,
   ResolvedNode,
   RunContext,
-  RunHistoryEntry,
+  NodeResult,
+  EmittedEvent,
 } from "./executor/types.js";
 export { runFactory, type RunOptions } from "./runner/run.js";
 export type {

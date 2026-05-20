@@ -31,13 +31,23 @@ claude-executor prompt before sending. The [[Factory]] only carries
 per-node success/failure *criteria*. See
 [[0007-Sentinel-Runner-Injects]].
 
-## History pass-through
+## Prior-results pass-through
 
-Every event from every node is in the history, in emission order. A
-node's second iteration in a [[Cycle]] sees its own prior outputs *and*
-everything emitted in between. This is what makes propose → apply →
-verify → propose loops actually iterative: the second propose sees the
-first verify's failure.
+Each scheduled node receives a frozen snapshot of `priorResults` —
+a structured array with one entry per completed node execution
+(`{ nodeId, iteration, status, reason, startedAt, endedAt }`). The
+`reason` field carries the [[Sentinel]] REASON line on failure
+(otherwise `null`), so a node's second iteration in a [[Cycle]]
+sees *what completed* and *why anything failed* without paying to
+pull every prior event into its prompt. The second propose sees the
+first verify's REASON; that's what makes propose → apply → verify →
+propose loops iterative.
+
+Raw events still stream to `onEvent` consumers (CLI, viewer) in
+real time and persist to the [[Runs-DB]] — they're just no longer
+pushed into per-node prompts. If a future node type needs raw
+events, it queries [[Runs-DB]] directly. See
+[[0014-Structured-Prior-Results]].
 
 ## Persistence
 
