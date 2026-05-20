@@ -3,6 +3,7 @@ import { mkdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { Command } from "commander";
 import { BriefLoadError } from "./brief/loader.js";
+import { briefCommandAction } from "./cli/brief.js";
 import { RunArgResolutionError, resolveRunArg } from "./cli/resolve.js";
 import { ClaudeExecutor } from "./executor/claude.js";
 import { ExecutorRegistry } from "./executor/registry.js";
@@ -25,6 +26,7 @@ import { type PruneOptions, parseOlderThan, pruneWorktrees } from "./worktree/pr
 export interface CliIO {
   stdout: NodeJS.WritableStream;
   stderr: NodeJS.WritableStream;
+  stdin?: NodeJS.ReadableStream & { isTTY?: boolean };
   buildRegistry?: () => ExecutorRegistry;
   startDaemon?: typeof startDaemon;
   serveReturnImmediately?: boolean;
@@ -249,6 +251,27 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
           }
         }
       }
+    });
+
+  program
+    .command("brief")
+    .description("Author a brief at inputs/<name>.md via one-question-at-a-time prompts.")
+    .argument("<name>", "change name (used as default for the `change` frontmatter field)")
+    .option("--from <file>", "Non-interactive: read answers from a YAML or JSON file")
+    .option("--out <path>", "Override the default output path (inputs/<name>.md)")
+    .option("--force", "Overwrite an existing brief file")
+    .action(async (name: string, opts: { from?: string; out?: string; force?: boolean }) => {
+      const cwd = io.runCwd ?? process.cwd();
+      const stdin = io.stdin ?? process.stdin;
+      const code = await briefCommandAction({
+        name,
+        from: opts.from,
+        out: opts.out,
+        force: opts.force,
+        cwd,
+        io: { stdin, stdout: io.stdout, stderr: io.stderr },
+      });
+      exitCode = code;
     });
 
   program

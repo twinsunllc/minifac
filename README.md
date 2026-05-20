@@ -79,6 +79,12 @@ name:
 node dist/cli.js run my-change
 ```
 
+The brief can be authored a few ways: walk through the question
+schema interactively with `node dist/cli.js brief my-change` (or
+`/brief my-change` in Claude Code, which uses the `brief-authoring`
+skill), pass `--from answers.yaml` for scripted input, or hand-edit
+`inputs/my-change.md` in your editor.
+
 The CLI looks for `inputs/my-change.md`, resolves its `factory:` field
 (usually `sdd`) to `examples/sdd.yaml`, creates a fresh git worktree
 at `~/.minifac/worktrees/<repo-hash>-my-change/`, and runs the factory

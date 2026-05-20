@@ -43,10 +43,20 @@ multiple workers can claim work without rewriting the brief.
 
 ## Authoring
 
-Briefs are authored by humans (often in a conversational session with
-a Claude Code skill or similar). The authoring tool is upstream of the
-factory; once the brief file exists, the conversational tool exits
-stage left. Any editor or tool that produces a conforming file is fine.
+Briefs are authored by humans, with help from two surfaces that
+share a single question schema (see [[brief-authoring]]):
+
+- `/brief <name>` in Claude Code — invokes the
+  brief-authoring skill, which walks the user one question at a
+  time and writes `inputs/<change>.md`.
+- `minifac brief <name>` from the terminal — same question flow,
+  no LLM. Use `--from <file>` for scripted (YAML/JSON) answers.
+
+The authoring tool is upstream of the factory; once the brief
+file exists, the helper exits stage left. Any editor or tool that
+produces a conforming file is fine — see
+[`examples/sample-brief.md`](../../examples/sample-brief.md) for
+the canonical shape.
 
 ## Related
 

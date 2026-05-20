@@ -15,7 +15,18 @@ propose ──▶ apply ──▶ verify ──▶ archive (terminal)
 
 The SDD factory is **brief-driven**. You don't edit `examples/sdd.yaml`
 per change; instead you author a brief at `inputs/<change-name>.md`
-and invoke the factory by name:
+and invoke the factory by name.
+
+**Authoring the brief.** The fastest way to start a new change is
+the brief-authoring helper: run `minifac brief <change-name>` from
+the terminal (or `/brief <change-name>` in Claude Code) and it
+walks you one question at a time through the canonical schema,
+writing `inputs/<change-name>.md` when you're done. The CLI verb
+also supports `--from <file>` for scripted (YAML/JSON) answers.
+You can also hand-edit the file in any editor — see
+[`sample-brief.md`](./sample-brief.md) for the shape.
+
+Once the brief exists:
 
 1. Author `inputs/<change-name>.md`. Frontmatter must declare
    `change: <change-name>` and `factory: sdd`; the body is free-form
