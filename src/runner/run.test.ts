@@ -11,7 +11,97 @@ import type {
 } from "../executor/types.js";
 import type { LoadedFactory } from "../factory/loader.js";
 import type { Factory } from "../factory/schema.js";
+import type {
+  AppendEventInput,
+  CreateRunInput,
+  FinalizeRunInput,
+  GetEventsOptions,
+  ListRunsFilter,
+  RecordNodeEndInput,
+  RunStore,
+  StoredEvent,
+  StoredRun,
+} from "../storage/run-store.js";
 import { runFactory } from "./run.js";
+
+interface RecordedEvent extends AppendEventInput {
+  seq: number;
+}
+
+class FakeStore implements RunStore {
+  runs = new Map<string, StoredRun>();
+  events = new Map<string, RecordedEvent[]>();
+  nodeStarts: Array<{ runId: string; nodeId: string; iteration: number; at: number }> = [];
+  nodeEnds: Array<{
+    runId: string;
+    nodeId: string;
+    iteration: number;
+    end: RecordNodeEndInput;
+  }> = [];
+  finalizeCalls: Array<{ runId: string; input: FinalizeRunInput }> = [];
+
+  async createRun(input: CreateRunInput): Promise<void> {
+    this.runs.set(input.id, {
+      id: input.id,
+      factoryPath: input.factoryPath,
+      factoryName: input.factoryName,
+      briefPath: input.briefPath ?? null,
+      change: input.change ?? null,
+      baseBranch: input.baseBranch ?? null,
+      worktreePath: input.worktreePath ?? null,
+      status: "running",
+      reason: null,
+      proximateNodeId: null,
+      startedAt: input.startedAt,
+      endedAt: null,
+    });
+    this.events.set(input.id, []);
+  }
+  async appendEvent(runId: string, event: AppendEventInput): Promise<StoredEvent> {
+    const arr = this.events.get(runId) ?? [];
+    const seq = arr.length;
+    const stored: RecordedEvent = { ...event, seq };
+    arr.push(stored);
+    this.events.set(runId, arr);
+    return { ...event, seq };
+  }
+  async recordNodeStart(
+    runId: string,
+    nodeId: string,
+    iteration: number,
+    at: number,
+  ): Promise<void> {
+    this.nodeStarts.push({ runId, nodeId, iteration, at });
+  }
+  async recordNodeEnd(
+    runId: string,
+    nodeId: string,
+    iteration: number,
+    end: RecordNodeEndInput,
+  ): Promise<void> {
+    this.nodeEnds.push({ runId, nodeId, iteration, end });
+  }
+  async finalizeRun(runId: string, input: FinalizeRunInput): Promise<void> {
+    this.finalizeCalls.push({ runId, input });
+    const r = this.runs.get(runId);
+    if (r) {
+      r.status = input.status;
+      r.reason = input.reason ?? null;
+      r.proximateNodeId = input.proximateNodeId ?? null;
+      r.endedAt = input.endedAt;
+    }
+  }
+  async getRun(runId: string): Promise<StoredRun | null> {
+    return this.runs.get(runId) ?? null;
+  }
+  async listRuns(_filter?: ListRunsFilter): Promise<StoredRun[]> {
+    return [...this.runs.values()];
+  }
+  async getRunEvents(runId: string, _opts?: GetEventsOptions): Promise<StoredEvent[]> {
+    return (this.events.get(runId) ?? []).map((e) => ({ ...e }));
+  }
+  async close(): Promise<void> {}
+}
 
 type Script = (ctx: RunContext, node: ResolvedNode) => Iterable<NodeEvent>;
 
@@ -582,5 +672,121 @@ describe("runFactory", () => {
     await runFactory(wrap(factory), { registry: reg });
     const node = exec.nodes.get("a")?.[0];
     expect(node?.with?.prompt).toBe("Work on {{ brief.change }}.");
+  });
+
+  describe("with a RunStore", () => {
+    function singleSuccess(): { factory: Factory; reg: ExecutorRegistry; exec: FakeExecutor } {
+      const factory: Factory = {
+        name: "f",
+        nodes: { a: { executor: "fake", terminal: true } },
+        edges: [],
+      };
+      const exec = new FakeExecutor("fake", {
+        a: () => [{ kind: "stdout", line: "x" }, { kind: "stdout", line: "y" }, succeeded],
+      });
+      const reg = new ExecutorRegistry();
+      reg.register(exec);
+      return { factory, reg, exec };
+    }
+
+    it("createRun then finalizeRun bracket the run", async () => {
+      const store = new FakeStore();
+      const { factory, reg } = singleSuccess();
+      await runFactory(wrap(factory), { registry: reg, store, runId: "r1" });
+      expect(store.runs.get("r1")?.status).toBe("succeeded");
+      expect(store.finalizeCalls).toHaveLength(1);
+      expect(store.finalizeCalls[0]?.input.status).toBe("succeeded");
+    });
+
+    it("appendEvent fires once per emitted event in order", async () => {
+      const store = new FakeStore();
+      const { factory, reg } = singleSuccess();
+      await runFactory(wrap(factory), { registry: reg, store, runId: "r1" });
+      const events = store.events.get("r1") ?? [];
+      expect(events.map((e) => e.kind)).toEqual(["stdout", "stdout", "status"]);
+      expect(events.map((e) => e.seq)).toEqual([0, 1, 2]);
+    });
+
+    it("records brief change/path when a brief is in scope", async () => {
+      const store = new FakeStore();
+      const { factory, reg } = singleSuccess();
+      const brief: Brief = {
+        frontmatter: { change: "mychange", factory: "f", base_branch: "main" },
+        body: "",
+        sourcePath: "/inputs/mychange.md",
+      };
+      await runFactory(wrap(factory), { registry: reg, store, runId: "r1", brief });
+      const r = store.runs.get("r1");
+      expect(r?.change).toBe("mychange");
+      expect(r?.briefPath).toBe("/inputs/mychange.md");
+      expect(r?.baseBranch).toBe("main");
+    });
+
+    it("brief-less run leaves change/briefPath null", async () => {
+      const store = new FakeStore();
+      const { factory, reg } = singleSuccess();
+      await runFactory(wrap(factory), { registry: reg, store, runId: "r1" });
+      const r = store.runs.get("r1");
+      expect(r?.change).toBeNull();
+      expect(r?.briefPath).toBeNull();
+      expect(r?.factoryName).toBe("f");
+    });
+
+    it("budget-exhausted run finalizes with budget_exhausted reason", async () => {
+      const store = new FakeStore();
+      const factory: Factory = {
+        name: "f",
+        nodes: {
+          a: { executor: "fake", terminal: false, max_iterations: 2 },
+          t: { executor: "fake", terminal: true },
+        },
+        edges: [
+          { from: "a", to: "a", when: "on_failure" },
+          { from: "a", to: "t", when: "on_success" },
+        ],
+      };
+      const exec = new FakeExecutor("fake", {
+        a: () => [failed],
+        t: () => [succeeded],
+      });
+      const reg = new ExecutorRegistry();
+      reg.register(exec);
+      await runFactory(wrap(factory), { registry: reg, store, runId: "r1" });
+      expect(store.runs.get("r1")?.status).toBe("failed");
+      expect(store.runs.get("r1")?.reason).toBe("budget_exhausted");
+    });
+
+    it("node_failed reason flows to finalize", async () => {
+      const store = new FakeStore();
+      const factory: Factory = {
+        name: "f",
+        nodes: { a: { executor: "fake", terminal: true } },
+        edges: [],
+      };
+      const exec = new FakeExecutor("fake", { a: () => [failed] });
+      const reg = new ExecutorRegistry();
+      reg.register(exec);
+      await runFactory(wrap(factory), { registry: reg, store, runId: "r1" });
+      const r = store.runs.get("r1");
+      expect(r?.status).toBe("failed");
+      expect(r?.reason).toBe("node_failed");
+      expect(r?.proximateNodeId).toBe("a");
+    });
+
+    it("store optional: store-less run still works", async () => {
+      const { factory, reg } = singleSuccess();
+      const result = await runFactory(wrap(factory), { registry: reg });
+      expect(result.status).toBe("succeeded");
+    });
+
+    it("recordNodeStart/End brackets each dispatch", async () => {
+      const store = new FakeStore();
+      const { factory, reg } = singleSuccess();
+      await runFactory(wrap(factory), { registry: reg, store, runId: "r1" });
+      expect(store.nodeStarts).toHaveLength(1);
+      expect(store.nodeStarts[0]?.nodeId).toBe("a");
+      expect(store.nodeEnds).toHaveLength(1);
+      expect(store.nodeEnds[0]?.end.status).toBe("succeeded");
+    });
   });
 });

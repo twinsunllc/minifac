@@ -111,4 +111,33 @@ default_branch: develop
     const cfg = await loadWorktreeConfig(repo);
     expect(cfg.defaultBranch).toBe("trunk");
   });
+
+  it("defaults runsDb to ${MINIFAC_HOME}/runs.db", async () => {
+    const cfg = await loadWorktreeConfig(repo);
+    expect(cfg.runsDb).toBe(path.join(home, "runs.db"));
+  });
+
+  it("honors global runs_db (absolute path)", async () => {
+    await writeFile(path.join(home, "config.yaml"), "runs_db: /tmp/global-runs.db\n");
+    const cfg = await loadWorktreeConfig(repo);
+    expect(cfg.runsDb).toBe("/tmp/global-runs.db");
+  });
+
+  it("honors per-repo runs_db, resolving relative against the config file's dir", async () => {
+    await writeFile(path.join(home, "config.yaml"), "runs_db: /tmp/global.db\n");
+    await mkdir(path.join(repo, ".minifac"), { recursive: true });
+    await writeFile(path.join(repo, ".minifac", "config.yaml"), "runs_db: ./local.db\n");
+    const cfg = await loadWorktreeConfig(repo);
+    expect(cfg.runsDb).toBe(path.join(repo, ".minifac", "local.db"));
+  });
+
+  it("rejects empty runs_db value", async () => {
+    await writeFile(path.join(home, "config.yaml"), 'runs_db: ""\n');
+    await expect(loadWorktreeConfig(repo)).rejects.toBeInstanceOf(WorktreeConfigError);
+  });
+
+  it("rejects non-string runs_db value", async () => {
+    await writeFile(path.join(home, "config.yaml"), "runs_db: 42\n");
+    await expect(loadWorktreeConfig(repo)).rejects.toBeInstanceOf(WorktreeConfigError);
+  });
 });

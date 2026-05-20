@@ -1,8 +1,10 @@
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import type { Brief } from "../brief/loader.js";
 import type { ExecutorRegistry } from "../executor/registry.js";
 import type { NodeEvent, ResolvedNode, RunContext, RunHistoryEntry } from "../executor/types.js";
 import type { LoadedFactory } from "../factory/loader.js";
+import type { RunStore, StoredEventKind } from "../storage/run-store.js";
 import type { ExecutionLogEntry, RunResult } from "./result.js";
 import { type Substitutions, substitute } from "./substitute.js";
 
@@ -18,6 +20,15 @@ export interface RunOptions {
    * whose `cwd` field is absent or resolves to the empty string, and
    * resolves the `{{ run.cwd }}` template token. */
   runCwd?: string;
+  /** Optional persistence backend. When supplied the runner records the run
+   * row, every event, per-node executions, and the terminal status through
+   * the store; when absent the runner behaves exactly as it does without
+   * persistence. */
+  store?: RunStore;
+  /** Optional pre-generated run id. When omitted the runner generates one.
+   * Callers (CLI, daemon) supply this so they can reference the row before
+   * the runner returns. */
+  runId?: string;
 }
 
 interface QueueItem {
@@ -25,15 +36,54 @@ interface QueueItem {
 }
 
 export async function runFactory(loaded: LoadedFactory, options: RunOptions): Promise<RunResult> {
-  const { factory, sourceDir } = loaded;
-  const { registry, onEvent, brief, runCwd } = options;
+  const { factory, sourceDir, sourcePath } = loaded;
+  const { registry, onEvent, brief, runCwd, store } = options;
   const subs: Substitutions = {};
   if (brief) subs.brief = brief;
   if (runCwd !== undefined && runCwd.length > 0) subs.run = { cwd: runCwd };
 
   const runStart = Date.now();
+  const runId = options.runId ?? randomUUID();
   const history: RunHistoryEntry[] = [];
   const log: ExecutionLogEntry[] = [];
+
+  if (store) {
+    try {
+      await store.createRun({
+        id: runId,
+        factoryPath: sourcePath,
+        factoryName: factory.name,
+        briefPath: brief?.sourcePath ?? null,
+        change: brief?.frontmatter.change ?? null,
+        baseBranch: brief?.frontmatter.base_branch ?? null,
+        worktreePath: runCwd ?? null,
+        startedAt: runStart,
+      });
+    } catch (err) {
+      reportStoreError(history, onEvent, runStart, err);
+    }
+  }
+
+  const appendStoreEvent = async (
+    nodeId: string | null,
+    iteration: number,
+    kind: StoredEventKind,
+    payload: unknown,
+    emittedAt: number,
+  ): Promise<void> => {
+    if (!store) return;
+    try {
+      await store.appendEvent(runId, {
+        nodeId,
+        iteration,
+        kind,
+        payload,
+        emittedAt,
+      });
+    } catch (err) {
+      reportStoreError(history, onEvent, runStart, err);
+    }
+  };
 
   const iterations = new Map<string, number>();
   const edgeTraversals = new Map<string, number>(); // key: from|to|when
@@ -87,6 +137,16 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
     const usedIterations = iterations.get(nodeId) ?? 0;
     if (node.max_iterations !== undefined && usedIterations >= node.max_iterations) {
       budgetHit = true;
+      if (store) {
+        try {
+          await store.recordNodeEnd(runId, nodeId, usedIterations + 1, {
+            status: "skipped",
+            at: Date.now(),
+          });
+        } catch (err) {
+          reportStoreError(history, onEvent, runStart, err);
+        }
+      }
       continue;
     }
 
@@ -104,6 +164,14 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
 
     const iteration = usedIterations + 1;
     iterations.set(nodeId, iteration);
+
+    if (store) {
+      try {
+        await store.recordNodeStart(runId, nodeId, iteration, Date.now());
+      } catch (err) {
+        reportStoreError(history, onEvent, runStart, err);
+      }
+    }
 
     // Build a shallow-cloned node for dispatch so we never mutate the
     // factory's node objects (they're reused across iterations). When any
@@ -132,14 +200,16 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
     let finalStatus: "succeeded" | "failed" | null = null;
 
     for await (const event of executor.run(resolvedNode, ctx)) {
+      const emittedAt = Date.now() - runStart;
       const entry: RunHistoryEntry = {
         nodeId,
         iteration,
-        emittedAt: Date.now() - runStart,
+        emittedAt,
         event,
       };
       history.push(entry);
       onEvent?.(entry);
+      await appendStoreEvent(nodeId, iteration, event.kind, event, emittedAt);
 
       if (event.kind === "status") {
         if (event.status === "succeeded" || event.status === "failed") {
@@ -156,6 +226,17 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
     }
 
     log.push({ nodeId, iteration, status: finalStatus, startedAt, endedAt });
+
+    if (store) {
+      try {
+        await store.recordNodeEnd(runId, nodeId, iteration, {
+          status: finalStatus,
+          at: Date.now(),
+        });
+      } catch (err) {
+        reportStoreError(history, onEvent, runStart, err);
+      }
+    }
 
     if (finalStatus === "succeeded" && node.terminal) {
       result = {
@@ -226,5 +307,37 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
     };
   }
 
+  if (store) {
+    try {
+      await store.finalizeRun(runId, {
+        status: result.status,
+        reason: result.reason,
+        proximateNodeId: result.proximateNodeId ?? null,
+        endedAt: Date.now(),
+      });
+    } catch (err) {
+      reportStoreError(history, onEvent, runStart, err);
+    }
+  }
+
   return result;
+}
+
+function reportStoreError(
+  history: RunHistoryEntry[],
+  onEvent: ((entry: RunHistoryEntry) => void) | undefined,
+  runStart: number,
+  err: unknown,
+): void {
+  const entry: RunHistoryEntry = {
+    nodeId: "__store__",
+    iteration: 0,
+    emittedAt: Date.now() - runStart,
+    event: {
+      kind: "stderr",
+      line: `store error: ${(err as Error).message}`,
+    },
+  };
+  history.push(entry);
+  onEvent?.(entry);
 }

@@ -1,7 +1,11 @@
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { ExecutorRegistry } from "../executor/registry.js";
 import type { NodeEvent, NodeExecutor, ResolvedNode } from "../executor/types.js";
 import type { LoadedFactory } from "../factory/loader.js";
+import { SqliteRunStore } from "../storage/sqlite.js";
 import { type RunEventEntry, RunRegistry } from "./run-registry.js";
 
 function makeLoaded(): LoadedFactory {
@@ -139,5 +143,90 @@ describe("RunRegistry", () => {
     const reg = new RunRegistry(buildScripted({}));
     const sub = reg.subscribe("nope", undefined, () => {});
     expect(sub).toBeUndefined();
+  });
+
+  describe("with a backing RunStore", () => {
+    async function freshStore(): Promise<{ store: SqliteRunStore; dbPath: string }> {
+      const dir = await mkdtemp(path.join(tmpdir(), "minifac-rr-"));
+      const dbPath = path.join(dir, "runs.db");
+      return { store: SqliteRunStore.open(dbPath), dbPath };
+    }
+
+    it("hydrates prior runs from the store on startup", async () => {
+      const { store, dbPath } = await freshStore();
+      await store.createRun({
+        id: "prior-1",
+        factoryPath: "/p/f.yaml",
+        factoryName: "x",
+        startedAt: 1000,
+      });
+      await store.finalizeRun("prior-1", {
+        status: "succeeded",
+        reason: "terminal_node_succeeded",
+        endedAt: 2000,
+      });
+      await store.close();
+
+      const store2 = SqliteRunStore.open(dbPath);
+      const reg = new RunRegistry(buildScripted({}), store2);
+      await reg.hydrate();
+      const list = reg.list();
+      expect(list.length).toBe(1);
+      expect(list[0]?.id).toBe("prior-1");
+      expect(list[0]?.status).toBe("succeeded");
+      await store2.close();
+    });
+
+    it("marks orphaned running runs as failed/daemon_restart on hydrate", async () => {
+      const { store, dbPath } = await freshStore();
+      await store.createRun({
+        id: "orphan-1",
+        factoryPath: "/p/f.yaml",
+        factoryName: "x",
+        startedAt: 1000,
+      });
+      await store.close();
+
+      const store2 = SqliteRunStore.open(dbPath);
+      const reg = new RunRegistry(buildScripted({}), store2);
+      await reg.hydrate();
+      const cached = reg.get("orphan-1");
+      expect(cached?.status).toBe("failed");
+      const stored = await store2.getRun("orphan-1");
+      expect(stored?.status).toBe("failed");
+      expect(stored?.reason).toBe("daemon_restart");
+      await store2.close();
+    });
+
+    it("getWithEvents reads a prior run's events from the store", async () => {
+      const { store, dbPath } = await freshStore();
+      await store.createRun({
+        id: "prior-2",
+        factoryPath: "/p/f.yaml",
+        factoryName: "x",
+        startedAt: 1000,
+      });
+      await store.appendEvent("prior-2", {
+        nodeId: "a",
+        iteration: 1,
+        kind: "stdout",
+        payload: { kind: "stdout", line: "hello" },
+        emittedAt: 5,
+      });
+      await store.finalizeRun("prior-2", {
+        status: "succeeded",
+        reason: "terminal_node_succeeded",
+        endedAt: 2000,
+      });
+      await store.close();
+
+      const store2 = SqliteRunStore.open(dbPath);
+      const reg = new RunRegistry(buildScripted({}), store2);
+      await reg.hydrate();
+      const r = await reg.getWithEvents("prior-2");
+      expect(r?.events.length).toBe(1);
+      expect(r?.events[0]?.kind).toBe("stdout");
+      await store2.close();
+    });
   });
 });

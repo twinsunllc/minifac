@@ -11,6 +11,8 @@ import { ExecutorRegistry } from "./executor/registry.js";
 import { FactoryLoadError, loadFactory } from "./factory/loader.js";
 import { runFactory } from "./runner/run.js";
 import { type DaemonHandle, startDaemon } from "./serve/server.js";
+import { openDefaultRunStore } from "./storage/open.js";
+import type { RunStore } from "./storage/run-store.js";
 import { WorktreeConfigError, loadWorktreeConfig } from "./worktree/config.js";
 import { GitError, gitRevParseHead, gitWorktreeAdd } from "./worktree/git.js";
 import { appendFailedRun } from "./worktree/journal.js";
@@ -32,6 +34,8 @@ export interface CliIO {
   startDaemon?: typeof startDaemon;
   serveReturnImmediately?: boolean;
   runCwd?: string;
+  /** Optional override of the run-history store opener (tests). */
+  openRunStore?: (cwd: string) => Promise<RunStore>;
 }
 
 function defaultRegistry(): ExecutorRegistry {
@@ -88,6 +92,7 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
       const cwd = io.runCwd ?? process.cwd();
       let lock: LockHandle | undefined;
       let runCwd: string | undefined;
+      let store: RunStore | undefined;
 
       try {
         const resolved = await resolveRunArg(arg, cwd);
@@ -185,10 +190,17 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
         }
 
         const registry = (io.buildRegistry ?? defaultRegistry)();
+        try {
+          store = await (io.openRunStore ?? openDefaultRunStore)(cwd);
+        } catch (err) {
+          io.stderr.write(`Warning: could not open run history store: ${(err as Error).message}\n`);
+          store = undefined;
+        }
         const result = await runFactory(loaded, {
           registry,
           brief,
           runCwd,
+          store,
           onEvent: (entry) => {
             const prefix = `[${entry.nodeId}]`;
             const e = entry.event;
@@ -247,6 +259,13 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
         if (lock) {
           try {
             await lock.release();
+          } catch {
+            // best effort
+          }
+        }
+        if (store) {
+          try {
+            await store.close();
           } catch {
             // best effort
           }

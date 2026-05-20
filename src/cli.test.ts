@@ -837,4 +837,43 @@ the body
       expect(captured).toEqual(["from-builtin"]);
     });
   });
+
+  describe("run history persistence", () => {
+    it("creates a runs row and persisted events for an --in-place run", async () => {
+      const dir = await makeFixtureDir();
+      await writeFixture(dir, "examples/hello.yaml", NONE_FACTORY);
+      const out = new BufferStream();
+      const err = new BufferStream();
+      const code = await runCli(["run", "--in-place", "hello"], {
+        stdout: out,
+        stderr: err,
+        runCwd: dir,
+        buildRegistry: fakeRegistry({
+          a: [
+            { kind: "stdout", line: "one" },
+            { kind: "stdout", line: "two" },
+            { kind: "status", status: "succeeded" },
+          ],
+        }),
+      });
+      expect(code).toBe(0);
+
+      // Inspect the SQLite runs.db at ${MINIFAC_HOME}/runs.db.
+      const { SqliteRunStore } = await import("./storage/sqlite.js");
+      const store = SqliteRunStore.open(path.join(home, "runs.db"));
+      try {
+        const runs = await store.listRuns({ limit: 10 });
+        expect(runs.length).toBe(1);
+        const r = runs[0];
+        expect(r?.status).toBe("succeeded");
+        expect(r?.factoryName).toBe("hello");
+        expect(r?.endedAt).not.toBeNull();
+        const events = await store.getRunEvents(r?.id ?? "");
+        expect(events.map((e) => e.kind)).toEqual(["stdout", "stdout", "status"]);
+        expect(events.map((e) => e.seq)).toEqual([0, 1, 2]);
+      } finally {
+        await store.close();
+      }
+    });
+  });
 });

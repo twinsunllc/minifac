@@ -7,6 +7,13 @@ export interface WorktreeConfig {
   worktreesDir: string;
   locksDir: string;
   defaultBranch?: string;
+  /**
+   * Absolute path to the SQLite `runs.db` file. Resolved from
+   * `runs_db:` in `~/.minifac/config.yaml` (or the per-repo override),
+   * with relative paths resolved against the source config's directory.
+   * Defaults to `${MINIFAC_HOME}/runs.db`.
+   */
+  runsDb: string;
 }
 
 export class WorktreeConfigError extends Error {
@@ -35,6 +42,7 @@ interface RawConfig {
   worktrees_dir?: unknown;
   locks_dir?: unknown;
   default_branch?: unknown;
+  runs_db?: unknown;
 }
 
 async function readMaybeYaml(
@@ -100,6 +108,7 @@ export async function loadWorktreeConfig(callerRepoRoot: string): Promise<Worktr
   const defaults: WorktreeConfig = {
     worktreesDir: path.join(home, "worktrees"),
     locksDir: path.join(home, "locks"),
+    runsDb: path.join(home, "runs.db"),
   };
 
   const cfg: WorktreeConfig = { ...defaults };
@@ -108,19 +117,28 @@ export async function loadWorktreeConfig(callerRepoRoot: string): Promise<Worktr
     const wt = pickString(globalLoaded.data.worktrees_dir, "worktrees_dir", globalPath);
     const lk = pickString(globalLoaded.data.locks_dir, "locks_dir", globalPath);
     const db = pickString(globalLoaded.data.default_branch, "default_branch", globalPath);
+    const rd = pickString(globalLoaded.data.runs_db, "runs_db", globalPath);
     if (wt) cfg.worktreesDir = wt;
     if (lk) cfg.locksDir = lk;
     if (db) cfg.defaultBranch = db;
+    if (rd) cfg.runsDb = resolveRelative(rd, globalPath);
   }
   if (repoLoaded.present) {
     const wt = pickString(repoLoaded.data.worktrees_dir, "worktrees_dir", repoPath);
     const db = pickString(repoLoaded.data.default_branch, "default_branch", repoPath);
+    const rd = pickString(repoLoaded.data.runs_db, "runs_db", repoPath);
     // locks_dir intentionally NOT honored from per-repo config; validate type
     // if present so a typo error still surfaces.
     pickString(repoLoaded.data.locks_dir, "locks_dir", repoPath);
     if (wt) cfg.worktreesDir = wt;
     if (db) cfg.defaultBranch = db;
+    if (rd) cfg.runsDb = resolveRelative(rd, repoPath);
   }
 
   return cfg;
+}
+
+function resolveRelative(value: string, sourcePath: string): string {
+  if (path.isAbsolute(value)) return value;
+  return path.resolve(path.dirname(sourcePath), value);
 }

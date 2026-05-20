@@ -1,9 +1,10 @@
-import { randomBytes } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import type { ExecutorRegistry } from "../executor/registry.js";
 import type { RunHistoryEntry } from "../executor/types.js";
 import type { LoadedFactory } from "../factory/loader.js";
 import type { RunResult } from "../runner/result.js";
 import { runFactory } from "../runner/run.js";
+import type { ListRunsFilter, RunStore, StoredEvent, StoredRun } from "../storage/run-store.js";
 import type { SseWriter } from "./sse.js";
 
 export type RunStatus = "pending" | "running" | "succeeded" | "failed";
@@ -54,15 +55,120 @@ export type BuildRegistry = () => ExecutorRegistry;
 export class RunRegistry {
   private readonly runs = new Map<string, RunRecord>();
   private readonly subscribers = new Map<string, Set<Subscriber>>();
+  private readonly buildRegistry: BuildRegistry;
+  private readonly store?: RunStore;
 
-  constructor(private readonly buildRegistry: BuildRegistry) {}
+  constructor(buildRegistry: BuildRegistry, store?: RunStore) {
+    this.buildRegistry = buildRegistry;
+    this.store = store;
+  }
 
-  list(): RunRecord[] {
-    return [...this.runs.values()].sort((a, b) => b.startedAt - a.startedAt);
+  /**
+   * Hydrate the in-memory cache from the durable store. Any rows the store
+   * lists as `running` are stale (the daemon that wrote them is dead by
+   * definition); we mark them `failed` with reason `daemon_restart` so the
+   * viewer doesn't show phantom in-flight runs.
+   */
+  async hydrate(opts: { limit?: number } = {}): Promise<void> {
+    if (!this.store) return;
+    const limit = opts.limit ?? 100;
+    const rows = await this.store.listRuns({ limit });
+    const now = Date.now();
+    for (const r of rows) {
+      const record: RunRecord = {
+        id: r.id,
+        factoryId: r.factoryName,
+        status: r.status,
+        startedAt: r.startedAt,
+        ...(r.endedAt !== null ? { endedAt: r.endedAt } : {}),
+        events: [],
+      };
+      if (r.status === "running") {
+        record.status = "failed";
+        record.endedAt = now;
+        record.result = {
+          status: "failed",
+          reason: "node_failed",
+          log: [],
+          durationMs: now - r.startedAt,
+        };
+        try {
+          await this.store.finalizeRun(r.id, {
+            status: "failed",
+            reason: "daemon_restart",
+            endedAt: now,
+          });
+        } catch {
+          // best effort — the row is honest about restart even if the update fails
+        }
+      } else if (r.endedAt !== null) {
+        record.result = {
+          status: r.status === "succeeded" ? "succeeded" : "failed",
+          reason: (r.reason as RunResult["reason"]) ?? "node_failed",
+          log: [],
+          durationMs: r.endedAt - r.startedAt,
+          ...(r.proximateNodeId ? { proximateNodeId: r.proximateNodeId } : {}),
+        };
+      }
+      this.runs.set(r.id, record);
+    }
+  }
+
+  list(filter?: ListRunsFilter): RunRecord[] {
+    let runs = [...this.runs.values()];
+    if (filter?.factoryName !== undefined) {
+      runs = runs.filter((r) => r.factoryId === filter.factoryName);
+    }
+    if (filter?.status !== undefined) {
+      runs = runs.filter((r) => r.status === filter.status);
+    }
+    // `change` filter is store-side; in-memory records don't carry it.
+    runs.sort((a, b) => b.startedAt - a.startedAt);
+    if (filter?.limit !== undefined) {
+      const offset = filter.offset ?? 0;
+      runs = runs.slice(offset, offset + filter.limit);
+    }
+    return runs;
   }
 
   get(id: string): RunRecord | undefined {
     return this.runs.get(id);
+  }
+
+  /**
+   * Fetch a run that may not be in the in-memory cache (e.g. from a prior
+   * daemon process). Returns a RunRecord-shaped object with events loaded
+   * from the store.
+   */
+  async getWithEvents(id: string): Promise<RunRecord | undefined> {
+    const cached = this.runs.get(id);
+    if (cached && cached.events.length > 0) return cached;
+    if (!this.store) return cached;
+
+    const stored = await this.store.getRun(id);
+    if (!stored) return cached;
+
+    const events = await this.store.getRunEvents(id);
+    const record: RunRecord = cached ?? {
+      id: stored.id,
+      factoryId: stored.factoryName,
+      status: stored.status,
+      startedAt: stored.startedAt,
+      ...(stored.endedAt !== null ? { endedAt: stored.endedAt } : {}),
+      events: [],
+    };
+    record.events = events.map((e, i) => storedEventToEntry(e, i, stored));
+    if (stored.status !== "running" && stored.endedAt !== null && !record.result) {
+      record.result = {
+        status: stored.status === "succeeded" ? "succeeded" : "failed",
+        reason: (stored.reason as RunResult["reason"]) ?? "node_failed",
+        log: [],
+        durationMs: stored.endedAt - stored.startedAt,
+        ...(stored.proximateNodeId ? { proximateNodeId: stored.proximateNodeId } : {}),
+      };
+    }
+    this.runs.set(id, record);
+    return record;
   }
 
   start(input: StartRunInput, factory: LoadedFactory): StartRunOutcome {
@@ -71,7 +177,7 @@ export class RunRegistry {
         return { ok: false, code: "run_in_flight", activeRunId: r.id };
       }
     }
-    const id = randomBytes(8).toString("hex");
+    const id = randomUUID();
     const record: RunRecord = {
       id,
       factoryId: input.factoryId,
@@ -88,6 +194,9 @@ export class RunRegistry {
     // Fire-and-forget; the result is recorded by recordResult.
     runFactory(loaded, {
       registry,
+      runId: id,
+      ...(input.cwd ? { runCwd: input.cwd } : {}),
+      ...(this.store ? { store: this.store } : {}),
       onEvent: (entry) => this.recordEvent(id, entry),
     })
       .then((result) => this.recordResult(id, result))
@@ -211,4 +320,32 @@ export class RunRegistry {
 function applyCwdOverride(factory: LoadedFactory, cwd: string | undefined): LoadedFactory {
   if (!cwd) return factory;
   return { ...factory, sourceDir: cwd };
+}
+
+function storedEventToEntry(e: StoredEvent, index: number, stored: StoredRun): RunEventEntry {
+  if (e.kind === "run_end") {
+    const result: RunResult = {
+      status: stored.status === "succeeded" ? "succeeded" : "failed",
+      reason: (stored.reason as RunResult["reason"]) ?? "node_failed",
+      log: [],
+      durationMs: (stored.endedAt ?? stored.startedAt) - stored.startedAt,
+      ...(stored.proximateNodeId ? { proximateNodeId: stored.proximateNodeId } : {}),
+    };
+    return {
+      index,
+      kind: "run_end",
+      nodeId: null,
+      iteration: 0,
+      emittedAt: e.emittedAt,
+      result,
+    };
+  }
+  return {
+    index,
+    kind: e.kind,
+    nodeId: e.nodeId ?? "",
+    iteration: e.iteration,
+    emittedAt: e.emittedAt,
+    event: e.payload as RunHistoryEntry["event"],
+  } as RunEventEntry;
 }

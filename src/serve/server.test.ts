@@ -48,6 +48,7 @@ async function start(opts: { dir: string; web?: string }): Promise<Harness> {
     dir: opts.dir,
     host: "127.0.0.1",
     port: 0,
+    store: null,
     buildRegistry: buildScripted({
       a: [
         { kind: "stdout", line: "hello-line" },
@@ -214,6 +215,7 @@ describe("startDaemon http API", () => {
       dir,
       host: "127.0.0.1",
       port: 0,
+      store: null,
       webRoot: webDir,
       buildRegistry: () => {
         const reg = new ExecutorRegistry();
@@ -280,6 +282,7 @@ describe("startDaemon http API", () => {
       dir,
       host: "127.0.0.1",
       port: 0,
+      store: null,
       webRoot: webDir,
       buildRegistry: () => {
         const reg = new ExecutorRegistry();
