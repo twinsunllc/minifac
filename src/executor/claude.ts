@@ -114,13 +114,7 @@
 import { spawn as nodeSpawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import { z } from "zod";
-import type {
-  NodeEvent,
-  NodeExecutor,
-  NodeResult,
-  ResolvedNode,
-  RunContext,
-} from "./types.js";
+import type { NodeEvent, NodeExecutor, NodeResult, ResolvedNode, RunContext } from "./types.js";
 
 const WithSchema = z
   .object({
@@ -218,10 +212,7 @@ export interface ClaudeExecutorOptions {
   binary?: string;
 }
 
-export function buildStreamJsonInput(
-  priorResults: readonly NodeResult[],
-  prompt: string,
-): string {
+export function buildStreamJsonInput(priorResults: readonly NodeResult[], prompt: string): string {
   // Single JSON line. We serialize priorResults as a JSON array preamble
   // inside the user message content. Newline terminates the frame.
   const preamble = JSON.stringify(priorResults);

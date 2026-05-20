@@ -2,12 +2,7 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import type { Brief } from "../brief/loader.js";
 import type { ExecutorRegistry } from "../executor/registry.js";
-import type {
-  EmittedEvent,
-  NodeResult,
-  ResolvedNode,
-  RunContext,
-} from "../executor/types.js";
+import type { EmittedEvent, NodeResult, ResolvedNode, RunContext } from "../executor/types.js";
 import type { LoadedFactory } from "../factory/loader.js";
 import type { RunStore, StoredEventKind } from "../storage/run-store.js";
 import type { ExecutionLogEntry, RunResult } from "./result.js";
