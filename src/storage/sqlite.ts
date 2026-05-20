@@ -48,9 +48,9 @@ import type {
  */
 
 export class SqliteRunStore implements RunStore {
-  private readonly db: DatabaseSyncInstanceInstance;
+  private readonly db: DatabaseSyncInstance;
 
-  private constructor(db: DatabaseSyncInstanceInstance) {
+  private constructor(db: DatabaseSyncInstance) {
     this.db = db;
   }
 
@@ -101,15 +101,7 @@ export class SqliteRunStore implements RunStore {
         `INSERT INTO events (run_id, seq, node_id, iteration, kind, payload, emitted_at)
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(
-        runId,
-        seq,
-        event.nodeId,
-        event.iteration,
-        event.kind,
-        payloadJson,
-        event.emittedAt,
-      );
+      .run(runId, seq, event.nodeId, event.iteration, event.kind, payloadJson, event.emittedAt);
     return {
       seq,
       nodeId: event.nodeId,
@@ -191,13 +183,7 @@ export class SqliteRunStore implements RunStore {
             SET status = ?, reason = ?, proximate_node_id = ?, ended_at = ?
           WHERE id = ?`,
       )
-      .run(
-        input.status,
-        input.reason ?? null,
-        input.proximateNodeId ?? null,
-        input.endedAt,
-        runId,
-      );
+      .run(input.status, input.reason ?? null, input.proximateNodeId ?? null, input.endedAt, runId);
   }
 
   async getRun(runId: RunId): Promise<StoredRun | null> {
@@ -315,15 +301,13 @@ function ensureSchemaVersionTable(db: DatabaseSyncInstance): void {
   // If `runs` exists but `schema_version` doesn't (shouldn't happen since v1
   // creates both), we still want the version table around so we can record
   // applied migrations. Creating it idempotently is harmless.
-  db.exec(
-    "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY)",
-  );
+  db.exec("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY)");
 }
 
 function currentSchemaVersion(db: DatabaseSyncInstance): number {
-  const row = db
-    .prepare("SELECT COALESCE(MAX(version), 0) AS v FROM schema_version")
-    .get() as { v: number } | undefined;
+  const row = db.prepare("SELECT COALESCE(MAX(version), 0) AS v FROM schema_version").get() as
+    | { v: number }
+    | undefined;
   return row?.v ?? 0;
 }
 
@@ -373,8 +357,7 @@ export class MigrationVersionError extends Error {
     readonly databaseVersion: number,
   ) {
     super(
-      `minifac runs.db schema version ${databaseVersion} is newer than this binary supports (highest known: ${highestKnown}). ` +
-        "Upgrade minifac or point at an older runs.db.",
+      `minifac runs.db schema version ${databaseVersion} is newer than this binary supports (highest known: ${highestKnown}). Upgrade minifac or point at an older runs.db.`,
     );
     this.name = "MigrationVersionError";
   }

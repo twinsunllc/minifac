@@ -373,6 +373,49 @@ describe("startDaemon http API", () => {
     expect(body.error).toBe("invalid_last_event_id");
   });
 
+  it("GET /api/runs?status=foo returns 400", async () => {
+    h = await start({ dir, web: webDir });
+    const r = await fetch(`${h.base}/api/runs?status=foo`);
+    expect(r.status).toBe(400);
+    const body = (await r.json()) as { error: string };
+    expect(body.error).toBe("invalid_status");
+  });
+
+  it("GET /api/runs?limit=-1 returns 400", async () => {
+    h = await start({ dir, web: webDir });
+    const r = await fetch(`${h.base}/api/runs?limit=-1`);
+    expect(r.status).toBe(400);
+    const body = (await r.json()) as { error: string };
+    expect(body.error).toBe("invalid_limit");
+  });
+
+  it("GET /api/runs?limit=abc returns 400", async () => {
+    h = await start({ dir, web: webDir });
+    const r = await fetch(`${h.base}/api/runs?limit=abc`);
+    expect(r.status).toBe(400);
+  });
+
+  it("GET /api/runs?factory=hello filters", async () => {
+    await writeFile(path.join(dir, "hello.yaml"), HELLO_YAML);
+    h = await start({ dir, web: webDir });
+    const post = await fetch(`${h.base}/api/runs`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ factoryId: "hello" }),
+    });
+    expect(post.status).toBe(201);
+    await new Promise((r) => setTimeout(r, 50));
+    const r = await fetch(`${h.base}/api/runs?factory=hello`);
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as { runs: Array<{ factoryId: string }> };
+    expect(body.runs.every((x) => x.factoryId === "hello")).toBe(true);
+
+    const r2 = await fetch(`${h.base}/api/runs?factory=other`);
+    expect(r2.status).toBe(200);
+    const body2 = (await r2.json()) as { runs: unknown[] };
+    expect(body2.runs).toEqual([]);
+  });
+
   it("Last-Event-ID: 0 replays from index 1 (skips event 0)", async () => {
     await writeFile(path.join(dir, "hello.yaml"), HELLO_YAML);
     h = await start({ dir, web: webDir });

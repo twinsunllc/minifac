@@ -131,6 +131,31 @@ export class RunRegistry {
     return runs;
   }
 
+  /**
+   * Async list that delegates to the store when one is in scope. Use this
+   * for filters the in-memory cache can't satisfy (e.g. `change`). Each
+   * returned row carries the in-memory record's events buffer when cached;
+   * uncached rows return an empty events array (use `getWithEvents` to
+   * fetch events lazily).
+   */
+  async listAsync(filter?: ListRunsFilter): Promise<RunRecord[]> {
+    if (!this.store) return this.list(filter);
+    const rows = await this.store.listRuns(filter);
+    return rows.map((r) => {
+      const cached = this.runs.get(r.id);
+      if (cached) return cached;
+      const record: RunRecord = {
+        id: r.id,
+        factoryId: r.factoryName,
+        status: r.status === "running" ? "failed" : r.status,
+        startedAt: r.startedAt,
+        events: [],
+      };
+      if (r.endedAt !== null) record.endedAt = r.endedAt;
+      return record;
+    });
+  }
+
   get(id: string): RunRecord | undefined {
     return this.runs.get(id);
   }

@@ -184,7 +184,7 @@ async function handleRequest(
       handleGetFactory(res, deps, params.id ?? "");
       return;
     case "list_runs":
-      handleListRuns(res, deps, url);
+      await handleListRuns(res, deps, url);
       return;
     case "get_run":
       await handleGetRun(res, deps, params.id ?? "");
@@ -231,7 +231,7 @@ function handleGetFactory(res: ServerResponse, deps: RequestDeps, id: string): v
 const LIST_RUNS_LIMIT_CEILING = 200;
 const LIST_RUNS_LIMIT_DEFAULT = 50;
 
-function handleListRuns(res: ServerResponse, deps: RequestDeps, url: URL): void {
+async function handleListRuns(res: ServerResponse, deps: RequestDeps, url: URL): Promise<void> {
   const filter: ListRunsFilter = {};
   const factory = url.searchParams.get("factory");
   if (factory) filter.factoryName = factory;
@@ -268,16 +268,8 @@ function handleListRuns(res: ServerResponse, deps: RequestDeps, url: URL): void 
   }
   filter.limit = limit;
 
-  // The in-memory list filters by factoryId; the store covers `change`
-  // (which the registry's in-memory records don't track). When the
-  // change filter is set, prefer the store so we don't miss matches.
-  if (filter.change !== undefined) {
-    deps.runs.list(filter); // ensure we still service in-memory matches
-    // Read store directly via the registry's hydrate path is overkill;
-    // fall through to the in-memory list which matches what we cached.
-    // For now, we rely on the registry having hydrated change-bearing rows.
-  }
-  const runs = deps.runs.list(filter).map((r) => ({
+  const list = await deps.runs.listAsync(filter);
+  const runs = list.map((r) => ({
     id: r.id,
     factoryId: r.factoryId,
     status: r.status,

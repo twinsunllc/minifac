@@ -1,10 +1,12 @@
 import { mkdtemp } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { createRequire } from "node:module";
 
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as {
-  DatabaseSync: new (path: string) => {
+  DatabaseSync: new (
+    path: string,
+  ) => {
     exec(sql: string): void;
     prepare(sql: string): {
       run(...p: unknown[]): unknown;

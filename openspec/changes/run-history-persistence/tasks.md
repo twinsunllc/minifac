@@ -92,39 +92,39 @@
 
 ## 6. Daemon HTTP filters
 
-- [ ] 6.1 Extend the `GET /api/runs` handler to parse
+- [x] 6.1 Extend the `GET /api/runs` handler to parse
       `factory`, `change`, `status`, and `limit` query parameters
       and pass them as `ListRunsFilter` to the store.
-- [ ] 6.2 Reject invalid `limit` (non-positive, non-numeric,
+- [x] 6.2 Reject invalid `limit` (non-positive, non-numeric,
       above ceiling) with HTTP 400 + JSON body.
-- [ ] 6.3 Tests in `src/serve/router.test.ts` /
+- [x] 6.3 Tests in `src/serve/router.test.ts` /
       `src/serve/server.test.ts` covering each filter and the
       400 path.
 
 ## 7. Viewer: "Recent runs"
 
-- [ ] 7.1 In `src/serve/web/`, add a Recent runs section that
+- [x] 7.1 In `src/serve/web/`, add a Recent runs section that
       fetches `GET /api/runs?limit=20` on load and renders the
       list (factory id, change, status, startedAt).
-- [ ] 7.2 Clicking an entry calls `GET /api/runs/:id` and
+- [x] 7.2 Clicking an entry calls `GET /api/runs/:id` and
       renders that run's persisted events in the existing event-
       tail pane (no new run, no POST).
-- [ ] 7.3 Manual smoke check with `minifac serve` against a
+- [x] 7.3 Manual smoke check with `minifac serve` against a
       pre-seeded `runs.db`.
 
 ## 8. CLI: `minifac runs` subcommand
 
-- [ ] 8.1 Add `src/cli/runs.ts` with `listAction` and `showAction`.
-- [ ] 8.2 Wire `program.command("runs")` in `src/cli.ts` with
+- [x] 8.1 Add `src/cli/runs.ts` with `listAction` and `showAction`.
+- [x] 8.2 Wire `program.command("runs")` in `src/cli.ts` with
       `--factory`, `--change`, `--status`, `--limit`, `--json`.
       Default output is a table; sort by `startedAt DESC`.
-- [ ] 8.3 Add `program.command("runs show <id>")` with
+- [x] 8.3 Add `program.command("runs show <id>")` with
       `--follow` and `--json`. Resolve id via exact match or
       unambiguous prefix; usage-error on ambiguous or unknown.
-- [ ] 8.4 `--follow` polls the store every ~250 ms until the
+- [x] 8.4 `--follow` polls the store every ~250 ms until the
       run is terminal. Skip polling when the run is already
       terminal at first read.
-- [ ] 8.5 Tests in `src/cli/runs.test.ts`: list happy path,
+- [x] 8.5 Tests in `src/cli/runs.test.ts`: list happy path,
       each filter, `--json` shape, `--limit` rejection, `show`
       with full id, `show` with prefix, ambiguous prefix,
       unknown id, `--follow` against a terminal run, `--follow`
@@ -133,19 +133,19 @@
 
 ## 9. Documentation
 
-- [ ] 9.1 Update `README.md` so the `minifac serve` and
+- [x] 9.1 Update `README.md` so the `minifac serve` and
       `minifac run` sections mention the persisted runs.db.
-- [ ] 9.2 Add a short `minifac runs` section to `README.md`.
-- [ ] 9.3 Spot-check `docs/concepts/Runs-DB.md` and
+- [x] 9.2 Add a short `minifac runs` section to `README.md`.
+- [x] 9.3 Spot-check `docs/concepts/Runs-DB.md` and
       `docs/concepts/Run.md` against the shipped schema; update
       either doc only if the implementation diverged from the
       sketch.
 
 ## 10. Verification
 
-- [ ] 10.1 `npm run test` passes.
-- [ ] 10.2 `npm run check` passes (biome lint + format).
-- [ ] 10.3 Manual: `minifac run hello` (or similar) then
+- [x] 10.1 `npm run test` passes.
+- [x] 10.2 `npm run check` passes (biome lint + format).
+- [x] 10.3 Manual: `minifac run hello` (or similar) then
       `minifac runs` shows the run; `minifac runs show <id>`
       replays the events; `minifac serve` restart preserves the
       run in the viewer.

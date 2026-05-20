@@ -6,6 +6,7 @@ import { BriefLoadError } from "./brief/loader.js";
 import { briefCommandAction } from "./cli/brief.js";
 import { initAction } from "./cli/init.js";
 import { RunArgResolutionError, resolveRunArg } from "./cli/resolve.js";
+import { listAction as runsListAction, showAction as runsShowAction } from "./cli/runs.js";
 import { ClaudeExecutor } from "./executor/claude.js";
 import { ExecutorRegistry } from "./executor/registry.js";
 import { FactoryLoadError, loadFactory } from "./factory/loader.js";
@@ -372,6 +373,75 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
         }
       },
     );
+
+  const runsCmd = program
+    .command("runs")
+    .description("List persisted runs from the local runs.db.")
+    .option("--factory <name>", "Filter by factory name")
+    .option("--change <name>", "Filter by brief change name")
+    .option("--status <s>", "Filter by status (running | succeeded | failed)")
+    .option("--limit <n>", "Cap the number of runs returned (default 20)")
+    .option("--json", "Emit a JSON array instead of a table")
+    .action(
+      async (opts: {
+        factory?: string;
+        change?: string;
+        status?: string;
+        limit?: string;
+        json?: boolean;
+      }) => {
+        const cwd = io.runCwd ?? process.cwd();
+        let store: RunStore | undefined;
+        try {
+          store = await (io.openRunStore ?? openDefaultRunStore)(cwd);
+        } catch (err) {
+          io.stderr.write(`Could not open run history store: ${(err as Error).message}\n`);
+          exitCode = 1;
+          return;
+        }
+        try {
+          exitCode = await runsListAction({
+            ...(opts.factory !== undefined ? { factory: opts.factory } : {}),
+            ...(opts.change !== undefined ? { change: opts.change } : {}),
+            ...(opts.status !== undefined ? { status: opts.status } : {}),
+            ...(opts.limit !== undefined ? { limit: opts.limit } : {}),
+            ...(opts.json !== undefined ? { json: opts.json } : {}),
+            store,
+            io: { stdout: io.stdout, stderr: io.stderr },
+          });
+        } finally {
+          await store.close();
+        }
+      },
+    );
+
+  runsCmd
+    .command("show <id>")
+    .description("Print the persisted event log for one run (id or unambiguous prefix).")
+    .option("--follow", "Tail an active run via short-interval polling")
+    .option("--json", "Emit NDJSON, one event per line")
+    .action(async (id: string, opts: { follow?: boolean; json?: boolean }) => {
+      const cwd = io.runCwd ?? process.cwd();
+      let store: RunStore | undefined;
+      try {
+        store = await (io.openRunStore ?? openDefaultRunStore)(cwd);
+      } catch (err) {
+        io.stderr.write(`Could not open run history store: ${(err as Error).message}\n`);
+        exitCode = 1;
+        return;
+      }
+      try {
+        exitCode = await runsShowAction({
+          idOrPrefix: id,
+          ...(opts.follow !== undefined ? { follow: opts.follow } : {}),
+          ...(opts.json !== undefined ? { json: opts.json } : {}),
+          store,
+          io: { stdout: io.stdout, stderr: io.stderr },
+        });
+      } finally {
+        await store.close();
+      }
+    });
 
   program
     .command("serve")

@@ -178,7 +178,7 @@ function appendEvent({ ev, text }) {
 }
 
 async function refreshRuns() {
-  const r = await fetch("/api/runs");
+  const r = await fetch("/api/runs?limit=20");
   const data = await r.json();
   state.runs = data.runs || [];
   renderRuns();
@@ -189,13 +189,59 @@ function renderRuns() {
   for (const r of state.runs) {
     const li = document.createElement("li");
     const main = document.createElement("div");
+    const when = r.startedAt ? new Date(r.startedAt).toLocaleString() : "";
     main.textContent = `${r.factoryId} — ${r.status}`;
     const sub = document.createElement("small");
-    sub.textContent = r.id;
+    sub.textContent = `${r.id.slice(0, 8)} · ${when}`;
     li.appendChild(main);
     li.appendChild(sub);
-    li.addEventListener("click", () => subscribe(r.id));
+    li.addEventListener("click", () => openRun(r));
     els.runList.appendChild(li);
+  }
+}
+
+async function openRun(r) {
+  if (r.status === "running") {
+    subscribe(r.id);
+    return;
+  }
+  // Terminal — fetch the persisted event log and render it in the tail.
+  if (state.source) {
+    state.source.close();
+    state.source = null;
+  }
+  els.eventTail.replaceChildren();
+  state.activeRunId = r.id;
+  state.nodeStatuses.clear();
+  if (state.factoryDetail) drawGraph(state.factoryDetail);
+  const resp = await fetch(`/api/runs/${encodeURIComponent(r.id)}`);
+  if (!resp.ok) {
+    appendEvent({ ev: "stderr", text: `failed to load run ${r.id}: ${resp.status}` });
+    return;
+  }
+  const data = await resp.json();
+  for (const ev of data.events || []) {
+    if (ev.kind === "run_end") {
+      appendEvent({
+        ev: "end",
+        text: `--- run ended: ${ev.result ? ev.result.status : data.status} ---`,
+      });
+      continue;
+    }
+    if (ev.kind === "status" && ev.event && ev.event.status) {
+      appendEvent({
+        ev: "status",
+        text: `[${ev.nodeId} iter=${ev.iteration}] ${ev.event.status}`,
+      });
+      continue;
+    }
+    if (ev.kind === "stdout" || ev.kind === "stderr") {
+      const line = ev.event?.line ? ev.event.line : "";
+      appendEvent({
+        ev: ev.kind,
+        text: `[${ev.nodeId} iter=${ev.iteration}] ${line}`,
+      });
+    }
   }
 }
 

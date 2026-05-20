@@ -100,6 +100,11 @@ Pass `--in-place` (or set `mode: in-place` in the brief frontmatter)
 to skip worktree creation and run in the current cwd — useful for CI
 or read-only factories.
 
+Every run — under `minifac run` or `minifac serve` — is persisted to
+`~/.minifac/runs.db` (configurable). List recent runs with `minifac runs`
+and replay one with `minifac runs show <id>`; see
+[`minifac runs`](#minifac-runs--inspect-history) below.
+
 Alternatively, use `minifac serve` for a live web viewer of the same run
 (see the [`minifac serve`](#minifac-serve--web-viewer) section below).
 
@@ -132,10 +137,16 @@ need to expose minifac on a network interface, that lives behind a
 separate proposal (we'll add auth before we add wider binding).
 
 **v0 scope:** the viewer can list factories, render the graph, start a
-run, and tail its events. There is no in-browser YAML editing, no
-pause/resume/cancel/retry-from-node controls, and no persistent run
-history — closing the daemon discards all run state. Each is a future
-proposal when justified.
+run, and tail its events. There is no in-browser YAML editing and no
+pause/resume/cancel/retry-from-node controls — each is a future proposal
+when justified.
+
+Run state is persisted to `~/.minifac/runs.db` (a SQLite file), so the
+viewer's "Recent runs" list survives daemon restarts and prior runs are
+replayable in the event-tail pane. Set `runs_db:` in
+`~/.minifac/config.yaml` (or in a per-repo `.minifac/config.yaml`) to
+move the file elsewhere; `MINIFAC_HOME` overrides the whole machine-state
+root.
 
 Flags:
 
@@ -164,6 +175,31 @@ looping back to apply on failure (bounded at three retries). It is
 
 See [examples/sdd.md](examples/sdd.md) for the full per-node contract,
 the brief-driven workflow, and known friction points.
+
+## `minifac runs` — inspect history
+
+Every run is persisted to `~/.minifac/runs.db` (a SQLite file; the path
+is configurable via `runs_db:` in `~/.minifac/config.yaml` or per-repo
+`.minifac/config.yaml`). Two read-only subcommands query it from the
+terminal:
+
+```
+# List the 20 most recent runs (table output).
+node dist/cli.js runs
+
+# Filter and emit JSON for piping.
+node dist/cli.js runs --factory sdd --status failed --limit 50 --json
+
+# Replay one run's event log (id or unambiguous prefix).
+node dist/cli.js runs show <id>
+
+# Tail an in-flight run by polling the store.
+node dist/cli.js runs show <id> --follow
+```
+
+`runs` exits `0` even when zero runs match, `1` on usage errors (bad
+`--status` value, non-positive `--limit`, unknown / ambiguous id), or
+on a fatal storage error.
 
 ## Contributing / SDD workflow
 

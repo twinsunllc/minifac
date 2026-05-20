@@ -48,7 +48,8 @@ change can extend `runs.db` rather than introduce a new store. The
 
 - The [[Runner]] writes runs + events as they happen
 - The daemon viewer reads from here for prior-run replay
-- Future: a `minifac runs` CLI command for ad-hoc query / listing
+- `minifac runs` / `minifac runs show <id>` query and replay from the
+  terminal (with `--follow` to tail an in-flight run)
 - Future: `auto-mode` queries "which briefs are ready to claim"
 
 ## Pluggability

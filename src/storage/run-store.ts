@@ -86,12 +86,7 @@ export interface GetEventsOptions {
 export interface RunStore {
   createRun(input: CreateRunInput): Promise<void>;
   appendEvent(runId: RunId, event: AppendEventInput): Promise<StoredEvent>;
-  recordNodeStart(
-    runId: RunId,
-    nodeId: string,
-    iteration: number,
-    at: number,
-  ): Promise<void>;
+  recordNodeStart(runId: RunId, nodeId: string, iteration: number, at: number): Promise<void>;
   recordNodeEnd(
     runId: RunId,
     nodeId: string,
