@@ -446,6 +446,124 @@ describe("runFactory", () => {
     expect(factory.nodes.a?.with?.prompt).toBe("Hello {{ brief.change }}.");
   });
 
+  it("substitutes {{ run.cwd }} in node.cwd when runCwd is supplied", async () => {
+    const factory: Factory = {
+      name: "f",
+      nodes: {
+        a: { executor: "fake", terminal: true, cwd: "{{ run.cwd }}" },
+      },
+      edges: [],
+    };
+    const exec = new FakeExecutor("fake", { a: () => [succeeded] });
+    const reg = new ExecutorRegistry();
+    reg.register(exec);
+    await runFactory(wrap(factory, "/factories/here"), {
+      registry: reg,
+      runCwd: "/wt/some-change",
+    });
+    expect(exec.contexts.get("a")?.[0]?.cwd).toBe("/wt/some-change");
+  });
+
+  it("substitutes {{ run.cwd }} in with.prompt when runCwd is supplied", async () => {
+    const factory: Factory = {
+      name: "f",
+      nodes: {
+        a: {
+          executor: "fake",
+          terminal: true,
+          with: { prompt: "cd {{ run.cwd }}" },
+        },
+      },
+      edges: [],
+    };
+    const exec = new FakeExecutor("fake", { a: () => [succeeded] });
+    const reg = new ExecutorRegistry();
+    reg.register(exec);
+    await runFactory(wrap(factory), { registry: reg, runCwd: "/wt/x" });
+    const node = exec.nodes.get("a")?.[0];
+    expect(node?.with?.prompt).toBe("cd /wt/x");
+  });
+
+  it("literal cwd takes precedence over runCwd", async () => {
+    const factory: Factory = {
+      name: "f",
+      nodes: {
+        a: { executor: "fake", terminal: true, cwd: "/explicit" },
+      },
+      edges: [],
+    };
+    const exec = new FakeExecutor("fake", { a: () => [succeeded] });
+    const reg = new ExecutorRegistry();
+    reg.register(exec);
+    await runFactory(wrap(factory), { registry: reg, runCwd: "/wt" });
+    expect(exec.contexts.get("a")?.[0]?.cwd).toBe("/explicit");
+  });
+
+  it("missing cwd falls back to runCwd (not sourceDir) when runCwd is in scope", async () => {
+    const factory: Factory = {
+      name: "f",
+      nodes: {
+        a: { executor: "fake", terminal: true },
+      },
+      edges: [],
+    };
+    const exec = new FakeExecutor("fake", { a: () => [succeeded] });
+    const reg = new ExecutorRegistry();
+    reg.register(exec);
+    await runFactory(wrap(factory, "/factories/here"), {
+      registry: reg,
+      runCwd: "/wt/x",
+    });
+    expect(exec.contexts.get("a")?.[0]?.cwd).toBe("/wt/x");
+  });
+
+  it("with no runCwd, behavior matches today's contract", async () => {
+    const factory: Factory = {
+      name: "f",
+      nodes: {
+        a: { executor: "fake", terminal: true, cwd: "{{ run.cwd }}" },
+      },
+      edges: [],
+    };
+    const exec = new FakeExecutor("fake", { a: () => [succeeded] });
+    const reg = new ExecutorRegistry();
+    reg.register(exec);
+    await runFactory(wrap(factory, "/factories/here"), { registry: reg });
+    // No runCwd in scope → token passes through verbatim → falls into the
+    // relative-path resolver against sourceDir.
+    const cwd = exec.contexts.get("a")?.[0]?.cwd;
+    // Effectively `/factories/here/{{ run.cwd }}` as a literal — exact path
+    // depends on `path.resolve`. Assert it contains the literal token (which
+    // proves the no-runCwd path matched pass-through).
+    expect(cwd).toContain("{{ run.cwd }}");
+  });
+
+  it("substitutes both with.prompt and cwd in a single run", async () => {
+    const factory: Factory = {
+      name: "f",
+      nodes: {
+        a: {
+          executor: "fake",
+          terminal: true,
+          cwd: "{{ run.cwd }}",
+          with: { prompt: "Hello {{ brief.change }} in {{ run.cwd }}." },
+        },
+      },
+      edges: [],
+    };
+    const exec = new FakeExecutor("fake", { a: () => [succeeded] });
+    const reg = new ExecutorRegistry();
+    reg.register(exec);
+    const brief: Brief = {
+      frontmatter: { change: "foo", factory: "sdd" },
+      body: "",
+      sourcePath: "/x.md",
+    };
+    await runFactory(wrap(factory), { registry: reg, brief, runCwd: "/wt/foo" });
+    expect(exec.contexts.get("a")?.[0]?.cwd).toBe("/wt/foo");
+    expect(exec.nodes.get("a")?.[0]?.with?.prompt).toBe("Hello foo in /wt/foo.");
+  });
+
   it("leaves tokens verbatim when no brief is supplied", async () => {
     const factory: Factory = {
       name: "f",

@@ -177,6 +177,52 @@ factory: sdd
     expect(brief.body).toBe("");
   });
 
+  it("accepts `mode: in-place`", async () => {
+    const dir = await makeDir();
+    const file = await writeBrief(
+      dir,
+      "mode.md",
+      `---
+change: foo
+factory: sdd
+mode: in-place
+---
+`,
+    );
+    const brief = await loadBrief(file);
+    expect((brief.frontmatter as { mode?: string }).mode).toBe("in-place");
+  });
+
+  it("rejects an unknown `mode` value", async () => {
+    const dir = await makeDir();
+    const file = await writeBrief(
+      dir,
+      "badmode.md",
+      `---
+change: foo
+factory: sdd
+mode: yolo
+---
+`,
+    );
+    await expect(loadBrief(file)).rejects.toThrowError(/mode|in-place/);
+  });
+
+  it("parses without `mode` (absent is the default)", async () => {
+    const dir = await makeDir();
+    const file = await writeBrief(
+      dir,
+      "nomode.md",
+      `---
+change: foo
+factory: sdd
+---
+`,
+    );
+    const brief = await loadBrief(file);
+    expect((brief.frontmatter as { mode?: string }).mode).toBeUndefined();
+  });
+
   it("reports a line number for malformed YAML in the frontmatter", async () => {
     const dir = await makeDir();
     const file = await writeBrief(

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Brief } from "../brief/loader.js";
-import { substituteBriefTokens } from "./substitute.js";
+import { substitute, substituteBriefTokens } from "./substitute.js";
 
 function brief(overrides: Partial<Brief> = {}): Brief {
   return {
@@ -61,5 +61,49 @@ describe("substituteBriefTokens", () => {
         brief(),
       ),
     ).toBe("my-change / sdd / my-change");
+  });
+});
+
+describe("substitute (Substitutions record)", () => {
+  it("substitutes {{ run.cwd }} when run is in scope", () => {
+    expect(substitute("cd {{ run.cwd }}", { run: { cwd: "/wt/foo" } })).toBe("cd /wt/foo");
+  });
+
+  it("leaves {{ run.cwd }} verbatim when no run in scope", () => {
+    expect(substitute("cd {{ run.cwd }}", {})).toBe("cd {{ run.cwd }}");
+  });
+
+  it("leaves unknown run.* field verbatim", () => {
+    expect(substitute("id={{ run.id }}", { run: { cwd: "/wt" } })).toBe("id={{ run.id }}");
+  });
+
+  it("preserves brief semantics under the new signature", () => {
+    const b: Brief = {
+      frontmatter: { change: "foo", factory: "sdd" },
+      body: "",
+      sourcePath: "/x.md",
+    };
+    expect(substitute("{{ brief.change }}", { brief: b })).toBe("foo");
+    expect(substitute("{{ brief.change }}", {})).toBe("{{ brief.change }}");
+  });
+
+  it("substitutes both brief and run tokens in a single string", () => {
+    const b: Brief = {
+      frontmatter: { change: "foo", factory: "sdd" },
+      body: "",
+      sourcePath: "/x.md",
+    };
+    expect(
+      substitute("{{ brief.change }}@{{ run.cwd }}", { brief: b, run: { cwd: "/wt" } }),
+    ).toBe("foo@/wt");
+  });
+
+  it("tolerates whitespace around run.<field>", () => {
+    expect(substitute("{{run.cwd}}", { run: { cwd: "/x" } })).toBe("/x");
+    expect(substitute("{{   run.cwd   }}", { run: { cwd: "/x" } })).toBe("/x");
+  });
+
+  it("leaves unknown namespaces verbatim", () => {
+    expect(substitute("{{ env.HOME }}", { run: { cwd: "/x" } })).toBe("{{ env.HOME }}");
   });
 });

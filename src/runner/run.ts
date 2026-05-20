@@ -4,7 +4,7 @@ import type { ExecutorRegistry } from "../executor/registry.js";
 import type { NodeEvent, ResolvedNode, RunContext, RunHistoryEntry } from "../executor/types.js";
 import type { LoadedFactory } from "../factory/loader.js";
 import type { ExecutionLogEntry, RunResult } from "./result.js";
-import { substituteBriefTokens } from "./substitute.js";
+import { substitute, type Substitutions } from "./substitute.js";
 
 export interface RunOptions {
   registry: ExecutorRegistry;
@@ -14,6 +14,10 @@ export interface RunOptions {
    * `{{ brief.<field> }}` tokens in each node's `with.prompt` string
    * immediately before dispatch. */
   brief?: Brief;
+  /** Optional run-level cwd. When set, becomes the default cwd for any node
+   * whose `cwd` field is absent or resolves to the empty string, and
+   * resolves the `{{ run.cwd }}` template token. */
+  runCwd?: string;
 }
 
 interface QueueItem {
@@ -22,7 +26,10 @@ interface QueueItem {
 
 export async function runFactory(loaded: LoadedFactory, options: RunOptions): Promise<RunResult> {
   const { factory, sourceDir } = loaded;
-  const { registry, onEvent, brief } = options;
+  const { registry, onEvent, brief, runCwd } = options;
+  const subs: Substitutions = {};
+  if (brief) subs.brief = brief;
+  if (runCwd !== undefined && runCwd.length > 0) subs.run = { cwd: runCwd };
 
   const runStart = Date.now();
   const history: RunHistoryEntry[] = [];
@@ -49,9 +56,21 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
   let result: RunResult | null = null;
 
   const resolveCwd = (nodeCwd: string | undefined): string => {
-    if (!nodeCwd) return sourceDir;
-    if (path.isAbsolute(nodeCwd)) return nodeCwd;
-    return path.resolve(sourceDir, nodeCwd);
+    // Apply template substitution (brief.*, run.*) before fallbacks. Tokens
+    // with no in-scope value pass through verbatim per the substitute()
+    // contract; the empty-string check below catches the "intentional empty"
+    // case but not the "still a literal token" case (which we leave to the
+    // executor to surface).
+    let effective = nodeCwd;
+    if (typeof effective === "string" && effective.length > 0) {
+      effective = substitute(effective, subs);
+    }
+    if (effective !== undefined && effective.length > 0) {
+      if (path.isAbsolute(effective)) return effective;
+      return path.resolve(sourceDir, effective);
+    }
+    if (runCwd !== undefined && runCwd.length > 0) return runCwd;
+    return sourceDir;
   };
 
   const edgeKey = (from: string, to: string, when: string): string => `${from}|${to}|${when}`;
@@ -87,12 +106,13 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
     iterations.set(nodeId, iteration);
 
     // Build a shallow-cloned node for dispatch so we never mutate the
-    // factory's node objects (they're reused across iterations). When a brief
-    // is in scope and the node has a string `with.prompt`, substitute brief
-    // tokens before handing the node to the executor.
+    // factory's node objects (they're reused across iterations). When any
+    // substitution namespace is in scope and the node has a string
+    // `with.prompt`, substitute tokens before handing the node to the
+    // executor.
     let resolvedNode: ResolvedNode = { ...node, id: nodeId };
-    if (brief && node.with && typeof node.with.prompt === "string") {
-      const substituted = substituteBriefTokens(node.with.prompt, brief);
+    if ((subs.brief || subs.run) && node.with && typeof node.with.prompt === "string") {
+      const substituted = substitute(node.with.prompt, subs);
       resolvedNode = {
         ...resolvedNode,
         with: { ...node.with, prompt: substituted },
