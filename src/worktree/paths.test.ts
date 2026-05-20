@@ -2,6 +2,7 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import type { WorktreeConfig } from "./config.js";
 import {
   computeRepoHash,
   lockPathForKey,
@@ -9,7 +10,6 @@ import {
   worktreeKeyForFactory,
   worktreePathForKey,
 } from "./paths.js";
-import type { WorktreeConfig } from "./config.js";
 
 async function makeDir(): Promise<string> {
   return await mkdtemp(path.join(tmpdir(), "minifac-paths-"));

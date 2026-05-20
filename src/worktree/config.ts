@@ -54,8 +54,7 @@ async function readMaybeYaml(
   const doc = parseDocument(raw, { prettyErrors: true });
   if (doc.errors.length > 0) {
     const e = doc.errors[0];
-    if (!e)
-      throw new WorktreeConfigError("YAML parse error in minifac config", filePath);
+    if (!e) throw new WorktreeConfigError("YAML parse error in minifac config", filePath);
     const linePos = e.linePos?.[0];
     throw new WorktreeConfigError(
       `YAML parse error in minifac config at ${filePath}: ${e.message}`,
@@ -76,10 +75,7 @@ async function readMaybeYaml(
 function pickString(value: unknown, field: string, sourcePath: string): string | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== "string" || value.length === 0) {
-    throw new WorktreeConfigError(
-      `Field \`${field}\` must be a non-empty string`,
-      sourcePath,
-    );
+    throw new WorktreeConfigError(`Field \`${field}\` must be a non-empty string`, sourcePath);
   }
   return value;
 }
@@ -106,7 +102,7 @@ export async function loadWorktreeConfig(callerRepoRoot: string): Promise<Worktr
     locksDir: path.join(home, "locks"),
   };
 
-  let cfg: WorktreeConfig = { ...defaults };
+  const cfg: WorktreeConfig = { ...defaults };
 
   if (globalLoaded.present) {
     const wt = pickString(globalLoaded.data.worktrees_dir, "worktrees_dir", globalPath);

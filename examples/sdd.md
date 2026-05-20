@@ -33,6 +33,22 @@ The target repo (whichever directory each node's `cwd` points at) must
 have OpenSpec installed and the relevant verify commands wired up
 (typically `npm test`, `npm run build`, `npm run check`).
 
+### Worktree-by-default
+
+`minifac run <change>` creates a fresh git worktree at
+`~/.minifac/worktrees/<repo-hash>-<change>/`, branches off
+`base_branch` from the brief (defaulting to caller's `HEAD`), and runs
+every node inside it. Each node's `cwd: "{{ run.cwd }}"` resolves to
+the worktree path automatically, so the shipped factory does not
+hard-code any target path. The branch and worktree are left in place
+when the run ends — review and merge the branch like any other
+contributor's; reclaim disk with `minifac prune` when you're done.
+
+For CI environments, read-only factories, or when you want the factory
+to run inside your existing checkout, pass `--in-place` (or set
+`mode: in-place` in the brief frontmatter). That skips worktree
+creation; the factory runs in `process.cwd()`.
+
 > **Migration from pre-`factory-inputs-core` copies.** If you have a
 > hand-copied `sdd-<name>.yaml` from before the `factory-inputs-core`
 > change, you have two options:
@@ -222,8 +238,10 @@ The brief supplies what used to be hand-edits:
    how per-change intent reaches the propose prompt without
    per-change YAML edits.
 
-The per-node `cwd` is still a YAML field for now; cwd-from-brief
-(via worktree management) is deferred to a later phase.
+The per-node `cwd` is the template `"{{ run.cwd }}"` — the runner
+substitutes the worktree path it created for this run. Brief-less
+factory invocations get a generated worktree key
+(`<repo-hash>-<factory>-<timestamp>`) so distinct runs don't collide.
 
 Everything else (topology, budgets, executor, permission mode) is
 binding and is covered by the spec.
@@ -241,19 +259,27 @@ substitution inside any node `with.prompt`:
 | `{{ brief.base_branch }}` | brief frontmatter `base_branch:` (empty when absent) |
 | `{{ brief.model }}`       | brief frontmatter `model:` (empty when absent)       |
 
-Unknown identifiers inside `{{ brief.* }}` braces pass through
-verbatim (no substitution, no error). This leaves room for future
-fields without surprising existing factories.
+The runner also resolves the `run.*` namespace. v0 ships one field:
+
+| Token             | Source                                                 |
+|-------------------|--------------------------------------------------------|
+| `{{ run.cwd }}`   | the worktree path (or `process.cwd()` under `--in-place`) |
+
+Substitution applies to both `with.prompt` AND `cwd`. Unknown
+identifiers under any known namespace pass through verbatim (no
+substitution, no error) — room for future fields without surprising
+existing factories.
 
 ## Friction (known and deferred)
 
 These are real friction points with the v0 design. Each is deferred to
 its own future proposal so it gets the scope it deserves:
 
-- **Factory-level `cwd:` default.** Setting the same `cwd` on every
-  node is repetitive. A top-level `cwd:` with node-level override
-  would clean it up, but it introduces resolve-order and override
-  precedence questions that earn their own proposal.
+- **Factory-level `cwd:` default.** Every shipped node currently sets
+  `cwd: "{{ run.cwd }}"`, which is repetitive. A top-level `cwd:` with
+  node-level override would clean it up, but it introduces
+  resolve-order and override precedence questions that earn their own
+  proposal.
 - **Native `shell` executor for verify.** Running `npm test` via a
   `claude` node is slower and noisier than spawning a process. A
   `shell` executor would be a drop-in replacement at this node: change

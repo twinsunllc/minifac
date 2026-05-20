@@ -4,7 +4,7 @@ import type { ExecutorRegistry } from "../executor/registry.js";
 import type { NodeEvent, ResolvedNode, RunContext, RunHistoryEntry } from "../executor/types.js";
 import type { LoadedFactory } from "../factory/loader.js";
 import type { ExecutionLogEntry, RunResult } from "./result.js";
-import { substitute, type Substitutions } from "./substitute.js";
+import { type Substitutions, substitute } from "./substitute.js";
 
 export interface RunOptions {
   registry: ExecutorRegistry;

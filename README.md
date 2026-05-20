@@ -80,12 +80,19 @@ node dist/cli.js run my-change
 ```
 
 The CLI looks for `inputs/my-change.md`, resolves its `factory:` field
-(usually `sdd`) to `examples/sdd.yaml`, and runs the factory with the
-brief in scope. The runner substitutes `{{ brief.change }}` and
-`{{ brief.body }}` into each node's prompt before dispatch. See
+(usually `sdd`) to `examples/sdd.yaml`, creates a fresh git worktree
+at `~/.minifac/worktrees/<repo-hash>-my-change/`, and runs the factory
+inside it with the brief in scope. The runner substitutes
+`{{ brief.change }}`, `{{ brief.body }}`, and `{{ run.cwd }}` (the
+worktree path) into each node's prompt and `cwd` before dispatch.
+Reclaim disk with `minifac prune` once your branches have merged. See
 [`examples/sdd.md`](examples/sdd.md) for the full per-node contract
 and [`examples/sample-brief.md`](examples/sample-brief.md) for the
 brief template.
+
+Pass `--in-place` (or set `mode: in-place` in the brief frontmatter)
+to skip worktree creation and run in the current cwd — useful for CI
+or read-only factories.
 
 Alternatively, use `minifac serve` for a live web viewer of the same run
 (see the [`minifac serve`](#minifac-serve--web-viewer) section below).

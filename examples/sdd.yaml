@@ -11,7 +11,7 @@ brief: required
 nodes:
   propose:
     executor: claude
-    cwd: /path/to/target/repo
+    cwd: "{{ run.cwd }}"
     with:
       permission_mode: "bypass_permissions"
       prompt: |
@@ -38,7 +38,7 @@ nodes:
 
   apply:
     executor: claude
-    cwd: /path/to/target/repo
+    cwd: "{{ run.cwd }}"
     with:
       permission_mode: "bypass_permissions"
       prompt: |
@@ -63,7 +63,7 @@ nodes:
 
   verify:
     executor: claude
-    cwd: /path/to/target/repo
+    cwd: "{{ run.cwd }}"
     with:
       permission_mode: "bypass_permissions"
       prompt: |
@@ -91,7 +91,7 @@ nodes:
 
   archive:
     executor: claude
-    cwd: /path/to/target/repo
+    cwd: "{{ run.cwd }}"
     terminal: true
     with:
       permission_mode: "bypass_permissions"

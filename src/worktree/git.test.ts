@@ -46,13 +46,7 @@ describe("git wrappers", () => {
 
   it("gitRemoteOriginUrl returns the configured value", async () => {
     const repo = await makeRepo();
-    sh(repo, [
-      "git",
-      "config",
-      "--add",
-      "remote.origin.url",
-      "git@github.com:foo/bar.git",
-    ]);
+    sh(repo, ["git", "config", "--add", "remote.origin.url", "git@github.com:foo/bar.git"]);
     expect(await gitRemoteOriginUrl(repo)).toBe("git@github.com:foo/bar.git");
   });
 

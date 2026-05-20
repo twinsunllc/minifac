@@ -2,7 +2,7 @@ import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { claimLock, LockHeldError } from "./lock.js";
+import { LockHeldError, claimLock } from "./lock.js";
 
 async function makeDir(): Promise<string> {
   return await mkdtemp(path.join(tmpdir(), "minifac-lock-"));

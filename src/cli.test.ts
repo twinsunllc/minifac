@@ -1,8 +1,9 @@
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import { mkdir, mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Writable } from "node:stream";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runCli } from "./cli.js";
 import { ExecutorRegistry } from "./executor/registry.js";
 import type { NodeEvent, NodeExecutor, ResolvedNode } from "./executor/types.js";
@@ -28,6 +29,28 @@ async function writeFixture(dir: string, rel: string, contents: string): Promise
   await mkdir(path.dirname(filePath), { recursive: true });
   await writeFile(filePath, contents, "utf8");
   return filePath;
+}
+
+function sh(cwd: string, args: string[]): void {
+  const res = spawnSync(args[0] as string, args.slice(1), { cwd, encoding: "utf8" });
+  if (res.status !== 0) {
+    throw new Error(
+      `command failed in ${cwd}: ${args.join(" ")}\nstdout: ${res.stdout}\nstderr: ${res.stderr}`,
+    );
+  }
+}
+
+async function makeGitRepoFixture(): Promise<string> {
+  const dir = await mkdtemp(path.join(tmpdir(), "minifac-cli-repo-"));
+  sh(dir, ["git", "init", "-q", "-b", "main"]);
+  sh(dir, ["git", "config", "user.email", "test@example.com"]);
+  sh(dir, ["git", "config", "user.name", "Test"]);
+  sh(dir, ["git", "config", "commit.gpgsign", "false"]);
+  sh(dir, ["git", "config", "core.hooksPath", "/dev/null"]);
+  await writeFile(path.join(dir, "README.md"), "hi\n");
+  sh(dir, ["git", "add", "."]);
+  sh(dir, ["git", "commit", "-q", "-m", "init"]);
+  return dir;
 }
 
 function fakeRegistry(scripts: Record<string, NodeEvent[]>): () => ExecutorRegistry {
@@ -73,6 +96,21 @@ edges: []
 `;
 
 describe("runCli", () => {
+  let savedHome: string | undefined;
+  let home: string;
+
+  beforeEach(async () => {
+    savedHome = process.env.MINIFAC_HOME;
+    home = await mkdtemp(path.join(tmpdir(), "minifac-home-"));
+    process.env.MINIFAC_HOME = home;
+  });
+
+  afterEach(() => {
+    // biome-ignore lint/performance/noDelete: env var must be unset, not assigned undefined
+    if (savedHome === undefined) delete process.env.MINIFAC_HOME;
+    else process.env.MINIFAC_HOME = savedHome;
+  });
+
   it("--help exits 0", async () => {
     const out = new BufferStream();
     const err = new BufferStream();
@@ -91,7 +129,7 @@ describe("runCli", () => {
     const dir = await makeFixtureDir();
     const out = new BufferStream();
     const err = new BufferStream();
-    const code = await runCli(["run", "no-such-thing"], {
+    const code = await runCli(["run", "--in-place", "no-such-thing"], {
       stdout: out,
       stderr: err,
       runCwd: dir,
@@ -100,12 +138,12 @@ describe("runCli", () => {
     expect(err.text()).toMatch(/Could not resolve/i);
   });
 
-  it("factory-by-name (brief: none) runs end-to-end (exit 0, prefixed output)", async () => {
+  it("factory-by-name (brief: none) runs end-to-end under --in-place", async () => {
     const dir = await makeFixtureDir();
     await writeFixture(dir, "examples/hello.yaml", NONE_FACTORY);
     const out = new BufferStream();
     const err = new BufferStream();
-    const code = await runCli(["run", "hello"], {
+    const code = await runCli(["run", "--in-place", "hello"], {
       stdout: out,
       stderr: err,
       runCwd: dir,
@@ -119,6 +157,7 @@ describe("runCli", () => {
     expect(code).toBe(0);
     expect(out.text()).toContain("[a] hi");
     expect(err.text()).toMatch(/\[status\] a iter=1: succeeded/);
+    expect(err.text()).toMatch(/\[run\] succeeded cwd=/);
   });
 
   it("brief-by-name runs end-to-end and substitutes tokens", async () => {
@@ -143,6 +182,7 @@ edges: []
       `---
 change: my-change
 factory: sdd
+mode: in-place
 ---
 the body
 `,
@@ -172,7 +212,7 @@ the body
     expect(captured[0]).toBe("Work on my-change.");
   });
 
-  it("brief-by-path runs end-to-end", async () => {
+  it("brief-by-path runs end-to-end (in-place)", async () => {
     const dir = await makeFixtureDir();
     await writeFixture(dir, "examples/sdd.yaml", REQUIRED_FACTORY);
     const briefPath = await writeFixture(
@@ -187,7 +227,7 @@ body
     );
     const out = new BufferStream();
     const err = new BufferStream();
-    const code = await runCli(["run", briefPath], {
+    const code = await runCli(["run", "--in-place", briefPath], {
       stdout: out,
       stderr: err,
       runCwd: dir,
@@ -205,6 +245,7 @@ body
       `---
 change: sdd-via-brief
 factory: sdd
+mode: in-place
 ---
 `,
     );
@@ -231,8 +272,6 @@ factory: sdd
     });
     expect(code).toBe(0);
     expect(sawBrief).toBe(true);
-    // No error message about brief-required-but-missing — proves the brief
-    // was resolved at step 2 rather than the factory at step 3.
     expect(err.text()).not.toMatch(/requires a brief/);
   });
 
@@ -241,7 +280,7 @@ factory: sdd
     await writeFixture(dir, "examples/sdd.yaml", REQUIRED_FACTORY);
     const out = new BufferStream();
     const err = new BufferStream();
-    const code = await runCli(["run", "sdd"], {
+    const code = await runCli(["run", "--in-place", "sdd"], {
       stdout: out,
       stderr: err,
       runCwd: dir,
@@ -260,6 +299,7 @@ factory: sdd
       `---
 change: hello-brief
 factory: hello
+mode: in-place
 ---
 `,
     );
@@ -280,7 +320,7 @@ factory: hello
     await writeFixture(dir, "examples/maybe.yaml", OPTIONAL_FACTORY);
     const out1 = new BufferStream();
     const err1 = new BufferStream();
-    const code1 = await runCli(["run", "maybe"], {
+    const code1 = await runCli(["run", "--in-place", "maybe"], {
       stdout: out1,
       stderr: err1,
       runCwd: dir,
@@ -294,6 +334,7 @@ factory: hello
       `---
 change: maybe-brief
 factory: maybe
+mode: in-place
 ---
 `,
     );
@@ -321,7 +362,7 @@ factory: nonexistent
     );
     const out = new BufferStream();
     const err = new BufferStream();
-    const code = await runCli(["run", "orphan"], {
+    const code = await runCli(["run", "--in-place", "orphan"], {
       stdout: out,
       stderr: err,
       runCwd: dir,
@@ -344,7 +385,7 @@ edges: []
     );
     const out = new BufferStream();
     const err = new BufferStream();
-    const code = await runCli(["run", "bad"], {
+    const code = await runCli(["run", "--in-place", "bad"], {
       stdout: out,
       stderr: err,
       runCwd: dir,
@@ -352,7 +393,7 @@ edges: []
     expect(code).toBe(1);
   });
 
-  it("node failure with no recovery exits 2", async () => {
+  it("node failure with no recovery exits 2 and journals the failure", async () => {
     const dir = await makeFixtureDir();
     await writeFixture(
       dir,
@@ -373,7 +414,7 @@ edges:
     );
     const out = new BufferStream();
     const err = new BufferStream();
-    const code = await runCli(["run", "two"], {
+    const code = await runCli(["run", "--in-place", "two"], {
       stdout: out,
       stderr: err,
       runCwd: dir,
@@ -383,6 +424,10 @@ edges:
       }),
     });
     expect(code).toBe(2);
+    expect(err.text()).toMatch(/\[run\] failed cwd=/);
+    // failed-runs.json journaled
+    const journalRaw = await readFile(path.join(home, "failed-runs.json"), "utf8");
+    expect(JSON.parse(journalRaw).entries.length).toBe(1);
   });
 
   it("budget exhaustion exits 3", async () => {
@@ -410,7 +455,7 @@ edges:
     );
     const out = new BufferStream();
     const err = new BufferStream();
-    const code = await runCli(["run", "loop"], {
+    const code = await runCli(["run", "--in-place", "loop"], {
       stdout: out,
       stderr: err,
       runCwd: dir,
@@ -447,7 +492,7 @@ edges:
     await writeFixture(dir, "examples/hello.yaml", NONE_FACTORY);
     const out = new BufferStream();
     const err = new BufferStream();
-    const code = await runCli(["run", "hello"], {
+    const code = await runCli(["run", "--in-place", "hello"], {
       stdout: out,
       stderr: err,
       runCwd: dir,
@@ -460,5 +505,204 @@ edges:
     });
     expect(code).toBe(0);
     expect(err.text()).toContain("[a] warn!");
+  });
+
+  describe("worktree-mode run", () => {
+    it("creates a worktree and runs the factory inside it", async () => {
+      const repo = await makeGitRepoFixture();
+      await writeFixture(repo, "examples/sdd.yaml", REQUIRED_FACTORY);
+      await writeFixture(
+        repo,
+        "inputs/my-change.md",
+        `---
+change: my-change
+factory: sdd
+base_branch: main
+---
+`,
+      );
+      const out = new BufferStream();
+      const err = new BufferStream();
+      const seenCwds: string[] = [];
+      const buildRegistry = (): ExecutorRegistry => {
+        const reg = new ExecutorRegistry();
+        const exec: NodeExecutor = {
+          type: "test",
+          async *run(_node: ResolvedNode, ctx: { cwd: string }): AsyncIterable<NodeEvent> {
+            seenCwds.push(ctx.cwd);
+            yield { kind: "status", status: "succeeded" };
+          },
+        };
+        reg.register(exec);
+        return reg;
+      };
+      const code = await runCli(["run", "my-change"], {
+        stdout: out,
+        stderr: err,
+        runCwd: repo,
+        buildRegistry,
+      });
+      expect(code).toBe(0);
+      // Worktree dir lives under MINIFAC_HOME/worktrees
+      expect(seenCwds[0]).toContain(path.join(home, "worktrees"));
+      const entries = await readdir(path.join(home, "worktrees"));
+      expect(entries.length).toBe(1);
+      // Branch should exist on the source repo
+      const branches = spawnSync("git", ["branch", "--list", "my-change"], {
+        cwd: repo,
+        encoding: "utf8",
+      });
+      expect(branches.stdout).toMatch(/my-change/);
+    });
+
+    it("a second concurrent claim of the same key is refused (exit 1)", async () => {
+      const repo = await makeGitRepoFixture();
+      await writeFixture(repo, "examples/sdd.yaml", REQUIRED_FACTORY);
+      await writeFixture(
+        repo,
+        "inputs/c.md",
+        `---
+change: c
+factory: sdd
+base_branch: main
+---
+`,
+      );
+      // Pre-seed the lockfile with our own (live) PID so the second claim
+      // throws LockHeldError.
+      const { computeRepoHash, worktreeKeyForBrief, lockPathForKey } = await import(
+        "./worktree/paths.js"
+      );
+      const { loadWorktreeConfig } = await import("./worktree/config.js");
+      const cfg = await loadWorktreeConfig(repo);
+      const hash = await computeRepoHash(repo);
+      const key = worktreeKeyForBrief(hash, "c");
+      const lockPath = lockPathForKey(cfg, key);
+      await mkdir(path.dirname(lockPath), { recursive: true });
+      await writeFile(lockPath, `${process.pid}\n`, "utf8");
+
+      const out = new BufferStream();
+      const err = new BufferStream();
+      const code = await runCli(["run", "c"], {
+        stdout: out,
+        stderr: err,
+        runCwd: repo,
+        buildRegistry: fakeRegistry({ a: [{ kind: "status", status: "succeeded" }] }),
+      });
+      expect(code).toBe(1);
+      expect(err.text()).toMatch(/Another minifac run is in progress/);
+    });
+
+    it("--in-place claims a lock but skips worktree creation", async () => {
+      const dir = await makeFixtureDir();
+      await writeFixture(dir, "examples/hello.yaml", NONE_FACTORY);
+      const out = new BufferStream();
+      const err = new BufferStream();
+      const code = await runCli(["run", "--in-place", "hello"], {
+        stdout: out,
+        stderr: err,
+        runCwd: dir,
+        buildRegistry: fakeRegistry({ a: [{ kind: "status", status: "succeeded" }] }),
+      });
+      expect(code).toBe(0);
+      // No worktrees dir should be created under home
+      let createdWorktrees = false;
+      try {
+        const e = await readdir(path.join(home, "worktrees"));
+        createdWorktrees = e.length > 0;
+      } catch {
+        createdWorktrees = false;
+      }
+      expect(createdWorktrees).toBe(false);
+    });
+
+    it("brief `mode: in-place` is equivalent to --in-place", async () => {
+      const dir = await makeFixtureDir();
+      await writeFixture(dir, "examples/sdd.yaml", REQUIRED_FACTORY);
+      await writeFixture(
+        dir,
+        "inputs/foo.md",
+        `---
+change: foo
+factory: sdd
+mode: in-place
+---
+`,
+      );
+      const out = new BufferStream();
+      const err = new BufferStream();
+      const code = await runCli(["run", "foo"], {
+        stdout: out,
+        stderr: err,
+        runCwd: dir,
+        buildRegistry: fakeRegistry({ a: [{ kind: "status", status: "succeeded" }] }),
+      });
+      expect(code).toBe(0);
+    });
+
+    it("emits a final stderr summary line on success and on failure", async () => {
+      const dir = await makeFixtureDir();
+      await writeFixture(dir, "examples/hello.yaml", NONE_FACTORY);
+      const outOk = new BufferStream();
+      const errOk = new BufferStream();
+      await runCli(["run", "--in-place", "hello"], {
+        stdout: outOk,
+        stderr: errOk,
+        runCwd: dir,
+        buildRegistry: fakeRegistry({ a: [{ kind: "status", status: "succeeded" }] }),
+      });
+      expect(errOk.text()).toMatch(/\[run\] succeeded cwd=/);
+
+      const outFail = new BufferStream();
+      const errFail = new BufferStream();
+      await runCli(["run", "--in-place", "hello"], {
+        stdout: outFail,
+        stderr: errFail,
+        runCwd: dir,
+        buildRegistry: fakeRegistry({ a: [{ kind: "status", status: "failed" }] }),
+      });
+      expect(errFail.text()).toMatch(/\[run\] failed cwd=/);
+    });
+  });
+
+  describe("prune subcommand", () => {
+    it("no flags prints a summary and exits 0", async () => {
+      const dir = await makeFixtureDir();
+      const out = new BufferStream();
+      const err = new BufferStream();
+      const code = await runCli(["prune"], {
+        stdout: out,
+        stderr: err,
+        runCwd: dir,
+      });
+      expect(code).toBe(0);
+      expect(out.text()).toMatch(/Pruned: merged-old=0/);
+    });
+
+    it("--older-than nonsense is a usage error (exit 1)", async () => {
+      const dir = await makeFixtureDir();
+      const out = new BufferStream();
+      const err = new BufferStream();
+      const code = await runCli(["prune", "--older-than", "nonsense"], {
+        stdout: out,
+        stderr: err,
+        runCwd: dir,
+      });
+      expect(code).toBe(1);
+      expect(err.text()).toMatch(/Invalid --older-than/);
+    });
+
+    it("accepts --all --failed --older-than 30d", async () => {
+      const dir = await makeFixtureDir();
+      const out = new BufferStream();
+      const err = new BufferStream();
+      const code = await runCli(["prune", "--all", "--failed", "--older-than", "30d"], {
+        stdout: out,
+        stderr: err,
+        runCwd: dir,
+      });
+      expect(code).toBe(0);
+      expect(out.text()).toMatch(/Pruned:/);
+    });
   });
 });

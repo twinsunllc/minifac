@@ -77,11 +77,7 @@ export async function claimLock(lockPath: string): Promise<LockHandle> {
     if (code === "ENOENT") {
       // Raced — the file disappeared between create and read. Retry.
       if (await exclusiveCreate(lockPath, pid)) return makeHandle(lockPath);
-      throw new LockHeldError(
-        `Lock at ${lockPath} is contended`,
-        0,
-        lockPath,
-      );
+      throw new LockHeldError(`Lock at ${lockPath} is contended`, 0, lockPath);
     }
     throw err;
   }
@@ -98,11 +94,7 @@ export async function claimLock(lockPath: string): Promise<LockHandle> {
     return makeHandle(lockPath);
   }
 
-  throw new LockHeldError(
-    `Lock is held by PID ${parsed} at ${lockPath}`,
-    parsed,
-    lockPath,
-  );
+  throw new LockHeldError(`Lock is held by PID ${parsed} at ${lockPath}`, parsed, lockPath);
 }
 
 function makeHandle(lockPath: string): LockHandle {

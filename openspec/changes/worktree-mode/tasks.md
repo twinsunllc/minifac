@@ -144,21 +144,21 @@
 
 ## 4. CLI sequencing in `src/cli.ts`
 
-- [ ] 4.1 Add a `--in-place` flag to the `run` subcommand parser.
-- [ ] 4.2 Refactor the `run` action into the documented sequence
+- [x] 4.1 Add a `--in-place` flag to the `run` subcommand parser.
+- [x] 4.2 Refactor the `run` action into the documented sequence
        (resolve → mode → config → lazy-prune (worktree mode only)
        → claim lock → create worktree (worktree mode only) →
        invoke runner with `runCwd` → finally(journal if failed +
        release lock + final stderr summary line)). Lock key is
        `<repo-hash>-<change>` for brief-driven, or
        `<repo-hash>-<factory.name>-<timestamp>` for brief-less.
-- [ ] 4.3 Add a `prune` subcommand. Flags: `--all`, `--merged`,
+- [x] 4.3 Add a `prune` subcommand. Flags: `--all`, `--merged`,
        `--older-than <duration>`, `--failed`. Parse
        `--older-than` as `<int><m|h|d>`; usage error on a bad
        value. Delegate to `pruneWorktrees`. Print a one-line
        summary; exit 0 on successful processing, even if zero
        removed.
-- [ ] 4.4 Update `src/cli.test.ts` to cover the new flows. New
+- [x] 4.4 Update `src/cli.test.ts` to cover the new flows. New
        cases: `--in-place` skips worktree creation but claims a
        lock; brief `mode: "in-place"` is equivalent to the flag;
        lock conflict on second concurrent invocation; final
@@ -168,7 +168,7 @@
        paths are tested, use a temp-dir based config override (a
        new helper, or environment override of `worktrees_dir` /
        `locks_dir` in tests).
-- [ ] 4.5 Wire any per-test environment overrides for the home
+- [x] 4.5 Wire any per-test environment overrides for the home
        directory (so tests don't write to the real
        `~/.minifac/`). Acceptable approach: read
        `MINIFAC_HOME` env var when set in `paths.ts` / `config.ts`
@@ -177,37 +177,37 @@
 
 ## 5. Migrate `examples/sdd.yaml` and ship the cwd token
 
-- [ ] 5.1 Replace every per-node `cwd: /path/to/target/repo` (or
+- [x] 5.1 Replace every per-node `cwd: /path/to/target/repo` (or
        similar hand-edited placeholder) in `examples/sdd.yaml`
        with `cwd: "{{ run.cwd }}"`. Verify the YAML loads via
        `loadFactory` after the edit.
-- [ ] 5.2 Delete `examples/sdd-worktree-mode.yaml` (the
+- [x] 5.2 Delete `examples/sdd-worktree-mode.yaml` (the
        transitional dogfood copy is obsoleted by `{{ run.cwd }}`).
-- [ ] 5.3 Update `src/factory/sdd-example.test.ts` structural
+- [x] 5.3 Update `src/factory/sdd-example.test.ts` structural
        assertions: each node's `cwd === "{{ run.cwd }}"`; no
        node's `cwd` contains `/path/to/target/repo`.
 
 ## 6. Documentation
 
-- [ ] 6.1 Update `docs/concepts/Factory.md` with a "Templating
+- [x] 6.1 Update `docs/concepts/Factory.md` with a "Templating
        tokens" section that names the recognized namespaces
        (`brief`, `run`), the per-namespace field sets, the target
        fields (`with.prompt`, `cwd`), and the unknown-token
        pass-through rule.
-- [ ] 6.2 Add a paragraph to `examples/sdd.md` describing the new
+- [x] 6.2 Add a paragraph to `examples/sdd.md` describing the new
        worktree-by-default behavior: `minifac run <brief>` creates
        a worktree, all nodes run there via `{{ run.cwd }}`, the
        branch and worktree live until the operator merges or
        prunes. Reference `minifac prune` for cleanup and
        `--in-place` for the read-only/CI escape hatch.
-- [ ] 6.3 Update `README.md`'s "Run the example" section to
+- [x] 6.3 Update `README.md`'s "Run the example" section to
        mention the worktree-by-default flow and the optional
        `--in-place` opt-out.
 
 ## 7. Validation
 
-- [ ] 7.1 Run `openspec validate worktree-mode --strict` (or just
+- [x] 7.1 Run `openspec validate worktree-mode --strict` (or just
        `openspec validate worktree-mode`) and address any issues.
-- [ ] 7.2 Run the existing project test suite (`npm test` /
+- [x] 7.2 Run the existing project test suite (`npm test` /
        `vitest`) and confirm all pre-existing tests still pass
        alongside the new ones.

@@ -68,6 +68,7 @@ describe("pruneWorktrees", () => {
   });
 
   afterEach(() => {
+    // biome-ignore lint/performance/noDelete: env var must be unset, not assigned undefined
     if (savedHome === undefined) delete process.env.MINIFAC_HOME;
     else process.env.MINIFAC_HOME = savedHome;
   });

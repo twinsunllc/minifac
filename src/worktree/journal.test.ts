@@ -2,7 +2,7 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { appendFailedRun, readFailedRuns, type FailedRunEntry } from "./journal.js";
+import { type FailedRunEntry, appendFailedRun, readFailedRuns } from "./journal.js";
 
 describe("failed-runs journal", () => {
   let savedHome: string | undefined;
@@ -15,6 +15,7 @@ describe("failed-runs journal", () => {
   });
 
   afterEach(() => {
+    // biome-ignore lint/performance/noDelete: env var must be unset, not assigned undefined
     if (savedHome === undefined) delete process.env.MINIFAC_HOME;
     else process.env.MINIFAC_HOME = savedHome;
   });
@@ -50,10 +51,7 @@ describe("failed-runs journal", () => {
     // Hand-seed a 1000-entry file to skip the slow 1000-append loop.
     const seeded: FailedRunEntry[] = [];
     for (let i = 0; i < 1000; i++) seeded.push(sampleEntry(i));
-    await writeFile(
-      path.join(home, "failed-runs.json"),
-      JSON.stringify({ entries: seeded }),
-    );
+    await writeFile(path.join(home, "failed-runs.json"), JSON.stringify({ entries: seeded }));
     await appendFailedRun(sampleEntry("new"));
     const entries = await readFailedRuns();
     expect(entries).toHaveLength(1000);

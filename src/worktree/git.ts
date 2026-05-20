@@ -46,7 +46,7 @@ async function runOrThrow(cwd: string, args: readonly string[]): Promise<string>
   const res = await run(cwd, args);
   if (res.exitCode !== 0) {
     throw new GitError(
-      `git ${args.join(" ")} failed: ${res.stderr.trim() || "exit " + res.exitCode}`,
+      `git ${args.join(" ")} failed: ${res.stderr.trim() || `exit ${res.exitCode}`}`,
       `git ${args.join(" ")}`,
       res.stderr,
       res.exitCode,
@@ -79,10 +79,7 @@ export async function gitWorktreeAdd(
   await runOrThrow(repoCwd, ["worktree", "add", "-b", branch, dir, baseRev]);
 }
 
-export async function gitWorktreeRemoveForce(
-  repoCwd: string,
-  dir: string,
-): Promise<void> {
+export async function gitWorktreeRemoveForce(repoCwd: string, dir: string): Promise<void> {
   await runOrThrow(repoCwd, ["worktree", "remove", "--force", dir]);
 }
 
@@ -153,13 +150,7 @@ export async function gitBranchMerged(
   if (tipSubject.exitCode !== 0) return false;
   const subject = tipSubject.stdout.trim();
   if (subject.length === 0) return false;
-  const search = await run(repoCwd, [
-    "log",
-    "--pretty=%s",
-    "-n",
-    "200",
-    defaultBranch,
-  ]);
+  const search = await run(repoCwd, ["log", "--pretty=%s", "-n", "200", defaultBranch]);
   if (search.exitCode !== 0) return false;
   const defaultSubjects = search.stdout.split(/\r?\n/).map((l) => l.trim());
   return defaultSubjects.includes(subject);

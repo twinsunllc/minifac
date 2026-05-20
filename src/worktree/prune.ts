@@ -1,4 +1,4 @@
-import { readdir, readFile, rm, stat } from "node:fs/promises";
+import { readFile, readdir, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import type { WorktreeConfig } from "./config.js";
 import {
@@ -154,7 +154,9 @@ export async function pruneWorktrees(input: PruneInput): Promise<PruneCounts> {
   }
 
   const failed = await readFailedRuns();
-  const failedDirs = new Set(failed.filter((f) => f.status !== "succeeded").map((f) => f.worktreeDir));
+  const failedDirs = new Set(
+    failed.filter((f) => f.status !== "succeeded").map((f) => f.worktreeDir),
+  );
 
   let defaultBranch: string | undefined;
   try {
@@ -174,7 +176,7 @@ export async function pruneWorktrees(input: PruneInput): Promise<PruneCounts> {
   };
 
   const startedAt = Date.now();
-  const budgetMs = options.lazy ? options.budgetMs ?? 200 : Number.POSITIVE_INFINITY;
+  const budgetMs = options.lazy ? (options.budgetMs ?? 200) : Number.POSITIVE_INFINITY;
 
   for (const name of entries) {
     if (Date.now() - startedAt > budgetMs) break;

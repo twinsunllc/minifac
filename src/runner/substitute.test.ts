@@ -93,9 +93,9 @@ describe("substitute (Substitutions record)", () => {
       body: "",
       sourcePath: "/x.md",
     };
-    expect(
-      substitute("{{ brief.change }}@{{ run.cwd }}", { brief: b, run: { cwd: "/wt" } }),
-    ).toBe("foo@/wt");
+    expect(substitute("{{ brief.change }}@{{ run.cwd }}", { brief: b, run: { cwd: "/wt" } })).toBe(
+      "foo@/wt",
+    );
   });
 
   it("tolerates whitespace around run.<field>", () => {

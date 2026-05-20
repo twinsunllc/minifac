@@ -137,6 +137,18 @@ describe("examples/sdd.yaml", () => {
     expect(archive as string, "archive mentions git commit").toContain("git commit");
   });
 
+  it('declares cwd: "{{ run.cwd }}" on every node (no hand-edited placeholder)', async () => {
+    const { factory } = await loadFactory(sddPath);
+    for (const id of ["propose", "apply", "verify", "archive"] as const) {
+      const node = factory.nodes[id];
+      expect(node, `node ${id} should be defined`).toBeDefined();
+      expect(node?.cwd).toBe("{{ run.cwd }}");
+    }
+    for (const node of Object.values(factory.nodes)) {
+      expect(node.cwd ?? "").not.toContain("/path/to/target/repo");
+    }
+  });
+
   it("pins the archive commit subject-line convention", async () => {
     const { factory } = await loadFactory(sddPath);
     const prompt = factory.nodes.archive?.with?.prompt;

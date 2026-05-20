@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { loadWorktreeConfig, WorktreeConfigError } from "./config.js";
+import { WorktreeConfigError, loadWorktreeConfig } from "./config.js";
 
 async function makeDir(prefix: string): Promise<string> {
   return await mkdtemp(path.join(tmpdir(), prefix));
@@ -21,6 +21,7 @@ describe("loadWorktreeConfig", () => {
   });
 
   afterEach(() => {
+    // biome-ignore lint/performance/noDelete: env var must be unset, not assigned undefined
     if (savedHome === undefined) delete process.env.MINIFAC_HOME;
     else process.env.MINIFAC_HOME = savedHome;
   });
@@ -104,12 +105,9 @@ default_branch: develop
   });
 
   it("rejects per-repo `default_branch` taking precedence over global", async () => {
-    await writeFile(path.join(home, "config.yaml"), `default_branch: main\n`);
+    await writeFile(path.join(home, "config.yaml"), "default_branch: main\n");
     await mkdir(path.join(repo, ".minifac"), { recursive: true });
-    await writeFile(
-      path.join(repo, ".minifac", "config.yaml"),
-      `default_branch: trunk\n`,
-    );
+    await writeFile(path.join(repo, ".minifac", "config.yaml"), "default_branch: trunk\n");
     const cfg = await loadWorktreeConfig(repo);
     expect(cfg.defaultBranch).toBe("trunk");
   });

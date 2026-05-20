@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { mkdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { Command } from "commander";
 import { BriefLoadError } from "./brief/loader.js";
@@ -8,30 +9,25 @@ import { ExecutorRegistry } from "./executor/registry.js";
 import { FactoryLoadError, loadFactory } from "./factory/loader.js";
 import { runFactory } from "./runner/run.js";
 import { type DaemonHandle, startDaemon } from "./serve/server.js";
+import { WorktreeConfigError, loadWorktreeConfig } from "./worktree/config.js";
+import { GitError, gitRevParseHead, gitWorktreeAdd } from "./worktree/git.js";
+import { appendFailedRun } from "./worktree/journal.js";
+import { type LockHandle, LockHeldError, claimLock } from "./worktree/lock.js";
+import {
+  computeRepoHash,
+  lockPathForKey,
+  worktreeKeyForBrief,
+  worktreeKeyForFactory,
+  worktreePathForKey,
+} from "./worktree/paths.js";
+import { type PruneOptions, parseOlderThan, pruneWorktrees } from "./worktree/prune.js";
 
 export interface CliIO {
   stdout: NodeJS.WritableStream;
   stderr: NodeJS.WritableStream;
-  /**
-   * Optional injectable factory for the executor registry. Useful for tests
-   * that don't want the real Claude executor wired up.
-   */
   buildRegistry?: () => ExecutorRegistry;
-  /**
-   * Optional override for the daemon-start function (tests). When set, the
-   * `serve` subcommand calls this instead of the real `startDaemon`.
-   */
   startDaemon?: typeof startDaemon;
-  /**
-   * When true, the `serve` subcommand returns immediately after the daemon
-   * is listening instead of waiting for SIGINT/SIGTERM. Tests use this.
-   */
   serveReturnImmediately?: boolean;
-  /**
-   * Optional override for the cwd the `run` subcommand resolves arguments
-   * against. Defaults to `process.cwd()`. Tests use this so the
-   * lookup-precedence rules can be exercised against a fixture directory.
-   */
   runCwd?: string;
 }
 
@@ -41,10 +37,31 @@ function defaultRegistry(): ExecutorRegistry {
   return reg;
 }
 
-/**
- * Internal entry — returns the exit code instead of calling process.exit so
- * it's testable.
- */
+function describeError(err: unknown, io: CliIO): void {
+  if (err instanceof FactoryLoadError) {
+    const loc = err.location
+      ? ` (line ${err.location.line}${err.location.col ? `, col ${err.location.col}` : ""})`
+      : "";
+    io.stderr.write(`Error loading factory ${err.sourcePath}${loc}: ${err.message}\n`);
+  } else if (err instanceof BriefLoadError) {
+    const loc = err.location
+      ? ` (line ${err.location.line}${err.location.col ? `, col ${err.location.col}` : ""})`
+      : "";
+    io.stderr.write(`Error loading brief ${err.sourcePath}${loc}: ${err.message}\n`);
+  } else if (err instanceof RunArgResolutionError) {
+    io.stderr.write(`${err.message}\n`);
+  } else if (err instanceof WorktreeConfigError) {
+    const loc = err.location
+      ? ` (line ${err.location.line}${err.location.col ? `, col ${err.location.col}` : ""})`
+      : "";
+    io.stderr.write(`Error loading minifac config ${err.sourcePath}${loc}: ${err.message}\n`);
+  } else if (err instanceof GitError) {
+    io.stderr.write(`Error: ${err.message}\n`);
+  } else {
+    io.stderr.write(`Error: ${(err as Error).message}\n`);
+  }
+}
+
 export async function runCli(argv: readonly string[], io: CliIO): Promise<number> {
   const program = new Command();
   program
@@ -63,13 +80,18 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
     .command("run")
     .description("Run a factory by brief path, brief name, or factory name.")
     .argument("<thing>", "brief path, brief name, or factory name")
-    .action(async (arg: string) => {
+    .option("--in-place", "Skip worktree creation; run the factory in the current cwd")
+    .action(async (arg: string, opts: { inPlace?: boolean }) => {
       const cwd = io.runCwd ?? process.cwd();
+      let lock: LockHandle | undefined;
+      let runCwd: string | undefined;
+
       try {
         const resolved = await resolveRunArg(arg, cwd);
         const loaded = await loadFactory(resolved.factoryPath);
         const factoryName = loaded.factory.name;
         const briefMode = loaded.factory.brief;
+        const brief = resolved.kind === "brief" ? resolved.brief : undefined;
 
         if (resolved.kind === "brief" && briefMode === "none") {
           io.stderr.write(
@@ -86,10 +108,84 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
           return;
         }
 
+        const briefMode_inPlace =
+          brief !== undefined && (brief.frontmatter as { mode?: string }).mode === "in-place";
+        const inPlace = opts.inPlace === true || briefMode_inPlace;
+
+        const config = await loadWorktreeConfig(cwd);
+        const repoHash = await computeRepoHash(cwd);
+        let key: string;
+        let branchName: string;
+        if (brief) {
+          key = worktreeKeyForBrief(repoHash, brief.frontmatter.change);
+          branchName = brief.frontmatter.change;
+        } else {
+          const timestamp = Date.now();
+          key = worktreeKeyForFactory(repoHash, factoryName, timestamp);
+          branchName = `${factoryName}-${timestamp.toString(36)}`;
+        }
+
+        // Lazy-prune (worktree mode only). Best-effort; failures don't
+        // stop the run.
+        if (!inPlace) {
+          try {
+            await pruneWorktrees({
+              config,
+              callerRepoCwd: cwd,
+              options: { lazy: true },
+            });
+          } catch {
+            // swallow per spec — explicit `minifac prune` carries the cost.
+          }
+        }
+
+        // Claim lock BEFORE worktree creation.
+        const lockPath = lockPathForKey(config, key);
+        try {
+          lock = await claimLock(lockPath);
+        } catch (err) {
+          if (err instanceof LockHeldError) {
+            io.stderr.write(
+              `Another minifac run is in progress for key \`${key}\` (PID ${err.holdingPid}, lockfile ${err.lockPath}).\n`,
+            );
+            exitCode = 1;
+            return;
+          }
+          throw err;
+        }
+
+        if (inPlace) {
+          runCwd = cwd;
+        } else {
+          const wtPath = worktreePathForKey(config, key);
+          let baseRev: string;
+          if (brief?.frontmatter.base_branch && brief.frontmatter.base_branch.length > 0) {
+            baseRev = brief.frontmatter.base_branch;
+          } else {
+            try {
+              baseRev = await gitRevParseHead(cwd);
+            } catch (err) {
+              io.stderr.write(`Could not resolve HEAD in ${cwd}: ${(err as Error).message}\n`);
+              exitCode = 1;
+              return;
+            }
+          }
+          try {
+            await mkdir(config.worktreesDir, { recursive: true });
+            await gitWorktreeAdd(cwd, wtPath, branchName, baseRev);
+          } catch (err) {
+            io.stderr.write(`Failed to create worktree at ${wtPath}: ${(err as Error).message}\n`);
+            exitCode = 1;
+            return;
+          }
+          runCwd = wtPath;
+        }
+
         const registry = (io.buildRegistry ?? defaultRegistry)();
         const result = await runFactory(loaded, {
           registry,
-          brief: resolved.kind === "brief" ? resolved.brief : undefined,
+          brief,
+          runCwd,
           onEvent: (entry) => {
             const prefix = `[${entry.nodeId}]`;
             const e = entry.event;
@@ -103,48 +199,121 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
           },
         });
 
+        let runStatus: "succeeded" | "failed" = "succeeded";
         if (result.status === "succeeded") {
           exitCode = 0;
-          return;
-        }
-        switch (result.reason) {
-          case "budget_exhausted":
-            exitCode = 3;
-            io.stderr.write(
-              `Run failed: budget exhausted${result.proximateNodeId ? ` at node "${result.proximateNodeId}"` : ""}\n`,
-            );
-            return;
-          case "node_failed":
-          case "graph_drained":
-          case "unknown_executor":
-            exitCode = 2;
-            io.stderr.write(
-              `Run failed: ${result.reason}${result.proximateNodeId ? ` at node "${result.proximateNodeId}"` : ""}\n`,
-            );
-            return;
-          default:
-            exitCode = 2;
-            return;
-        }
-      } catch (err) {
-        if (err instanceof FactoryLoadError) {
-          const loc = err.location
-            ? ` (line ${err.location.line}${err.location.col ? `, col ${err.location.col}` : ""})`
-            : "";
-          io.stderr.write(`Error loading factory ${err.sourcePath}${loc}: ${err.message}\n`);
-        } else if (err instanceof BriefLoadError) {
-          const loc = err.location
-            ? ` (line ${err.location.line}${err.location.col ? `, col ${err.location.col}` : ""})`
-            : "";
-          io.stderr.write(`Error loading brief ${err.sourcePath}${loc}: ${err.message}\n`);
-        } else if (err instanceof RunArgResolutionError) {
-          io.stderr.write(`${err.message}\n`);
         } else {
-          io.stderr.write(`Error: ${(err as Error).message}\n`);
+          runStatus = "failed";
+          switch (result.reason) {
+            case "budget_exhausted":
+              exitCode = 3;
+              io.stderr.write(
+                `Run failed: budget exhausted${result.proximateNodeId ? ` at node "${result.proximateNodeId}"` : ""}\n`,
+              );
+              break;
+            case "node_failed":
+            case "graph_drained":
+            case "unknown_executor":
+              exitCode = 2;
+              io.stderr.write(
+                `Run failed: ${result.reason}${result.proximateNodeId ? ` at node "${result.proximateNodeId}"` : ""}\n`,
+              );
+              break;
+            default:
+              exitCode = 2;
+              break;
+          }
+          try {
+            await appendFailedRun({
+              worktreeDir: runCwd,
+              status: "failed",
+              endedAt: new Date().toISOString(),
+              reason: result.reason,
+            });
+          } catch {
+            // journal errors are non-fatal
+          }
         }
+
+        // Final stderr summary line (always emit, success or failure).
+        io.stderr.write(`[run] ${runStatus} cwd=${runCwd}\n`);
+      } catch (err) {
+        describeError(err, io);
         exitCode = 1;
+      } finally {
+        if (lock) {
+          try {
+            await lock.release();
+          } catch {
+            // best effort
+          }
+        }
       }
     });
+
+  program
+    .command("prune")
+    .description(
+      "Prune worktrees per the hybrid policy. See docs/decisions/0010-Worktree-Cleanup-Hybrid.md.",
+    )
+    .option(
+      "--all",
+      "Remove fresh, merged-old, and unmerged-old worktrees (does not touch failed by default)",
+    )
+    .option(
+      "--merged",
+      "Remove worktrees whose branch has merged to the default branch (default policy)",
+    )
+    .option(
+      "--older-than <duration>",
+      "Override the age cutoff. Format: <int><m|h|d>, e.g. 7d, 12h, 30m",
+    )
+    .option("--failed", "Also remove worktrees from failed runs")
+    .action(
+      async (opts: {
+        all?: boolean;
+        merged?: boolean;
+        olderThan?: string;
+        failed?: boolean;
+      }) => {
+        const cwd = io.runCwd ?? process.cwd();
+        try {
+          let olderThan: { value: number; unit: "m" | "h" | "d" } | undefined;
+          if (opts.olderThan) {
+            try {
+              olderThan = parseOlderThan(opts.olderThan);
+            } catch (err) {
+              io.stderr.write(`${(err as Error).message}\n`);
+              exitCode = 1;
+              return;
+            }
+          }
+          const config = await loadWorktreeConfig(cwd);
+          const options: PruneOptions = {};
+          if (opts.all) options.all = true;
+          if (opts.merged) options.merged = true;
+          if (opts.failed) options.failed = true;
+          if (olderThan) options.olderThan = olderThan;
+
+          const counts = await pruneWorktrees({
+            config,
+            callerRepoCwd: cwd,
+            options,
+          });
+
+          io.stdout.write(
+            `Pruned: merged-old=${counts.removed["merged-old"]}, unmerged-old=${counts.removed["unmerged-old"]}, fresh=${counts.removed.fresh}, failed=${counts.removed.failed}\n`,
+          );
+          for (const e of counts.errors) {
+            io.stderr.write(`Failed to remove ${e.dir}: ${e.message}\n`);
+          }
+          exitCode = 0;
+        } catch (err) {
+          describeError(err, io);
+          exitCode = 1;
+        }
+      },
+    );
 
   program
     .command("serve")
@@ -189,8 +358,6 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
   try {
     await program.parseAsync(argv, { from: "user" });
   } catch (err) {
-    // commander.exitOverride throws CommanderError on --help, --version, or
-    // usage errors. Map them: --help and --version exit 0; everything else 1.
     const ce = err as { code?: string; exitCode?: number; message?: string };
     if (
       ce.code === "commander.helpDisplayed" ||
@@ -206,8 +373,6 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
   return exitCode;
 }
 
-// Direct invocation guard. When running as the bin entrypoint, parse argv and
-// exit with the returned code.
 const isMain = (() => {
   try {
     const here = fileURLToPath(import.meta.url);

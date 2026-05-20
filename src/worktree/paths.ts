@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
-import { gitRemoteOriginUrl } from "./git.js";
 import type { WorktreeConfig } from "./config.js";
+import { gitRemoteOriginUrl } from "./git.js";
 
 /**
  * 8 lowercase hex chars of `sha256(repo-identity)` where `repo-identity` is

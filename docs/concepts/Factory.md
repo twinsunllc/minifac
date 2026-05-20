@@ -26,6 +26,26 @@ canonical templates like `minifac:sdd`) or in
 - **[[Cycle]]s** are first-class but must be bounded — see
   [[0002-Cycles-First-Class]].
 
+## Templating tokens
+
+A node's `with.prompt` (when a string) and `cwd` fields accept template
+tokens substituted by the runner just before dispatch. The token grammar
+is `{{ <ns>.<field> }}` with optional whitespace inside the braces.
+
+Recognized namespaces:
+
+- `brief.*` — sourced from the [[Brief]] in scope (when one is). Known
+  fields: `change`, `body`, `factory`, `base_branch`, `model`. Optional
+  fields substitute the empty string when absent; unknown identifiers
+  pass through verbatim.
+- `run.*` — sourced from the [[Run]]. Today the only resolved field is
+  `run.cwd`, which expands to the path of the [[Worktree]] minifac
+  created for this run (or `process.cwd()` under `--in-place`).
+
+Tokens with no resolvable value in the current run pass through
+verbatim — the executor sees the literal string. Substitution applies
+to **both** `with.prompt` and `cwd`; other node fields are not touched.
+
 ## Composition
 
 Repos consume factories by referencing them from a [[Brief]]. A brief's
