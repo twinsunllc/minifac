@@ -99,4 +99,20 @@ describe("examples/sdd.yaml", () => {
       );
     }
   });
+
+  it("instructs the archive node to commit the archive moves", async () => {
+    const { factory } = await loadFactory(sddPath);
+    const prompt = factory.nodes.archive?.with?.prompt;
+    expect(typeof prompt, "archive prompt should be a string").toBe("string");
+    expect(prompt as string, "archive prompt should mention git commit").toContain("git commit");
+  });
+
+  it("pins the archive commit subject-line convention", async () => {
+    const { factory } = await loadFactory(sddPath);
+    const prompt = factory.nodes.archive?.with?.prompt;
+    expect(typeof prompt, "archive prompt should be a string").toBe("string");
+    expect(prompt as string, "archive prompt should mention Archive: subject").toContain(
+      "Archive:",
+    );
+  });
 });

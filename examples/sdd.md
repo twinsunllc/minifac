@@ -46,6 +46,20 @@ commands wired up (typically `npm test`, `npm run build`,
 > below). The binding contract lives in
 > `openspec/specs/sdd-factory/spec.md`.
 
+> **Migration note for old copies (archive commit).** If you copied
+> `examples/sdd.yaml` before the `sdd-factory-archive-commits`
+> change, your archive node will run `openspec archive <CHANGE_NAME>`
+> cleanly and emit `MINIFAC_STATUS: succeeded`, but it will leave
+> the resulting moves and spec folds uncommitted in your target
+> repo's working tree. The fix is one edit: rewrite the archive
+> node's prompt so that, after `openspec archive` exits 0 and before
+> the sentinel, it runs `git add -A` followed by
+> `git commit -m "Archive: <CHANGE_NAME>"` (with a short body and
+> the `Co-Authored-By:` trailer). Treat a commit failure as a node
+> failure. The binding contract lives in
+> `openspec/specs/sdd-factory/spec.md`; the shipped
+> `examples/sdd.yaml` is the reference implementation.
+
 ## Per-node contract
 
 Each node is binding at the contract level — responsibility, OpenSpec
@@ -99,12 +113,33 @@ holds. The binding version lives in
 ### archive
 
 - **Inputs:** full prior run via `ctx.history`.
-- **Invokes:** `openspec archive <CHANGE_NAME>`.
-- **Success signal:** archive exits 0; final assistant message ends
-  with `MINIFAC_STATUS: succeeded`. This is the terminal node —
-  success ends the run.
+- **Invokes (in strict order):**
+  1. `openspec archive <CHANGE_NAME>`.
+  2. If and only if step 1 exited 0, `git add -A` followed by
+     `git commit -m "Archive: <CHANGE_NAME>"` with a 2–3 line body
+     summarising which capability specs were folded and which change
+     directory was moved into `openspec/changes/archive/`, plus the
+     repo-standard `Co-Authored-By: Claude Opus 4.7 (1M context)
+     <noreply@anthropic.com>` trailer.
+
+  The commit step is part of the node's contract, not an
+  afterthought: `openspec archive` rewrites files on disk and moves
+  the change directory, but it does not stage or commit. Without the
+  commit, a successful run leaves the target repo's working tree
+  dirty for the next loop to inherit and a human to disentangle.
+- **Does not invoke:** `git push`. The factory never pushes; that is
+  a human decision.
+- **Success signal:** both `openspec archive` and the subsequent
+  `git commit` exit 0; final assistant message ends with
+  `MINIFAC_STATUS: succeeded`. This is the terminal node — success
+  ends the run.
 - **Failure signal:** final assistant message ends with
-  `MINIFAC_STATUS: failed` followed by `REASON: <archive error>`.
+  `MINIFAC_STATUS: failed` followed by `REASON: <step that failed +
+  its error>`. The failure path covers both `openspec archive`
+  errors and `git commit` errors (e.g. a target-repo pre-commit hook
+  rejecting the commit). A hook rejection at this stage is a human
+  concern — there is no `on_failure` edge from `archive` and adding
+  one would be the wrong fix.
 
 ## Status signaling
 

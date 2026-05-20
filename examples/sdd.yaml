@@ -146,8 +146,32 @@ nodes:
         <CHANGE_NAME>. Verify has passed. Prior node output is in your
         run-wide history.
 
-        Run `openspec archive <CHANGE_NAME>`. This is the terminal
-        node — success here ends the run.
+        Do all of the following, in this strict order:
+
+        1. Run `openspec archive <CHANGE_NAME>`. This moves the change
+           directory from `openspec/changes/<CHANGE_NAME>/` to
+           `openspec/changes/archive/<dated>-<CHANGE_NAME>/` and folds
+           the change's spec deltas into
+           `openspec/specs/<capability>/spec.md`.
+        2. If and only if step 1 exited 0, stage and commit the
+           resulting file moves and spec folds:
+
+               git add -A
+               git commit -m "$(cat <<'EOF'
+               Archive: <CHANGE_NAME>
+
+               <2–3 line body summarising which capability specs were
+               folded and which change directory was moved into
+               openspec/changes/archive/>.
+
+               Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+               EOF
+               )"
+
+           If step 1 exited non-zero, do not attempt the commit.
+
+        Do not push. This is a terminal node — success here ends the
+        run; pushing to a remote is a human decision.
 
         ## Status signaling
 
@@ -156,17 +180,20 @@ nodes:
         decide whether to schedule the next node; it does not look at
         your CLI exit code.
 
-        - On success (`openspec archive <CHANGE_NAME>` exited 0), end
-          your final message with exactly this line and nothing after
-          it:
+        - On success (`openspec archive <CHANGE_NAME>` exited 0 AND
+          the subsequent `git commit` exited 0), end your final
+          message with exactly this line and nothing after it:
 
               MINIFAC_STATUS: succeeded
 
-        - On failure (the archive command errored), end your final
-          message with exactly these two lines and nothing after them:
+        - On failure (either `openspec archive` exited non-zero, or
+          the `git commit` exited non-zero — for example because a
+          pre-commit hook in the target repo rejected the commit),
+          end your final message with exactly these two lines and
+          nothing after them:
 
               MINIFAC_STATUS: failed
-              REASON: <one-line description naming the archive error>
+              REASON: <one-line description naming which step (openspec archive or git commit) failed and the relevant error>
 
         The sentinel must be the last thing in your message.
 
