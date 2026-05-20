@@ -192,7 +192,7 @@ shape to author against.
   describes invoking the factory by change name through the verb
   `minifac run <change>`
 
-### Requirement: SDD factory is invoked by brief, not by hand-edited copy
+### Requirement: SDD factory is the documented template, not a runnable singleton
 
 The shipped `examples/sdd.yaml` SHALL NOT be a hand-edited template.
 Users SHALL invoke the SDD factory by:
