@@ -82,7 +82,7 @@ export async function runBriefAutomated(
   const change = brief.frontmatter.change;
   const branchName = runBranchName(change, slug);
   const worktreeDirName = runWorktreeDirName(change, slug);
-  const key = worktreeKeyForBrief(repoHash, change);
+  const key = worktreeKeyForBrief(repoHash, change, factoryName);
 
   if (!briefMode_inPlace) {
     try {
