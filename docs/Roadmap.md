@@ -31,39 +31,25 @@ These have ADRs + brief markdown committed; just need a `minifac
 run <change>` to start. Listed roughly in suggested order; nothing
 enforces this beyond explicit `depends_on` fields.
 
-- [ ] **`brief-deps-and-state`** — [[0015-Brief-Deps-and-State]].
-  Two-axis state model (git for briefs, sqlite for runs);
-  `depends_on` field; cycle detection; `minifac briefs` CLI;
-  minifac-owned mark-done post-step. `depends_on:
-  [run-scoped-branches]` — that's already landed, so this is
-  ready.
+- [ ] **`cli-symlink-main-guard`** —
+  [[0023-CLI-Symlink-Main-Guard]]. One-line fix: the `isMain`
+  guard in `src/cli.ts` compares `import.meta.url` (realpath)
+  against `process.argv[1]` (symlink path), so `npm link` /
+  `npx minifac` invocations silently no-op. Switch to a
+  realpath comparison. Hard prerequisite for the
+  open-source-readiness install-path story.
 - [ ] **`factory-override-at-invocation`** —
   [[0020-Factory-Override-At-Invocation]]. `--factory <name>`
   flag on `minifac run`; widens lockfile to (change, factory).
   Unlocks A/B factory comparisons. `depends_on:
   [run-scoped-branches]`.
-- [ ] **`run-tui`** — [[0021-Run-TUI]]. Default TUI for
-  `minifac run`; two-pane layout (status + logs) with `ink`;
-  auto-fallback to raw output on non-TTY; `m` hotkey invokes
-  `minifac merge` inline. Visible quality-of-life payoff on
-  every subsequent dogfood.
-- [ ] **`run-tui-bounded-borders`** —
-  [[0022-Run-TUI-Bounded-Borders]]. Bounded-height
-  (`floor(rows/2)`) bordered layout — fixes the rolling
-  overdraw / flicker and gives the three zones (header, body,
-  hotkey bar) a clear visual frame. Pure presentation; no
-  event-pipeline change. Depends on `run-tui` having landed.
-- [ ] **`reusable-steps`** — [[0018-Reusable-Steps]]. Steps as
-  first-class, versioned, typed-input artifacts that nodes can
-  reference via `uses:`. "GitHub Actions for factories." The
-  most compelling open-source differentiator.
 - [ ] **`callback-status-signaling`** — [[0017-Callback-Status-Signaling]].
   Opt-in HTTP endpoint per node for bidirectional comms. Unblocks
   mid-run human-in-the-loop and the future [[Studio]] chat surface.
 - [ ] **`auto-mode`** — [[0016-Auto-Mode]]. Long-running `minifac
   autorun` polls inputs/ for ready briefs and schedules them.
-  `depends_on: [brief-deps-and-state]` — wait for that to land
-  first.
+  `depends_on: [brief-deps-and-state]` — that has now landed,
+  so this is ready.
 
 ## Open-source readiness (chore tier)
 
@@ -89,6 +75,18 @@ which makes the example library viable):
 
 ## Already landed (newest first)
 
+- ✅ `reusable-steps` — steps as first-class, versioned,
+  typed-input artifacts; nodes reference via `uses:`; the
+  "GitHub Actions for factories" piece
+- ✅ `run-tui-bounded-borders` — bounded-height
+  (`floor(rows/2)`) bordered layout for the TUI; vertical rule
+  between status/log; flicker resolved
+- ✅ `run-tui` — default TUI for `minifac run` via `ink`; two-pane
+  layout, `m` hotkey for inline merge, auto-fallback to raw on
+  non-TTY
+- ✅ `brief-deps-and-state` — two-axis state model (git for
+  briefs, sqlite for runs); `depends_on` + cycle detection;
+  `minifac briefs` CLI; minifac-owned mark-done post-step
 - ✅ `run-scoped-branches` — branches named `run/<change>-<slug>`;
   worktrees mirror; `branch_name` column in runs.db; `minifac
   merge` ship verb; prune deletes branches it owns
