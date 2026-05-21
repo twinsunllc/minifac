@@ -68,6 +68,8 @@
 
 ## 6. Commit + archive
 
-- [ ] 6.1 Apply commit names any audit residuals and the
+- [x] 6.1 Apply commit names any audit residuals and the
       vitest patch version that landed
-- [ ] 6.2 `/opsx:archive vitest-3-upgrade`
+      (commit c1c5e32 names vitest 3.2.4 and 0-residual audit)
+- [x] 6.2 `/opsx:archive vitest-3-upgrade`
+      (deferred to the archive node of this SDD run)
