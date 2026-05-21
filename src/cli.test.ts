@@ -578,7 +578,9 @@ base_branch: main
       const { loadWorktreeConfig } = await import("./worktree/config.js");
       const cfg = await loadWorktreeConfig(repo);
       const hash = await computeRepoHash(repo);
-      const key = worktreeKeyForBrief(hash, "c");
+      // The brief above declares `factory: sdd`; the lockfile key for a
+      // brief-driven run is `<repo-hash>-<change>-<factoryName>`.
+      const key = worktreeKeyForBrief(hash, "c", "sdd");
       const lockPath = lockPathForKey(cfg, key);
       await mkdir(path.dirname(lockPath), { recursive: true });
       await writeFile(lockPath, `${process.pid}\n`, "utf8");
@@ -593,7 +595,7 @@ base_branch: main
       });
       expect(code).toBe(1);
       expect(err.text()).toMatch(/Another minifac run is in progress/);
-      // Clarification + pointer to --factory override doc.
+      // Clarification + pointer to --factory override.
       expect(err.text()).toMatch(/lockfile serializes same-change invocations/);
       expect(err.text()).toMatch(/--factory/);
       expect(err.text()).toMatch(/0020-Factory-Override-At-Invocation/);
@@ -841,6 +843,409 @@ the body
       });
       expect(code).toBe(0);
       expect(captured).toEqual(["from-builtin"]);
+    });
+  });
+
+  describe("--factory override", () => {
+    const SDD_FACTORY = `name: sdd
+brief: required
+nodes:
+  a:
+    executor: test
+    terminal: true
+    with:
+      prompt: from-sdd
+edges: []
+`;
+    const BAR_FACTORY = `name: bar
+brief: required
+nodes:
+  a:
+    executor: test
+    terminal: true
+    with:
+      prompt: from-bar
+edges: []
+`;
+
+    it("no flag — uses brief's declared factory; runs.db row carries declared factory", async () => {
+      const dir = await makeFixtureDir();
+      await writeFixture(dir, "examples/sdd.yaml", SDD_FACTORY);
+      await writeFixture(
+        dir,
+        "inputs/foo.md",
+        `---
+change: foo
+factory: sdd
+mode: in-place
+---
+body
+`,
+      );
+      const captured: string[] = [];
+      const buildRegistry = (): ExecutorRegistry => {
+        const reg = new ExecutorRegistry();
+        const exec: NodeExecutor = {
+          type: "test",
+          async *run(node: ResolvedNode): AsyncIterable<NodeEvent> {
+            captured.push(typeof node.with?.prompt === "string" ? node.with.prompt : "");
+            yield { kind: "status", status: "succeeded" };
+          },
+        };
+        reg.register(exec);
+        return reg;
+      };
+      const out = new BufferStream();
+      const err = new BufferStream();
+      const code = await runCli(["run", "foo"], {
+        stdout: out,
+        stderr: err,
+        runCwd: dir,
+        buildRegistry,
+      });
+      expect(code).toBe(0);
+      expect(captured).toEqual(["from-sdd"]);
+      const { SqliteRunStore } = await import("./storage/sqlite.js");
+      const store = SqliteRunStore.open(path.join(home, "runs.db"));
+      try {
+        const runs = await store.listRuns({ limit: 10 });
+        expect(runs[0]?.factoryName).toBe("sdd");
+      } finally {
+        await store.close();
+      }
+    });
+
+    it("--factory bar — resolves through resolveFactoryByName; brief file unchanged", async () => {
+      const dir = await makeFixtureDir();
+      await writeFixture(dir, "examples/sdd.yaml", SDD_FACTORY);
+      await writeFixture(dir, "examples/bar.yaml", BAR_FACTORY);
+      const briefPath = await writeFixture(
+        dir,
+        "inputs/foo.md",
+        `---
+change: foo
+factory: sdd
+mode: in-place
+---
+body
+`,
+      );
+      const beforeBytes = await readFile(briefPath, "utf8");
+      const captured: string[] = [];
+      const buildRegistry = (): ExecutorRegistry => {
+        const reg = new ExecutorRegistry();
+        const exec: NodeExecutor = {
+          type: "test",
+          async *run(node: ResolvedNode): AsyncIterable<NodeEvent> {
+            captured.push(typeof node.with?.prompt === "string" ? node.with.prompt : "");
+            yield { kind: "status", status: "succeeded" };
+          },
+        };
+        reg.register(exec);
+        return reg;
+      };
+      const out = new BufferStream();
+      const err = new BufferStream();
+      const code = await runCli(["run", "foo", "--factory", "bar"], {
+        stdout: out,
+        stderr: err,
+        runCwd: dir,
+        buildRegistry,
+      });
+      expect(code).toBe(0);
+      expect(captured).toEqual(["from-bar"]);
+      const afterBytes = await readFile(briefPath, "utf8");
+      expect(afterBytes).toBe(beforeBytes);
+      const { SqliteRunStore } = await import("./storage/sqlite.js");
+      const store = SqliteRunStore.open(path.join(home, "runs.db"));
+      try {
+        const runs = await store.listRuns({ limit: 10 });
+        expect(runs[0]?.factoryName).toBe("bar");
+        expect(runs[0]?.factoryPath).toContain("examples/bar.yaml");
+      } finally {
+        await store.close();
+      }
+    });
+
+    it("--factory minifac:sdd skips local lookup and resolves to examples/", async () => {
+      const dir = await makeFixtureDir();
+      await writeFixture(dir, "examples/sdd.yaml", SDD_FACTORY);
+      // A same-named local that would win for the bare form; the `minifac:`
+      // prefix must skip this.
+      await writeFixture(
+        dir,
+        ".minifac/factories/sdd.yaml",
+        `name: sdd
+brief: required
+nodes:
+  a:
+    executor: test
+    terminal: true
+    with:
+      prompt: from-local
+edges: []
+`,
+      );
+      await writeFixture(
+        dir,
+        "inputs/foo.md",
+        `---
+change: foo
+factory: sdd
+mode: in-place
+---
+body
+`,
+      );
+      const captured: string[] = [];
+      const buildRegistry = (): ExecutorRegistry => {
+        const reg = new ExecutorRegistry();
+        const exec: NodeExecutor = {
+          type: "test",
+          async *run(node: ResolvedNode): AsyncIterable<NodeEvent> {
+            captured.push(typeof node.with?.prompt === "string" ? node.with.prompt : "");
+            yield { kind: "status", status: "succeeded" };
+          },
+        };
+        reg.register(exec);
+        return reg;
+      };
+      const out = new BufferStream();
+      const err = new BufferStream();
+      const code = await runCli(["run", "foo", "--factory", "minifac:sdd"], {
+        stdout: out,
+        stderr: err,
+        runCwd: dir,
+        buildRegistry,
+      });
+      expect(code).toBe(0);
+      expect(captured).toEqual(["from-sdd"]);
+      const { SqliteRunStore } = await import("./storage/sqlite.js");
+      const store = SqliteRunStore.open(path.join(home, "runs.db"));
+      try {
+        const runs = await store.listRuns({ limit: 10 });
+        expect(runs[0]?.factoryName).toBe("sdd");
+        expect(runs[0]?.factoryPath).toContain(path.join("examples", "sdd.yaml"));
+      } finally {
+        await store.close();
+      }
+    });
+
+    it("--factory nonexistent — exits 1 naming both paths tried, no lock claimed", async () => {
+      const dir = await makeFixtureDir();
+      await writeFixture(dir, "examples/sdd.yaml", SDD_FACTORY);
+      await writeFixture(
+        dir,
+        "inputs/foo.md",
+        `---
+change: foo
+factory: sdd
+mode: in-place
+---
+body
+`,
+      );
+      const out = new BufferStream();
+      const err = new BufferStream();
+      const code = await runCli(["run", "foo", "--factory", "nonexistent"], {
+        stdout: out,
+        stderr: err,
+        runCwd: dir,
+        buildRegistry: fakeRegistry({}),
+      });
+      expect(code).toBe(1);
+      expect(err.text()).toMatch(/nonexistent/);
+      expect(err.text()).toMatch(/\.minifac\/factories\/nonexistent\.yaml/);
+      expect(err.text()).toMatch(/examples\/nonexistent\.yaml/);
+      // No lockfile and no runs row.
+      let locks: string[] = [];
+      try {
+        locks = await readdir(path.join(home, "locks"));
+      } catch {
+        locks = [];
+      }
+      expect(locks.filter((f) => f.endsWith(".lock"))).toHaveLength(0);
+    });
+
+    it("--factory minifac:nonexistent — exits 1 naming only the built-in path tried", async () => {
+      const dir = await makeFixtureDir();
+      await writeFixture(dir, "examples/sdd.yaml", SDD_FACTORY);
+      // A local with the same bare name; the minifac: prefix must not see it.
+      await writeFixture(
+        dir,
+        ".minifac/factories/nonexistent.yaml",
+        `name: nonexistent
+brief: required
+nodes:
+  a:
+    executor: test
+    terminal: true
+edges: []
+`,
+      );
+      await writeFixture(
+        dir,
+        "inputs/foo.md",
+        `---
+change: foo
+factory: sdd
+mode: in-place
+---
+body
+`,
+      );
+      const out = new BufferStream();
+      const err = new BufferStream();
+      const code = await runCli(["run", "foo", "--factory", "minifac:nonexistent"], {
+        stdout: out,
+        stderr: err,
+        runCwd: dir,
+        buildRegistry: fakeRegistry({}),
+      });
+      expect(code).toBe(1);
+      expect(err.text()).toMatch(/minifac:nonexistent/);
+      expect(err.text()).toMatch(/examples\/nonexistent\.yaml/);
+      expect(err.text()).not.toMatch(/\.minifac\/factories\/nonexistent\.yaml/);
+    });
+
+    it("--factory on a brief-less invocation is a usage error (exit 1)", async () => {
+      const dir = await makeFixtureDir();
+      await writeFixture(dir, "examples/hello.yaml", NONE_FACTORY);
+      await writeFixture(dir, "examples/sdd.yaml", SDD_FACTORY);
+      const out = new BufferStream();
+      const err = new BufferStream();
+      const code = await runCli(["run", "--in-place", "hello", "--factory", "sdd"], {
+        stdout: out,
+        stderr: err,
+        runCwd: dir,
+        buildRegistry: fakeRegistry({}),
+      });
+      expect(code).toBe(1);
+      expect(err.text()).toMatch(/--factory is only meaningful with a brief/);
+      let locks: string[] = [];
+      try {
+        locks = await readdir(path.join(home, "locks"));
+      } catch {
+        locks = [];
+      }
+      expect(locks.filter((f) => f.endsWith(".lock"))).toHaveLength(0);
+    });
+
+    it("two concurrent runs of same brief through different factories run in parallel", async () => {
+      const repo = await makeGitRepoFixture();
+      await writeFixture(repo, "examples/sdd.yaml", SDD_FACTORY);
+      await writeFixture(repo, "examples/bar.yaml", BAR_FACTORY);
+      await writeFixture(
+        repo,
+        "inputs/foo.md",
+        `---
+change: foo
+factory: sdd
+base_branch: main
+---
+body
+`,
+      );
+      const buildRegistry = (): ExecutorRegistry => {
+        const reg = new ExecutorRegistry();
+        const exec: NodeExecutor = {
+          type: "test",
+          async *run(_node: ResolvedNode): AsyncIterable<NodeEvent> {
+            // Yield asynchronously so the two invocations actually overlap
+            // (the second claims its lock while the first is mid-flight).
+            await new Promise((r) => setTimeout(r, 50));
+            yield { kind: "status", status: "succeeded" };
+          },
+        };
+        reg.register(exec);
+        return reg;
+      };
+      const out1 = new BufferStream();
+      const err1 = new BufferStream();
+      const out2 = new BufferStream();
+      const err2 = new BufferStream();
+      const [c1, c2] = await Promise.all([
+        runCli(["run", "foo", "--factory", "sdd"], {
+          stdout: out1,
+          stderr: err1,
+          runCwd: repo,
+          buildRegistry,
+        }),
+        runCli(["run", "foo", "--factory", "bar"], {
+          stdout: out2,
+          stderr: err2,
+          runCwd: repo,
+          buildRegistry,
+        }),
+      ]);
+      expect(c1).toBe(0);
+      expect(c2).toBe(0);
+      // Two distinct worktree directories created.
+      const entries = await readdir(path.join(home, "worktrees"));
+      const runDirs = entries.filter((e) => e.startsWith("run-foo-"));
+      expect(runDirs.length).toBe(2);
+      // Two distinct branches.
+      const branches = spawnSync("git", ["branch", "--list", "run/foo-*"], {
+        cwd: repo,
+        encoding: "utf8",
+      });
+      const branchLines = branches.stdout
+        .split("\n")
+        .map((l) => l.trim().replace(/^\*\s*/, ""))
+        .filter((l) => l.length > 0);
+      expect(branchLines.length).toBe(2);
+      // Both runs persisted, both with distinct factoryName.
+      const { SqliteRunStore } = await import("./storage/sqlite.js");
+      const store = SqliteRunStore.open(path.join(home, "runs.db"));
+      try {
+        const runs = await store.listRuns({ change: "foo", limit: 10 });
+        expect(runs.length).toBe(2);
+        const names = new Set(runs.map((r) => r.factoryName));
+        expect(names).toEqual(new Set(["sdd", "bar"]));
+        expect(runs.every((r) => r.status === "succeeded")).toBe(true);
+      } finally {
+        await store.close();
+      }
+    });
+
+    it("two concurrent runs of same (brief, factory) — one wins lock, other exits 1 with wider key", async () => {
+      const repo = await makeGitRepoFixture();
+      await writeFixture(repo, "examples/sdd.yaml", SDD_FACTORY);
+      await writeFixture(
+        repo,
+        "inputs/foo.md",
+        `---
+change: foo
+factory: sdd
+base_branch: main
+---
+body
+`,
+      );
+      // Pre-seed the wider-key lockfile to force the new run to refuse.
+      const { computeRepoHash, worktreeKeyForBrief, lockPathForKey } = await import(
+        "./worktree/paths.js"
+      );
+      const { loadWorktreeConfig } = await import("./worktree/config.js");
+      const cfg = await loadWorktreeConfig(repo);
+      const hash = await computeRepoHash(repo);
+      const key = worktreeKeyForBrief(hash, "foo", "sdd");
+      const lockPath = lockPathForKey(cfg, key);
+      await mkdir(path.dirname(lockPath), { recursive: true });
+      await writeFile(lockPath, `${process.pid}\n`, "utf8");
+
+      const out = new BufferStream();
+      const err = new BufferStream();
+      const code = await runCli(["run", "foo", "--factory", "sdd"], {
+        stdout: out,
+        stderr: err,
+        runCwd: repo,
+        buildRegistry: fakeRegistry({ a: [{ kind: "status", status: "succeeded" }] }),
+      });
+      expect(code).toBe(1);
+      expect(err.text()).toMatch(/Another minifac run is in progress/);
+      // Wider key is named in the message.
+      expect(err.text()).toContain(`${hash}-foo-sdd`);
     });
   });
 

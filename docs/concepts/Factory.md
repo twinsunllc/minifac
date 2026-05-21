@@ -96,6 +96,15 @@ first, then falls back to a built-in `minifac:<name>`. Custom factories
 can `extends:` a built-in and override per node. See
 [[0008-File-Per-Factory-Composition]].
 
+The brief's `factory:` is the *default* — it can be overridden at
+invocation time with `minifac run <brief> --factory <name>`, which
+runs the same resolution precedence against the flag value and
+leaves the brief file unchanged. Two A/B invocations of the same
+brief through different factories proceed in parallel (the
+lockfile key is `(repo-hash, change, factory)`); two through the
+same factory still serialize. See
+[[0020-Factory-Override-At-Invocation]].
+
 ### Worked example: customize SDD's verify step
 
 `minifac init` bootstraps the layout. A consumer repo whose tests run

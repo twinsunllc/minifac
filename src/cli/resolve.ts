@@ -41,7 +41,7 @@ function isPathLike(arg: string): boolean {
  *
  * On miss, a `RunArgResolutionError` is thrown naming every path tried.
  */
-async function resolveFactoryByName(ref: string, cwd: string): Promise<string> {
+export async function resolveFactoryByName(ref: string, cwd: string): Promise<string> {
   if (ref.startsWith("minifac:")) {
     const name = ref.slice("minifac:".length);
     const candidate = path.resolve(cwd, "examples", `${name}.yaml`);

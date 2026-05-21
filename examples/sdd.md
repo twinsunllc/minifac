@@ -81,6 +81,39 @@ to run inside your existing checkout, pass `--in-place` (or set
 `mode: in-place` in the brief frontmatter). That skips worktree
 creation; the factory runs in `process.cwd()`.
 
+### Running the same brief through two factories (A/B)
+
+The brief's `factory:` field is the *default*. To run the same brief
+through a different factory without editing the brief file, pass
+`--factory <name>` at invocation time. The flag value follows the
+same resolution precedence as the brief's field (local first,
+built-in fallback; `minifac:<name>` forces the built-in). See
+`docs/decisions/0020-Factory-Override-At-Invocation.md`.
+
+```bash
+# Default — runs through the brief's declared factory (sdd here).
+minifac run foo
+
+# A/B — runs the same brief through a custom factory in parallel.
+# Brief file is not modified; the override applies only to this run.
+minifac run foo --factory sdd-with-codex
+```
+
+The two invocations claim distinct lockfiles
+(`<repo-hash>-foo-sdd.lock` vs. `<repo-hash>-foo-sdd-with-codex.lock`),
+produce distinct run-scoped branches, and persist independently:
+
+```
+ID        CHANGE  FACTORY            STATUS     STARTED                  BRANCH                  DURATION
+a7b3c1    foo     sdd                succeeded  2026-05-21T15:12:33.001Z run/foo-a7b3c1          11800ms
+c91d2f    foo     sdd-with-codex     succeeded  2026-05-21T15:13:58.117Z run/foo-c91d2f          12450ms
+```
+
+`minifac runs --change foo` shows both attempts side-by-side; pick
+the better branch and ship it with `minifac merge <run-id-prefix>`.
+Two parallel invocations through the *same* factory still serialize
+on the lockfile, since they would clobber each other's intent.
+
 > **Migration from pre-`factory-inputs-core` copies.** If you have a
 > hand-copied `sdd-<name>.yaml` from before the `factory-inputs-core`
 > change, you have two options:

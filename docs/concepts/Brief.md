@@ -16,7 +16,7 @@ YAML frontmatter:
 | Field | Required | Purpose |
 |---|---|---|
 | `change` | yes | The change name (kebab-case) |
-| `factory` | yes | Factory reference (`sdd`, `minifac:sdd`, etc.) |
+| `factory` | yes | Default factory reference (`sdd`, `minifac:sdd`, etc.). Overridable at invocation time via `minifac run <brief> --factory <name>` — see [[0020-Factory-Override-At-Invocation]]. |
 | `base_branch` | no | Branch to base the [[Worktree]] on (default: caller's HEAD) |
 | `model` | no | Per-brief Claude model override (default: factory config) |
 | `mode` | no | Literal `"in-place"` to skip worktree creation |

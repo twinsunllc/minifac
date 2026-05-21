@@ -22,8 +22,8 @@ export async function computeRepoHash(repoRoot: string): Promise<string> {
   return createHash("sha256").update(identity).digest("hex").slice(0, 8);
 }
 
-export function worktreeKeyForBrief(repoHash: string, change: string): string {
-  return `${repoHash}-${change}`;
+export function worktreeKeyForBrief(repoHash: string, change: string, factoryName: string): string {
+  return `${repoHash}-${change}-${factoryName}`;
 }
 
 export function worktreeKeyForFactory(

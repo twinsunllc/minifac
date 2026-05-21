@@ -64,6 +64,17 @@ becomes the friction point.
 **Note:** Likely subsumed by the step marketplace question — steps
 become the sharing unit, factories compose them locally.
 
+### Autorun `--factory` flag
+**Question:** Should `minifac autorun` ([[0016-Auto-Mode]]) accept a
+`--factory <name>` flag so scheduled runs all go through a specified
+factory (and, by extension, accept an array for "run every brief
+through every listed factory")?
+**Status:** Deferred to the `auto-mode` proposal. The answer is
+"yes" — `minifac run --factory` ([[0020-Factory-Override-At-Invocation]])
+has shipped and `autorun` will inherit the same override pattern when
+the `auto-mode` change lands. Pre-specifying it here would commit a
+surface area that has no implementation yet.
+
 ## Status signaling
 
 ### Hook-enforced sentinel

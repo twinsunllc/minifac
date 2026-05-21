@@ -10,7 +10,12 @@ import { briefCommandAction } from "./cli/brief.js";
 import { briefsAction } from "./cli/briefs.js";
 import { initAction } from "./cli/init.js";
 import { runMerge } from "./cli/merge.js";
-import { RunArgResolutionError, gateBriefDeps, resolveRunArg } from "./cli/resolve.js";
+import {
+  RunArgResolutionError,
+  gateBriefDeps,
+  resolveFactoryByName,
+  resolveRunArg,
+} from "./cli/resolve.js";
 import { listAction as runsListAction, showAction as runsShowAction } from "./cli/runs.js";
 import { stepsAction } from "./cli/steps.js";
 import { ClaudeExecutor } from "./executor/claude.js";
@@ -136,10 +141,17 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
     .option("--raw", "Force raw line-prefixed output even when stdout is a TTY")
     .option("--tui", "Force the interactive TUI even when stdout is not a TTY")
     .option("--force", "Override blocked-deps refusal (does not bypass cycle detection)")
+    .option("--factory <name>", "Override the brief's declared factory for this invocation")
     .action(
       async (
         arg: string,
-        opts: { inPlace?: boolean; raw?: boolean; tui?: boolean; force?: boolean },
+        opts: {
+          inPlace?: boolean;
+          raw?: boolean;
+          tui?: boolean;
+          force?: boolean;
+          factory?: string;
+        },
       ) => {
         const cwd = io.runCwd ?? process.cwd();
         let lock: LockHandle | undefined;
@@ -161,7 +173,18 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
 
         try {
           const resolved = await resolveRunArg(arg, cwd);
-          const loaded = await loadFactory(resolved.factoryPath, cwd);
+          if (opts.factory !== undefined && resolved.kind !== "brief") {
+            io.stderr.write(
+              `--factory is only meaningful with a brief; \`${arg}\` resolved as a factory invocation.\n`,
+            );
+            exitCode = 1;
+            return;
+          }
+          let factoryPath = resolved.factoryPath;
+          if (opts.factory !== undefined && resolved.kind === "brief") {
+            factoryPath = await resolveFactoryByName(opts.factory, cwd);
+          }
+          const loaded = await loadFactory(factoryPath, cwd);
           const factoryName = loaded.factory.name;
           const briefMode = loaded.factory.brief;
           const brief = resolved.kind === "brief" ? resolved.brief : undefined;
@@ -240,10 +263,12 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
           const segment = brief ? brief.frontmatter.change : factoryName;
           const branchName = runBranchName(segment, slug);
           const worktreeDirName = runWorktreeDirName(segment, slug);
-          // Lockfile key keeps the old shape — see docs/decisions/0019.
+          // Lockfile key: brief-driven runs include the factory name so
+          // two A/B invocations of the same brief through different
+          // factories don't collide. See docs/decisions/0020.
           let key: string;
           if (brief) {
-            key = worktreeKeyForBrief(repoHash, brief.frontmatter.change);
+            key = worktreeKeyForBrief(repoHash, brief.frontmatter.change, factoryName);
           } else {
             const timestamp = Date.now();
             key = worktreeKeyForFactory(repoHash, factoryName, timestamp);
@@ -270,7 +295,7 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
           } catch (err) {
             if (err instanceof LockHeldError) {
               io.stderr.write(
-                `Another minifac run is in progress for key \`${key}\` (PID ${err.holdingPid}, lockfile ${err.lockPath}). The lockfile serializes same-change invocations even though per-run branches no longer collide; \`--force\` does not override it. For parallel A/B runs of the same change, see the future \`--factory\` flag described in docs/decisions/0020-Factory-Override-At-Invocation.md.\n`,
+                `Another minifac run is in progress for key \`${key}\` (PID ${err.holdingPid}, lockfile ${err.lockPath}). The lockfile serializes same-change invocations through the same factory; \`--force\` does not override it. For parallel A/B runs of the same change through different factories, pass \`--factory <name>\` (see docs/decisions/0020-Factory-Override-At-Invocation.md).\n`,
               );
               exitCode = 1;
               return;

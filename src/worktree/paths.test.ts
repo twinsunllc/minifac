@@ -36,9 +36,9 @@ describe("paths", () => {
     expect(a).not.toBe(b);
   });
 
-  it("worktreeKeyForBrief shape", () => {
-    expect(worktreeKeyForBrief("abcd1234", "factory-inputs-core")).toBe(
-      "abcd1234-factory-inputs-core",
+  it("worktreeKeyForBrief shape includes the factory name", () => {
+    expect(worktreeKeyForBrief("abcd1234", "factory-inputs-core", "sdd")).toBe(
+      "abcd1234-factory-inputs-core-sdd",
     );
   });
 
