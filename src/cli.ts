@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { randomUUID } from "node:crypto";
+import { realpathSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { Command } from "commander";
@@ -789,7 +790,8 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
 const isMain = (() => {
   try {
     const here = fileURLToPath(import.meta.url);
-    return here === process.argv[1];
+    const invoked = process.argv[1] ? realpathSync(process.argv[1]) : "";
+    return here === invoked;
   } catch {
     return false;
   }
