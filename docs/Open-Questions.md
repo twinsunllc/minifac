@@ -109,6 +109,22 @@ forever?
 **Trigger:** runs.db gets large enough to slow queries or feel wasteful.
 **Likely shape:** A `minifac prune --runs --older-than <duration>` flag.
 
+### Prune leaves orphaned branches behind
+**Question:** When `minifac prune` removes a worktree, it cleans up the
+working directory and the `.git/worktrees/<id>` metadata but does not
+delete the branch the worktree was on. A subsequent
+`minifac run <same-change>` then fails with "a branch named X already
+exists" when `git worktree add -b` collides.
+**Trigger:** Already firing. Caught the first time a user aborted a
+run mid-flight and retried after prune.
+**Likely shape:** prune should also `git branch -D <branch>` (or
+`git update-ref -d refs/heads/<branch>`) for the branch the worktree
+owned. Alternatively, worktree creation could detect a stale branch
+from a prior aborted run and adopt it (with a flag for safety). The
+former is simpler.
+**Workaround:** `git branch -D <change>` after `minifac prune` until
+this lands.
+
 ## Daemon & viewer
 
 ### Daemon-side scheduling
