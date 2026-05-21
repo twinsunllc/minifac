@@ -12,23 +12,41 @@ When a question becomes a decision, write the decision note and remove
 it from here. When a question's premise turns out wrong, capture that
 in a decision note.
 
-## Brief authoring & input
+## Reusable steps
 
-### Brief dependencies and state
-**Question:** How are inter-brief dependencies (`depends_on`) and
-brief-level state (ready / in-progress / blocked / done) captured?
-**Trigger:** Backlog of briefs becomes unmanageable, or `auto-mode`
-becomes desirable.
-**Likely shape:** `depends_on` field added to [[Brief]] frontmatter
-(loader is already permissive-on-extras per [[0005-Brief-Schema]]);
-state lives in [[Runs-DB]] (which [[0011-SQLite-for-Runs]] designed for).
+### Step marketplace / registry
+**Question:** Where do externally-shared [[Step]]s live, how are they
+distributed, and how does pinning + supply-chain trust work?
+**Trigger:** A second repo wants to depend on a step authored in
+another repo's `.minifac/steps/`; copy-paste becomes the friction.
+**v0 stance:** Local-only steps; tool-version-locked. See
+[[0018-Reusable-Steps]].
+
+### Step authoring helper
+**Question:** Should there be a `minifac step <name>` CLI verb (and
+matching Claude Code skill) for one-question-at-a-time step
+authoring, analogous to brief authoring?
+**Trigger:** Step authoring becomes frequent enough that hand-rolling
+YAML feels slow.
+**Likely shape:** Mirror the brief-authoring patterns
+([[0005-Brief-Schema]] / brief-authoring skill).
+
+### Step versioning independent of minifac
+**Question:** Do steps get their own SemVer independent of the tool,
+or do they ride the tool's version?
+**Trigger:** A step needs to be supported across multiple minifac
+versions, or someone pins an older step with a newer minifac.
+**v0 stance:** Tool-version-locked. See [[0018-Reusable-Steps]].
+
+## Brief authoring & input
 
 ### Brief substitution syntax
 **Question:** How does the factory's prompt template reference brief
-content? Mustache (`{{ brief.body }}`)? Plain string interpolation?
-Something else?
+content? Mustache (`{{ brief.body }}`)? Something else?
 **Trigger:** First time a non-trivial substitution (multi-line content,
 escaping, conditionals) reveals the friction.
+**v0 stance:** Mustache-style `{{ namespace.field }}`, shipped in
+factory-inputs-core; the typing question still open.
 
 ## Factory composition
 
@@ -43,6 +61,8 @@ versions, or someone wants to pin an older factory with a newer minifac.
 **Question:** Can a custom factory in repo A be referenced by repo B?
 **Trigger:** Two repos want the same custom factory and copy-paste
 becomes the friction point.
+**Note:** Likely subsumed by the step marketplace question — steps
+become the sharing unit, factories compose them locally.
 
 ## Status signaling
 
@@ -51,18 +71,11 @@ becomes the friction point.
 extracts the [[Sentinel]] from the transcript and writes structured
 status? More robust than parsing stdout for the magic string.
 **Trigger:** Sentinel parsing feels fragile in practice (model forgets,
-format drifts under model upgrades).
+format drifts under model upgrades) AND callback transport
+([[0017-Callback-Status-Signaling]]) isn't an option for some reason.
 **Likely shape:** Configurable Stop hook attached when the runner
-spawns the child claude process.
-
-### Callback / MCP status transport
-**Question:** Should status signaling move to an HTTP POST or MCP tool
-call instead of sentinel-in-text? Tamper-resistant and *bidirectional*.
-**Trigger:** First real need for mid-run human-in-the-loop interaction
-(pause-and-ask, structured feedback during apply, "leave a comment in
-the viewer and the factory picks it up").
-**Why eventual:** Sentinel is one-way and only at the end. Mid-run
-two-way interaction structurally requires the callback shape.
+spawns the child claude process. Belt-and-suspenders for the
+sentinel-fallback path; the callback covers the active surface.
 
 ## Concurrency & queueing
 
@@ -70,13 +83,15 @@ two-way interaction structurally requires the callback shape.
 **Question:** Should minifac enforce a max number of concurrent runs
 for cost / rate-limit reasons?
 **Trigger:** A user blows their API budget by accident.
-**v0 stance:** User manages concurrency; per-change-name lockfile
-prevents collision but doesn't cap total.
+**v0 stance:** User manages concurrency via `--max-concurrent` on
+[[Auto-Mode]]; per-change-name lockfile prevents collision but doesn't
+cap total.
 
-### Auto-mode work scheduling
-**Question:** When a long-running minifac picks the next ready brief,
-what's the policy? FIFO? Priority field? Dependency-first?
-**Trigger:** `auto-mode` proposal earns its way in.
+### Cost-aware scheduling
+**Question:** Once persisted run costs accumulate in [[Runs-DB]],
+should [[Auto-Mode]] enforce a `--max-spend-per-hour` or similar?
+**Trigger:** Sustained autorun against a real backlog reveals cost
+visibility as a felt need.
 
 ## Storage
 
@@ -85,14 +100,14 @@ what's the policy? FIFO? Priority field? Dependency-first?
 (threaded comments, assignees, rich state machines), do we swap to
 beads for brief state?
 **Trigger:** Real need for issue-tracker semantics.
-**v0 stance:** SQLite is enough. See [[0011-SQLite-for-Runs]].
+**v0 stance:** Derived state from SQLite + brief files is enough.
+See [[0011-SQLite-for-Runs]] and [[0015-Brief-Deps-and-State]].
 
 ### Run history retention
 **Question:** Do old runs get auto-pruned from [[Runs-DB]], or kept
 forever?
 **Trigger:** runs.db gets large enough to slow queries or feel wasteful.
-**Likely shape:** A `minifac prune --runs --older-than 90d` flag on
-the existing prune command.
+**Likely shape:** A `minifac prune --runs --older-than <duration>` flag.
 
 ## Daemon & viewer
 
@@ -100,9 +115,48 @@ the existing prune command.
 **Question:** Should the daemon support cron expressions, webhook
 triggers, or file-watch triggers for unattended factory runs?
 **Trigger:** Nightly automation becomes a real workflow (system cron
-+ `minifac run` covers the case for now).
++ `minifac autorun` covers the case for now).
 
 ### Auth and remote exposure
 **Question:** When does the daemon need authentication and TLS?
 **Trigger:** Someone wants to expose it beyond localhost.
 **v0 stance:** Localhost-only by design.
+
+## Studio (separate project)
+
+### Visual workflow designer
+**Question:** Should [[Studio]] include a visual factory authoring
+mode (React Flow, drag-nodes-and-edges), or stay
+inspection-and-chat only?
+**v0 stance / strong leaning:** Inspection and chat only. The
+visual builder is n8n's space; doing it badly is worse than not
+doing it. See [[Comparisons]] "Studio direction." Revisit once
+chat-with-run is real and we have evidence about what users
+actually want.
+
+### Engine + studio coupling
+**Question:** Is the daemon's HTTP API + a published types package
+enough to keep engine and studio loosely coupled, or do we
+eventually want a monorepo with shared internals?
+**Trigger:** Cross-cutting changes between engine and studio become
+frequent and atomic-ship matters (probably >1/month).
+**v0 stance:** Separate repos, HTTP API is the contract. See
+[[Comparisons]] "Studio packaging."
+
+### Chat-with-running-node UX
+**Question:** What does the actual chat affordance look like when
+a node is mid-run? Inline in the run stream? Side panel? Floating?
+**Trigger:** Studio's chat surface starts implementation.
+
+## Open-source readiness
+
+### License choice
+**Question:** MIT, Apache 2.0, BSL, or something else?
+**Trigger:** Open-sourcing actually happens.
+
+### Install path
+**Question:** Publish `minifac` to npm? Bundle a single executable
+via `pkg`/`bun build --compile`? Homebrew formula?
+**Trigger:** Open-sourcing actually happens.
+**Note:** npm is the path of least resistance for a TypeScript CLI;
+revisit if cross-platform distribution becomes painful.
