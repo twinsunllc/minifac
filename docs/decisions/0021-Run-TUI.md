@@ -8,6 +8,9 @@ tags: [decision]
 
 # 0021: TUI as the default surface for `minifac run`
 
+> Updated by [[0022-Run-TUI-Bounded-Borders]] — adds a bounded
+> outer height and bordered + vertically-ruled zone shape.
+
 ## Context
 
 `minifac run` today streams raw line-prefixed stream-json events

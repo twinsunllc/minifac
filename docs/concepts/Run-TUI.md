@@ -12,14 +12,30 @@ mode-detection rules and the `--raw` / `--tui` overrides.
 
 ## Layout (≥ 80 × 24)
 
+The TUI renders into a **bounded** outer Box at the bottom of the
+terminal — `height = max(MIN_TUI_ROWS, floor(terminalRows / 2))`.
+Content above the bounded box is the user's normal terminal
+scrollback; the TUI never claims the full viewport. This is the
+lever that removes the rolling-overdraw flicker the unbounded
+layout produced on long log-emitting runs.
+
+Three vertically stacked **bordered zones** carry the layout —
+header, body, hotkey bar — each wrapped in a single rounded-border
+Box. Inside the body, the status pane and log pane are separated
+by a vertical rule.
+
 ```
-minifac · brief: <change|(brief-less)> · factory: <name> · <current node>
-
-▸ ◔ propose          → Bash({"command":"npm test"})
-  ● apply (2)        ✓ test output line
-  ○ verify           ...
-
-↑/↓ nav · Enter follow · < > iter · d details · r raw · ? help · q quit · m merge
+╭───────────────────────────────────────────────────────────────╮
+│ minifac · brief: <change|(brief-less)> · factory: <name> · …  │
+╰───────────────────────────────────────────────────────────────╯
+╭───────────────────────────────────────────────────────────────╮
+│ ▸ ◔ propose       │ → Bash({"command":"npm test"})            │
+│   ● apply (2)     │ ✓ test output line                        │
+│   ○ verify        │ ...                                       │
+╰───────────────────────────────────────────────────────────────╯
+╭───────────────────────────────────────────────────────────────╮
+│ ↑/↓ nav · Enter follow · < > iter · d details · r raw · ? … │
+╰───────────────────────────────────────────────────────────────╯
 ```
 
 - **Top header** — project name, brief change (`(brief-less)` for
@@ -91,4 +107,6 @@ When `LANG`, `LC_ALL`, and `LC_CTYPE` together do not advertise
 - [[Run]] — the underlying concept and persistence
 - [[0021-Run-TUI]] — the architectural decision that pins this
   surface
+- [[0022-Run-TUI-Bounded-Borders]] — the layout decision that
+  added the bounded outer height and bordered + ruled zones
 - [[Runner]] — the event source the TUI consumes

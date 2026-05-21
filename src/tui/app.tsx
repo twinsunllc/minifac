@@ -22,6 +22,18 @@ export interface RunAppProps {
 
 const MIN_COLS = 80;
 const MIN_ROWS = 24;
+export const MIN_TUI_ROWS = 24;
+
+// Each bordered zone contributes top + bottom border lines.
+// The header and hotkey bar each carry one row of content inside their
+// border, for a total of 3 rows of vertical space per zone.
+const HEADER_ZONE_ROWS = 3;
+const HOTKEY_ZONE_ROWS = 3;
+
+/** Compute the bounded outer TUI height for a given terminal row count. */
+export function computeTuiRows(fullRows: number): number {
+  return Math.max(MIN_TUI_ROWS, Math.floor(fullRows / 2));
+}
 
 function QuitPrompt(): ReactElement {
   return (
@@ -42,28 +54,50 @@ export function RunApp({
 }: RunAppProps): ReactElement {
   const stdoutHook = useStdout();
   const cols = columns ?? stdoutHook.stdout?.columns ?? 80;
-  const rws = rows ?? stdoutHook.stdout?.rows ?? 24;
-  const compact = cols < MIN_COLS || rws < MIN_ROWS;
+  const fullRows = rows ?? stdoutHook.stdout?.rows ?? 24;
+  const tuiRows = computeTuiRows(fullRows);
+  const compact = cols < MIN_COLS || fullRows < MIN_ROWS;
+
+  // Body height is derived from the bounded outer height, minus the
+  // header and hotkey bar zones. The log pane gets this value via its
+  // explicit `height` prop so its scroll/limit math uses the right
+  // value rather than the unbounded terminal row count.
+  const bodyHeight = Math.max(1, tuiRows - HEADER_ZONE_ROWS - HOTKEY_ZONE_ROWS);
 
   const node = state.nodes.find((n) => n.id === state.selectedNodeId);
   const prefix = node ? `${statusGlyph(glyphs, node.status)} ${node.id}` : "";
 
   return (
-    <Box flexDirection="column">
-      <Header state={state} />
-      {compact ? (
-        <LogPane state={state} prefix={prefix} />
-      ) : (
-        <Box>
-          <Box flexDirection="column" width={24} marginRight={1}>
-            <StatusPane state={state} glyphs={glyphs} />
-          </Box>
-          <Box flexDirection="column" flexGrow={1}>
-            <LogPane state={state} />
-          </Box>
-        </Box>
-      )}
-      <HotkeyBar state={state} />
+    <Box flexDirection="column" height={tuiRows}>
+      <Box borderStyle="round" paddingX={1}>
+        <Header state={state} />
+      </Box>
+      <Box borderStyle="round" paddingX={1} flexGrow={1}>
+        {compact ? (
+          <LogPane state={state} prefix={prefix} height={bodyHeight} />
+        ) : (
+          <>
+            <Box flexDirection="column" width={24}>
+              <StatusPane state={state} glyphs={glyphs} />
+            </Box>
+            {/* Vertical rule: a 1-column Box with only its left border
+                renders without seams against the body's round border. */}
+            <Box
+              borderStyle="single"
+              borderTop={false}
+              borderBottom={false}
+              borderRight={false}
+              marginX={1}
+            />
+            <Box flexDirection="column" flexGrow={1}>
+              <LogPane state={state} height={bodyHeight} />
+            </Box>
+          </>
+        )}
+      </Box>
+      <Box borderStyle="round" paddingX={1}>
+        <HotkeyBar state={state} />
+      </Box>
       {state.showQuitPrompt ? <QuitPrompt /> : null}
       {state.showHelp ? <HelpOverlay /> : null}
       {mergeOverlay ? <MergeOverlay {...mergeOverlay} /> : null}

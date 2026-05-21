@@ -1,6 +1,6 @@
 import { render } from "ink-testing-library";
 import { afterEach, describe, expect, it } from "vitest";
-import { RunApp } from "./app.js";
+import { MIN_TUI_ROWS, RunApp, computeTuiRows } from "./app.js";
 import { UNICODE_GLYPHS } from "./glyphs.js";
 import { type RunState, createInitialRunState, runReducer } from "./reducer.js";
 
@@ -162,6 +162,51 @@ describe("RunApp", () => {
     const frame = lastFrame() ?? "";
     expect(frame).toContain("hotkeys");
     expect(frame).toContain("? ");
+  });
+
+  it("bounds the outer height to max(MIN_TUI_ROWS, floor(rows / 2))", () => {
+    expect(computeTuiRows(24)).toBe(MIN_TUI_ROWS);
+    expect(computeTuiRows(40)).toBe(Math.max(MIN_TUI_ROWS, 20));
+    expect(computeTuiRows(60)).toBe(30);
+    expect(computeTuiRows(120)).toBe(60);
+  });
+
+  it("renders header, body, and hotkey bar each inside a bordered box", () => {
+    const state = baseInit();
+    const { lastFrame } = renderApp(state);
+    const frame = lastFrame() ?? "";
+    // The "round" border style uses these corner characters; with three
+    // stacked bordered zones we expect at least three top-left corners.
+    const topLeftCount = (frame.match(/╭/g) ?? []).length;
+    expect(topLeftCount).toBeGreaterThanOrEqual(3);
+    const bottomLeftCount = (frame.match(/╰/g) ?? []).length;
+    expect(bottomLeftCount).toBeGreaterThanOrEqual(3);
+  });
+
+  it("renders status, vertical rule, and log inside the body in normal mode", () => {
+    const state = baseInit();
+    const { lastFrame } = renderApp(state, { columns: 120, rows: 40 });
+    const frame = lastFrame() ?? "";
+    // Status pane content is present.
+    expect(frame).toContain("propose");
+    expect(frame).toContain("apply");
+    expect(frame).toContain("verify");
+    // Log pane content is present (empty-events placeholder).
+    expect(frame).toMatch(/no events yet/);
+    // The body border + vertical rule should produce multiple '│' chars.
+    const verticalCount = (frame.match(/│/g) ?? []).length;
+    expect(verticalCount).toBeGreaterThanOrEqual(3);
+  });
+
+  it("in compact mode the body contains only the log pane (no status pane, no rule)", () => {
+    const state = baseInit();
+    const { lastFrame } = renderApp(state, { columns: 60, rows: 20 });
+    const frame = lastFrame() ?? "";
+    // Per-node status rows for apply/verify are suppressed.
+    expect(frame).not.toMatch(/▸ {2}◔ apply/);
+    expect(frame).not.toMatch(/▸ {2}◔ verify/);
+    // Header and hotkey bar zones still render as bordered boxes.
+    expect((frame.match(/╭/g) ?? []).length).toBeGreaterThanOrEqual(3);
   });
 
   it("renders the merge overlay when provided", () => {
