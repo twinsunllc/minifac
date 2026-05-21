@@ -28,29 +28,43 @@ between: factories define structure, briefs supply intent,
 ## Briefs queued ready-to-run
 
 These have ADRs + brief markdown committed; just need a `minifac
-run <change>` to start:
+run <change>` to start. Listed roughly in suggested order; nothing
+enforces this beyond explicit `depends_on` fields.
 
 - [ ] **`brief-deps-and-state`** — [[0015-Brief-Deps-and-State]].
-  Brief frontmatter gains `depends_on`; brief state is computed
-  from file + runs.db; cycle detection; `minifac briefs` CLI.
-- [ ] **`auto-mode`** — [[0016-Auto-Mode]]. Long-running `minifac
-  autorun` polls inputs/ for ready briefs and schedules them.
-  Depends on `brief-deps-and-state`.
+  Two-axis state model (git for briefs, sqlite for runs);
+  `depends_on` field; cycle detection; `minifac briefs` CLI;
+  minifac-owned mark-done post-step. `depends_on:
+  [run-scoped-branches]` — that's already landed, so this is
+  ready.
+- [ ] **`factory-override-at-invocation`** —
+  [[0020-Factory-Override-At-Invocation]]. `--factory <name>`
+  flag on `minifac run`; widens lockfile to (change, factory).
+  Unlocks A/B factory comparisons. `depends_on:
+  [run-scoped-branches]`.
+- [ ] **`run-tui`** — [[0021-Run-TUI]]. Default TUI for
+  `minifac run`; two-pane layout (status + logs) with `ink`;
+  auto-fallback to raw output on non-TTY; `m` hotkey invokes
+  `minifac merge` inline. Visible quality-of-life payoff on
+  every subsequent dogfood.
+- [ ] **`reusable-steps`** — [[0018-Reusable-Steps]]. Steps as
+  first-class, versioned, typed-input artifacts that nodes can
+  reference via `uses:`. "GitHub Actions for factories." The
+  most compelling open-source differentiator.
 - [ ] **`callback-status-signaling`** — [[0017-Callback-Status-Signaling]].
   Opt-in HTTP endpoint per node for bidirectional comms. Unblocks
   mid-run human-in-the-loop and the future [[Studio]] chat surface.
-
-## Queued for next ADR + brief authoring
-
-- [ ] **`reusable-steps`** — [[0018-Reusable-Steps]]. Steps as
-  first-class, versioned, typed-input artifacts that nodes can
-  reference via `uses:`. "GitHub Actions for factories." Most
-  compelling open-source differentiator.
+- [ ] **`auto-mode`** — [[0016-Auto-Mode]]. Long-running `minifac
+  autorun` polls inputs/ for ready briefs and schedules them.
+  `depends_on: [brief-deps-and-state]` — wait for that to land
+  first.
 
 ## Open-source readiness (chore tier)
 
 Concrete prerequisites for actually open-sourcing, mostly
-non-architectural:
+non-architectural. Likely batched into one or two dogfoods after
+the architectural queue clears (especially `reusable-steps`,
+which makes the example library viable):
 
 - [ ] LICENSE file (MIT, Apache 2.0, or whatever)
 - [ ] Polished user-facing README (current README is honest; needs
@@ -69,6 +83,9 @@ non-architectural:
 
 ## Already landed (newest first)
 
+- ✅ `run-scoped-branches` — branches named `run/<change>-<slug>`;
+  worktrees mirror; `branch_name` column in runs.db; `minifac
+  merge` ship verb; prune deletes branches it owns
 - ✅ `structured-prior-results` — runner passes structured per-node
   results instead of full event history; context-window pressure
   resolved
@@ -108,6 +125,8 @@ See [[Open-Questions]] for the named triggers.
 - `serve-and-viewer-hardening` — heartbeat, safe-root, etc.
 - `trigger-mechanisms` — daemon-side cron/webhook/file-watch
 - `step-marketplace` — registry for cross-repo step sharing
+- `tui-for-daemon-runs` — observing daemon-mode runs from the
+  terminal (the web viewer is the path for now)
 
 ### Studio (deliberately separate project)
 
@@ -126,3 +145,7 @@ Studio's plausible v1 features (when we get there):
 Visual factory designer is **not** a v1 goal. The pitch is "chat
 anchored to a structured run," not "yet another visual workflow
 builder."
+
+The TUI's event-reducer (from `run-tui`) is a pure function and
+can later feed Studio's render pipeline. Sharing that logic is
+the natural seam if/when studio starts.
