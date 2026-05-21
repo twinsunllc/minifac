@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { Command } from "commander";
 import { BriefLoadError } from "./brief/loader.js";
 import { BriefCycleError } from "./brief/state.js";
+import { autorunAction } from "./cli/autorun.js";
 import { briefCommandAction } from "./cli/brief.js";
 import { briefsAction } from "./cli/briefs.js";
 import { initAction } from "./cli/init.js";
@@ -753,6 +754,51 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
         io: { stdout: io.stdout, stderr: io.stderr },
       });
     });
+
+  program
+    .command("autorun")
+    .description("Poll inputs/ and run ready briefs. Long-running by default; use --once for CI.")
+    .option("--watch <dir>", "Directory to poll (default <cwd>/inputs)")
+    .option("--max-concurrent <n>", "Parallel run cap (default 1)", "1")
+    .option("--interval <ms>", "Poll cadence in milliseconds (default 10000)", "10000")
+    .option("--once", "Run a single poll cycle, wait for runs, then exit")
+    .option("--filter <expr>", 'Glob (e.g. "feat-*") or /regex/ against the brief\'s change name')
+    .option("--dry-run", "Run a single poll cycle, print decisions, invoke no runs")
+    .option("--json", "Emit log lines as one JSON object per line")
+    .option("--force", "On first SIGINT/SIGTERM, kill in-flight child executors instead of waiting")
+    .action(
+      async (opts: {
+        watch?: string;
+        maxConcurrent?: string;
+        interval?: string;
+        once?: boolean;
+        filter?: string;
+        dryRun?: boolean;
+        json?: boolean;
+        force?: boolean;
+      }) => {
+        const cwd = io.runCwd ?? process.cwd();
+        const maxConcurrent =
+          opts.maxConcurrent !== undefined ? Number.parseInt(opts.maxConcurrent, 10) : undefined;
+        const interval =
+          opts.interval !== undefined ? Number.parseInt(opts.interval, 10) : undefined;
+        exitCode = await autorunAction({
+          options: {
+            ...(opts.watch !== undefined ? { watch: opts.watch } : {}),
+            ...(maxConcurrent !== undefined ? { maxConcurrent } : {}),
+            ...(interval !== undefined ? { interval } : {}),
+            ...(opts.once !== undefined ? { once: opts.once } : {}),
+            ...(opts.filter !== undefined ? { filter: opts.filter } : {}),
+            ...(opts.dryRun !== undefined ? { dryRun: opts.dryRun } : {}),
+            ...(opts.json !== undefined ? { json: opts.json } : {}),
+            ...(opts.force !== undefined ? { force: opts.force } : {}),
+          },
+          cwd,
+          io: { stdout: io.stdout, stderr: io.stderr },
+          ...(io.openRunStore ? { openRunStore: io.openRunStore } : {}),
+        });
+      },
+    );
 
   program
     .command("serve")
