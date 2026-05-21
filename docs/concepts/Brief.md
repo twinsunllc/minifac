@@ -19,10 +19,12 @@ YAML frontmatter:
 | `factory` | yes | Factory reference (`sdd`, `minifac:sdd`, etc.) |
 | `base_branch` | no | Branch to base the [[Worktree]] on (default: caller's HEAD) |
 | `model` | no | Per-brief Claude model override (default: factory config) |
+| `mode` | no | Literal `"in-place"` to skip worktree creation |
+| `depends_on` | no | Names of other briefs whose completion is a precondition |
 
 Loader is **strict on required fields, permissive on unknown extras**.
-Future fields (`depends_on`, `priority`, tags) slot in without schema
-migration. See [[0005-Brief-Schema]].
+Future fields (`priority`, `tags`) slot in without schema
+migration. See [[0005-Brief-Schema]] and [[0015-Brief-Deps-and-State]].
 
 Body is free-form markdown. The brief-authoring helper produces a
 template with recommended sections (Background / What to do /
@@ -36,10 +38,59 @@ them — a one-line body is still a valid brief.
 
 ## Lifecycle
 
-A brief is "ready" when its file exists. Runtime state (in-progress,
-blocked, done) lives in the [[Runs-DB]], not in the brief file itself.
-This separation is deliberate — see [[0012-Where-State-Lives]] — so
-multiple workers can claim work without rewriting the brief.
+A brief lives on two axes, stored in two different places. Together
+they answer "what's queued, what's in flight, and what's done" without
+duplicating truth.
+
+- **Doneness** is the brief's directory location in git:
+  - `inputs/<change>.md` → `active`
+  - `inputs/done/<change>.md` → `done`
+  - neither → `missing`
+
+  Doneness is team-visible the moment the merge lands. There is no
+  per-machine "done" cache; if you can see the file, you see the
+  state. Manual completion is a one-liner: `git mv inputs/foo.md
+  inputs/done/foo.md`.
+
+- **Activity** is the most recent row for the brief's change in
+  [[Runs-DB]]: `none`, `running`, `succeeded`, or `failed`. Activity
+  is per-machine and ephemeral; it answers "is there a run in flight
+  on this box?" without needing a sync ceremony.
+
+The two axes are independent. A brief whose last run `succeeded` but
+whose file is still in `inputs/` is `state: active, activity: succeeded`
+— a useful signal that the run landed but the brief has not been
+marked done yet.
+
+### `depends_on`
+
+A brief MAY declare `depends_on: [<other-change>, ...]` in its
+frontmatter. A dep is *satisfied* when its file is at
+`inputs/done/<other-change>.md` (doneness `done`). `minifac run`
+refuses to start a brief whose deps are not all satisfied; pass
+`--force` to override (cycle detection is not bypassed by `--force`).
+
+### Runner mark-done post-step
+
+The runner is responsible for moving a brief from `inputs/<change>.md`
+to `inputs/done/<change>.md` after a brief-driven run terminates with
+`succeeded`. The move + commit happen inside the run's worktree (or
+in-place cwd) just before the run is recorded as `succeeded` in
+runs.db. Failures of `git mv` or `git commit` log a warning but do not
+downgrade the run's terminal status — the user can finish the move
+manually with one `git mv`.
+
+Factory authors do not need to know any of this exists. The mark-done
+step is a minifac-level contract, not a per-factory responsibility.
+
+### Why the split
+
+See [[0015-Brief-Deps-and-State]] for the rationale: doneness needs
+to be team-visible (git is the right substrate), activity is
+per-run-history (runs.db is the right substrate), and mixing them
+into one storage layer requires either a sync ceremony (collaborator
+A merges, collaborator B has to import) or a state coupling between
+the two (every dep check has to consult runs.db).
 
 ## Authoring
 

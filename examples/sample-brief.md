@@ -1,6 +1,13 @@
 ---
 change: example-change
 factory: sdd
+# depends_on lists the change names of other briefs whose completion
+# is a precondition for running this one. A dep is "satisfied" only
+# when its file lives in `inputs/done/<name>.md`. The loader defaults
+# missing values to `[]`, so omitting the field entirely is the same
+# as declaring no deps.
+# depends_on:
+#   - other-change
 ---
 
 ## Background

@@ -1,6 +1,8 @@
 import { stat } from "node:fs/promises";
 import path from "node:path";
 import { type Brief, BriefLoadError, loadBrief } from "../brief/loader.js";
+import { BriefCycleError, computeBriefState } from "../brief/state.js";
+import type { RunStore } from "../storage/run-store.js";
 
 export type ResolvedRun =
   | { kind: "brief"; brief: Brief; factoryPath: string }
@@ -107,3 +109,56 @@ export async function resolveRunArg(arg: string, cwd: string): Promise<ResolvedR
 }
 
 export { BriefLoadError };
+
+export type BriefDepsGateOutcome =
+  | { kind: "proceed" }
+  | { kind: "warn"; message: string }
+  | { kind: "refuse"; message: string };
+
+export interface BriefDepsGateInput {
+  brief: Brief;
+  runStore: RunStore;
+  cwd: string;
+  force?: boolean;
+}
+
+/**
+ * Evaluate brief deps before lockfile claim / worktree creation. Returns
+ * an outcome the caller renders to stderr / exits on. Cycle errors are
+ * propagated as-is and SHALL NOT be bypassed by `--force`.
+ */
+export async function gateBriefDeps(input: BriefDepsGateInput): Promise<BriefDepsGateOutcome> {
+  const inputsDir = path.resolve(input.cwd, "inputs");
+  const rootChange = input.brief.frontmatter.change;
+  // Caller has already loaded the root brief; reuse it so the gate does
+  // not re-resolve `<inputsDir>/<change>.md` (which may not match when
+  // the file name and the frontmatter `change:` differ).
+  const state = await computeBriefState(rootChange, {
+    inputsDir,
+    repoRoot: input.cwd,
+    runStore: input.runStore,
+    loadBrief: async (c: string) => {
+      if (c === rootChange) return input.brief;
+      const { loadBrief } = await import("../brief/loader.js");
+      return loadBrief(c, input.cwd);
+    },
+  });
+  if (!state.blocked) return { kind: "proceed" };
+  const summary = state.deps
+    .filter((d) => d.doneness !== "done")
+    .map((d) => `  - ${d.change} (${d.doneness})`)
+    .join("\n");
+  const reason = state.blockedReason ?? "unsatisfied deps";
+  if (input.force) {
+    return {
+      kind: "warn",
+      message: `Warning: --force overriding unsatisfied deps for \`${input.brief.frontmatter.change}\`: ${reason}\n${summary}`,
+    };
+  }
+  return {
+    kind: "refuse",
+    message: `Refusing to run \`${input.brief.frontmatter.change}\`: blocked by unsatisfied deps:\n${summary}\nPass --force to override.`,
+  };
+}
+
+export { BriefCycleError };

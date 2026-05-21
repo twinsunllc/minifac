@@ -7,6 +7,7 @@ export const BriefFrontmatterSchema = z
     base_branch: z.string().min(1).optional(),
     model: z.string().min(1).optional(),
     mode: z.literal("in-place").optional(),
+    depends_on: z.array(z.string().min(1)).optional().default([]),
   })
   .passthrough();
 

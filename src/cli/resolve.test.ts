@@ -2,7 +2,10 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { RunArgResolutionError, resolveRunArg } from "./resolve.js";
+import { loadBrief } from "../brief/loader.js";
+import { BriefCycleError } from "../brief/state.js";
+import { SqliteRunStore } from "../storage/sqlite.js";
+import { RunArgResolutionError, gateBriefDeps, resolveRunArg } from "./resolve.js";
 
 async function makeRepo(): Promise<string> {
   const dir = await mkdtemp(path.join(tmpdir(), "minifac-resolve-"));
@@ -93,6 +96,111 @@ describe("resolveRunArg", () => {
       expect(err).toBeInstanceOf(RunArgResolutionError);
       expect((err as Error).message).toMatch(/\.minifac\/factories\/nonexistent\.yaml/);
       expect((err as Error).message).toMatch(/examples\/nonexistent\.yaml/);
+    }
+  });
+});
+
+async function freshStore(): Promise<SqliteRunStore> {
+  const dir = await mkdtemp(path.join(tmpdir(), "minifac-gate-db-"));
+  return SqliteRunStore.open(path.join(dir, "runs.db"));
+}
+
+function brief(change: string, depends_on: string[] = []): string {
+  const deps =
+    depends_on.length === 0 ? "" : `depends_on:\n${depends_on.map((d) => `  - ${d}`).join("\n")}\n`;
+  return `---\nchange: ${change}\nfactory: sdd\n${deps}---\nbody\n`;
+}
+
+describe("gateBriefDeps", () => {
+  it("proceeds when there are no deps", async () => {
+    const repo = await makeRepo();
+    await writeAt(repo, "inputs/foo.md", brief("foo"));
+    const b = await loadBrief("foo", repo);
+    const store = await freshStore();
+    try {
+      const r = await gateBriefDeps({ brief: b, runStore: store, cwd: repo });
+      expect(r.kind).toBe("proceed");
+    } finally {
+      await store.close();
+    }
+  });
+
+  it("refuses when a dep is active", async () => {
+    const repo = await makeRepo();
+    await writeAt(repo, "inputs/foo.md", brief("foo", ["bar"]));
+    await writeAt(repo, "inputs/bar.md", brief("bar"));
+    const b = await loadBrief("foo", repo);
+    const store = await freshStore();
+    try {
+      const r = await gateBriefDeps({ brief: b, runStore: store, cwd: repo });
+      expect(r.kind).toBe("refuse");
+      if (r.kind === "refuse") {
+        expect(r.message).toMatch(/bar.*active/);
+      }
+    } finally {
+      await store.close();
+    }
+  });
+
+  it("refuses when a dep is missing", async () => {
+    const repo = await makeRepo();
+    await writeAt(repo, "inputs/foo.md", brief("foo", ["bar"]));
+    const b = await loadBrief("foo", repo);
+    const store = await freshStore();
+    try {
+      const r = await gateBriefDeps({ brief: b, runStore: store, cwd: repo });
+      expect(r.kind).toBe("refuse");
+      if (r.kind === "refuse") {
+        expect(r.message).toMatch(/bar.*missing/);
+      }
+    } finally {
+      await store.close();
+    }
+  });
+
+  it("proceeds when deps are done", async () => {
+    const repo = await makeRepo();
+    await writeAt(repo, "inputs/foo.md", brief("foo", ["bar"]));
+    await writeAt(repo, "inputs/done/bar.md", brief("bar"));
+    const b = await loadBrief("foo", repo);
+    const store = await freshStore();
+    try {
+      const r = await gateBriefDeps({ brief: b, runStore: store, cwd: repo });
+      expect(r.kind).toBe("proceed");
+    } finally {
+      await store.close();
+    }
+  });
+
+  it("--force converts refuse to warn", async () => {
+    const repo = await makeRepo();
+    await writeAt(repo, "inputs/foo.md", brief("foo", ["bar"]));
+    await writeAt(repo, "inputs/bar.md", brief("bar"));
+    const b = await loadBrief("foo", repo);
+    const store = await freshStore();
+    try {
+      const r = await gateBriefDeps({ brief: b, runStore: store, cwd: repo, force: true });
+      expect(r.kind).toBe("warn");
+      if (r.kind === "warn") {
+        expect(r.message).toMatch(/bar.*active/);
+      }
+    } finally {
+      await store.close();
+    }
+  });
+
+  it("throws BriefCycleError on cycle (regardless of --force)", async () => {
+    const repo = await makeRepo();
+    await writeAt(repo, "inputs/foo.md", brief("foo", ["bar"]));
+    await writeAt(repo, "inputs/bar.md", brief("bar", ["foo"]));
+    const b = await loadBrief("foo", repo);
+    const store = await freshStore();
+    try {
+      await expect(
+        gateBriefDeps({ brief: b, runStore: store, cwd: repo, force: true }),
+      ).rejects.toBeInstanceOf(BriefCycleError);
+    } finally {
+      await store.close();
     }
   });
 });

@@ -909,4 +909,156 @@ describe("runFactory", () => {
       expect(store.nodeEnds[0]?.end.status).toBe("succeeded");
     });
   });
+
+  describe("mark-done post-step", () => {
+    function trivialSuccess(): { factory: Factory; reg: ExecutorRegistry } {
+      const factory: Factory = {
+        name: "f",
+        nodes: { a: { executor: "fake", terminal: true } },
+        edges: [],
+      };
+      const exec = new FakeExecutor("fake", { a: () => [succeeded] });
+      const reg = new ExecutorRegistry();
+      reg.register(exec);
+      return { factory, reg };
+    }
+
+    // Lazy imports to avoid pulling node:child_process into the rest of the
+    // suite when not needed.
+    async function makeGitRepo(): Promise<string> {
+      const { spawnSync } = await import("node:child_process");
+      const { mkdtemp, writeFile } = await import("node:fs/promises");
+      const { tmpdir } = await import("node:os");
+      const pathMod = await import("node:path");
+      const dir = await mkdtemp(pathMod.join(tmpdir(), "minifac-runner-md-"));
+      const sh = (args: string[]): void => {
+        const r = spawnSync(args[0] as string, args.slice(1), { cwd: dir, encoding: "utf8" });
+        if (r.status !== 0) throw new Error(`${args.join(" ")} failed: ${r.stderr}`);
+      };
+      sh(["git", "init", "-q", "-b", "main"]);
+      sh(["git", "config", "user.email", "test@example.com"]);
+      sh(["git", "config", "user.name", "Test"]);
+      sh(["git", "config", "commit.gpgsign", "false"]);
+      sh(["git", "config", "core.hooksPath", "/dev/null"]);
+      await writeFile(pathMod.join(dir, "README.md"), "hi\n");
+      sh(["git", "add", "."]);
+      sh(["git", "commit", "-q", "-m", "init"]);
+      return dir;
+    }
+
+    function briefFor(change: string): Brief {
+      return {
+        frontmatter: { change, factory: "sdd", depends_on: [] } as Brief["frontmatter"],
+        body: "body",
+        sourcePath: `/fake/inputs/${change}.md`,
+      };
+    }
+
+    it("moves the brief to inputs/done/ on terminal success", async () => {
+      const { mkdir, writeFile } = await import("node:fs/promises");
+      const { existsSync } = await import("node:fs");
+      const pathMod = await import("node:path");
+      const { spawnSync } = await import("node:child_process");
+      const repo = await makeGitRepo();
+      await mkdir(pathMod.join(repo, "inputs"), { recursive: true });
+      await writeFile(
+        pathMod.join(repo, "inputs", "foo.md"),
+        "---\nchange: foo\nfactory: sdd\n---\nbody\n",
+      );
+      const sh = (args: string[]): void => {
+        const r = spawnSync(args[0] as string, args.slice(1), { cwd: repo, encoding: "utf8" });
+        if (r.status !== 0) throw new Error(`${args.join(" ")} failed: ${r.stderr}`);
+      };
+      sh(["git", "add", "."]);
+      sh(["git", "commit", "-q", "-m", "add brief"]);
+
+      const { factory, reg } = trivialSuccess();
+      const result = await runFactory(wrap(factory), {
+        registry: reg,
+        brief: briefFor("foo"),
+        runCwd: repo,
+      });
+      expect(result.status).toBe("succeeded");
+      expect(existsSync(pathMod.join(repo, "inputs", "foo.md"))).toBe(false);
+      expect(existsSync(pathMod.join(repo, "inputs", "done", "foo.md"))).toBe(true);
+    });
+
+    it("does NOT invoke mark-done on failure", async () => {
+      const { mkdir, writeFile } = await import("node:fs/promises");
+      const { existsSync } = await import("node:fs");
+      const pathMod = await import("node:path");
+      const { spawnSync } = await import("node:child_process");
+      const repo = await makeGitRepo();
+      await mkdir(pathMod.join(repo, "inputs"), { recursive: true });
+      await writeFile(
+        pathMod.join(repo, "inputs", "foo.md"),
+        "---\nchange: foo\nfactory: sdd\n---\nbody\n",
+      );
+      const sh = (args: string[]): void => {
+        const r = spawnSync(args[0] as string, args.slice(1), { cwd: repo, encoding: "utf8" });
+        if (r.status !== 0) throw new Error(`${args.join(" ")} failed: ${r.stderr}`);
+      };
+      sh(["git", "add", "."]);
+      sh(["git", "commit", "-q", "-m", "add brief"]);
+
+      const factory: Factory = {
+        name: "f",
+        nodes: { a: { executor: "fake", terminal: true } },
+        edges: [],
+      };
+      const exec = new FakeExecutor("fake", { a: () => [failed] });
+      const reg = new ExecutorRegistry();
+      reg.register(exec);
+      const result = await runFactory(wrap(factory), {
+        registry: reg,
+        brief: briefFor("foo"),
+        runCwd: repo,
+      });
+      expect(result.status).toBe("failed");
+      expect(existsSync(pathMod.join(repo, "inputs", "foo.md"))).toBe(true);
+      expect(existsSync(pathMod.join(repo, "inputs", "done", "foo.md"))).toBe(false);
+    });
+
+    it("does NOT invoke mark-done for brief-less runs", async () => {
+      const { existsSync } = await import("node:fs");
+      const pathMod = await import("node:path");
+      const repo = await makeGitRepo();
+      const { factory, reg } = trivialSuccess();
+      const result = await runFactory(wrap(factory), {
+        registry: reg,
+        runCwd: repo,
+      });
+      expect(result.status).toBe("succeeded");
+      // No inputs/done/ ever created.
+      expect(existsSync(pathMod.join(repo, "inputs", "done"))).toBe(false);
+    });
+
+    it("logs a warning and still succeeds when git mv fails", async () => {
+      const { mkdir, writeFile } = await import("node:fs/promises");
+      const pathMod = await import("node:path");
+      const repo = await makeGitRepo();
+      // Write the brief but do NOT add/commit it — `git mv` refuses untracked.
+      await mkdir(pathMod.join(repo, "inputs"), { recursive: true });
+      await writeFile(
+        pathMod.join(repo, "inputs", "foo.md"),
+        "---\nchange: foo\nfactory: sdd\n---\nbody\n",
+      );
+
+      const { factory, reg } = trivialSuccess();
+      const warnings: string[] = [];
+      const result = await runFactory(wrap(factory), {
+        registry: reg,
+        brief: briefFor("foo"),
+        runCwd: repo,
+        onEvent: (e) => {
+          if (e.nodeId === "__mark_done__" && e.event.kind === "stderr") {
+            warnings.push(e.event.line);
+          }
+        },
+      });
+      expect(result.status).toBe("succeeded");
+      expect(warnings.length).toBeGreaterThan(0);
+      expect(warnings[0]).toMatch(/mark-done/);
+    });
+  });
 });

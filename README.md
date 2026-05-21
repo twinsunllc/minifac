@@ -111,6 +111,31 @@ Pass `--in-place` (or set `mode: in-place` in the brief frontmatter)
 to skip worktree creation and run in the current cwd — useful for CI
 or read-only factories.
 
+### Dependent briefs
+
+A brief MAY declare `depends_on: [<other-change>]` in its frontmatter
+to make another brief's completion a precondition:
+
+```yaml
+---
+change: api-routes
+factory: sdd
+depends_on:
+  - api-schema
+---
+```
+
+A dep is satisfied when its file lives in `inputs/done/<name>.md`
+(strictly merged, not "the factory ran successfully on this
+machine"). `minifac run api-routes` refuses to start while
+`inputs/api-schema.md` is still active, naming the unsatisfied dep on
+stderr. Pass `--force` to override (cycles are never bypassed). On a
+successful brief-driven run, minifac itself runs `git mv
+inputs/<change>.md inputs/done/<change>.md` + a commit inside the
+worktree so dependents downstream see the dep satisfied as soon as
+the run lands. Use `minifac briefs` (or `--ready`) to see what's
+queued, blocked, and ready to pick up.
+
 Every run — under `minifac run` or `minifac serve` — is persisted to
 `~/.minifac/runs.db` (configurable). List recent runs with `minifac runs`
 and replay one with `minifac runs show <id>`; see

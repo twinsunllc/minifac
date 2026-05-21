@@ -4,10 +4,12 @@ import { mkdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { Command } from "commander";
 import { BriefLoadError } from "./brief/loader.js";
+import { BriefCycleError } from "./brief/state.js";
 import { briefCommandAction } from "./cli/brief.js";
+import { briefsAction } from "./cli/briefs.js";
 import { initAction } from "./cli/init.js";
 import { runMerge } from "./cli/merge.js";
-import { RunArgResolutionError, resolveRunArg } from "./cli/resolve.js";
+import { RunArgResolutionError, gateBriefDeps, resolveRunArg } from "./cli/resolve.js";
 import { listAction as runsListAction, showAction as runsShowAction } from "./cli/runs.js";
 import { ClaudeExecutor } from "./executor/claude.js";
 import { ExecutorRegistry } from "./executor/registry.js";
@@ -131,7 +133,12 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
     .option("--in-place", "Skip worktree creation; run the factory in the current cwd")
     .option("--raw", "Force raw line-prefixed output even when stdout is a TTY")
     .option("--tui", "Force the interactive TUI even when stdout is not a TTY")
-    .action(async (arg: string, opts: { inPlace?: boolean; raw?: boolean; tui?: boolean }) => {
+    .option("--force", "Override blocked-deps refusal (does not bypass cycle detection)")
+    .action(
+      async (
+        arg: string,
+        opts: { inPlace?: boolean; raw?: boolean; tui?: boolean; force?: boolean },
+      ) => {
       const cwd = io.runCwd ?? process.cwd();
       let lock: LockHandle | undefined;
       let runCwd: string | undefined;
@@ -170,6 +177,52 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
           );
           exitCode = 1;
           return;
+        }
+
+        // Brief deps gate — before lockfile claim, before worktree creation.
+        // Cycle errors are usage errors regardless of --force.
+        if (brief) {
+          let gateStore: RunStore | undefined;
+          try {
+            gateStore = await (io.openRunStore ?? openDefaultRunStore)(cwd);
+          } catch (err) {
+            io.stderr.write(
+              `Warning: could not open run history store: ${(err as Error).message}\n`,
+            );
+          }
+          if (gateStore) {
+            try {
+              const outcome = await gateBriefDeps({
+                brief,
+                runStore: gateStore,
+                cwd,
+                force: opts.force === true,
+              });
+              if (outcome.kind === "refuse") {
+                io.stderr.write(`${outcome.message}\n`);
+                exitCode = 1;
+                return;
+              }
+              if (outcome.kind === "warn") {
+                io.stderr.write(`${outcome.message}\n`);
+              }
+            } catch (err) {
+              if (err instanceof BriefCycleError) {
+                io.stderr.write(
+                  `Refusing to run \`${brief.frontmatter.change}\`: ${err.message}\n`,
+                );
+                exitCode = 1;
+                return;
+              }
+              throw err;
+            } finally {
+              try {
+                await gateStore.close();
+              } catch {
+                // best effort
+              }
+            }
+          }
         }
 
         const briefMode_inPlace =
@@ -412,6 +465,52 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
       });
       exitCode = code;
     });
+
+  program
+    .command("briefs")
+    .description("List briefs across doneness (filesystem) and activity (runs.db) axes.")
+    .option("--state <s>", "Filter by doneness (active | done | missing)")
+    .option("--activity <s>", "Filter by activity (none | running | succeeded | failed)")
+    .option("--ready", "Shortcut: active, deps satisfied, no in-flight or recently-succeeded run")
+    .option("--inputs <d>", "Override the inputs directory (default <cwd>/inputs)")
+    .option("--json", "Emit a JSON array instead of a table")
+    .action(
+      async (opts: {
+        state?: string;
+        activity?: string;
+        ready?: boolean;
+        inputs?: string;
+        json?: boolean;
+      }) => {
+        const cwd = io.runCwd ?? process.cwd();
+        let store: RunStore | undefined;
+        try {
+          store = await (io.openRunStore ?? openDefaultRunStore)(cwd);
+        } catch (err) {
+          io.stderr.write(`Could not open run history store: ${(err as Error).message}\n`);
+          exitCode = 1;
+          return;
+        }
+        try {
+          exitCode = await briefsAction({
+            ...(opts.state !== undefined ? { state: opts.state } : {}),
+            ...(opts.activity !== undefined ? { activity: opts.activity } : {}),
+            ...(opts.ready !== undefined ? { ready: opts.ready } : {}),
+            ...(opts.inputs !== undefined ? { inputs: opts.inputs } : {}),
+            ...(opts.json !== undefined ? { json: opts.json } : {}),
+            store,
+            cwd,
+            io: { stdout: io.stdout, stderr: io.stderr },
+          });
+        } finally {
+          try {
+            await store.close();
+          } catch {
+            // best effort
+          }
+        }
+      },
+    );
 
   program
     .command("merge")

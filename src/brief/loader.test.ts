@@ -125,16 +125,98 @@ model: claude-opus-4-7
       `---
 change: foo
 factory: sdd
-depends_on:
-  - bar
 priority: high
+tags:
+  - x
 ---
 `,
     );
     const brief = await loadBrief(file);
     expect(brief.frontmatter.change).toBe("foo");
-    expect((brief.frontmatter as Record<string, unknown>).depends_on).toEqual(["bar"]);
     expect((brief.frontmatter as Record<string, unknown>).priority).toBe("high");
+    expect((brief.frontmatter as Record<string, unknown>).tags).toEqual(["x"]);
+  });
+
+  it("defaults depends_on to empty array when absent", async () => {
+    const dir = await makeDir();
+    const file = await writeBrief(
+      dir,
+      "nodeps.md",
+      `---
+change: foo
+factory: sdd
+---
+`,
+    );
+    const brief = await loadBrief(file);
+    expect(brief.frontmatter.depends_on).toEqual([]);
+  });
+
+  it("preserves depends_on order when present", async () => {
+    const dir = await makeDir();
+    const file = await writeBrief(
+      dir,
+      "deps.md",
+      `---
+change: foo
+factory: sdd
+depends_on:
+  - bar
+  - baz
+---
+`,
+    );
+    const brief = await loadBrief(file);
+    expect(brief.frontmatter.depends_on).toEqual(["bar", "baz"]);
+  });
+
+  it("rejects depends_on with a non-array value", async () => {
+    const dir = await makeDir();
+    const file = await writeBrief(
+      dir,
+      "deps-string.md",
+      `---
+change: foo
+factory: sdd
+depends_on: bar
+---
+`,
+    );
+    await expect(loadBrief(file)).rejects.toThrowError(/depends_on/);
+  });
+
+  it("rejects depends_on with a non-string element", async () => {
+    const dir = await makeDir();
+    const file = await writeBrief(
+      dir,
+      "deps-number.md",
+      `---
+change: foo
+factory: sdd
+depends_on:
+  - bar
+  - 42
+---
+`,
+    );
+    await expect(loadBrief(file)).rejects.toThrowError(/depends_on/);
+  });
+
+  it("rejects depends_on with an empty-string element", async () => {
+    const dir = await makeDir();
+    const file = await writeBrief(
+      dir,
+      "deps-empty.md",
+      `---
+change: foo
+factory: sdd
+depends_on:
+  - bar
+  - ""
+---
+`,
+    );
+    await expect(loadBrief(file)).rejects.toThrowError(/depends_on/);
   });
 
   it("reports a clear error when the file is missing", async () => {

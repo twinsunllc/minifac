@@ -5,6 +5,7 @@ import type { ExecutorRegistry } from "../executor/registry.js";
 import type { EmittedEvent, NodeResult, ResolvedNode, RunContext } from "../executor/types.js";
 import type { LoadedFactory } from "../factory/loader.js";
 import type { RunStore, StoredEventKind } from "../storage/run-store.js";
+import { markBriefDone } from "./mark-done.js";
 import type { ExecutionLogEntry, RunResult } from "./result.js";
 import { type Substitutions, substitute } from "./substitute.js";
 
@@ -339,6 +340,37 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
       log,
       durationMs: Date.now() - runStart,
     };
+  }
+
+  // Brief mark-done post-step. Runs after terminal-success only; failures
+  // log a warning and continue. Skipped for brief-less runs.
+  if (result.status === "succeeded" && brief && runCwd !== undefined && runCwd.length > 0) {
+    const change = brief.frontmatter.change;
+    if (typeof change === "string" && change.length > 0) {
+      try {
+        const markRes = await markBriefDone({ change, runCwd });
+        if (markRes.warning) {
+          const entry: EmittedEvent = {
+            nodeId: "__mark_done__",
+            iteration: 0,
+            emittedAt: Date.now() - runStart,
+            event: { kind: "stderr", line: markRes.warning },
+          };
+          onEvent?.(entry);
+        }
+      } catch (err) {
+        const entry: EmittedEvent = {
+          nodeId: "__mark_done__",
+          iteration: 0,
+          emittedAt: Date.now() - runStart,
+          event: {
+            kind: "stderr",
+            line: `mark-done: unexpected error: ${(err as Error).message}`,
+          },
+        };
+        onEvent?.(entry);
+      }
+    }
   }
 
   if (store) {
