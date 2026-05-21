@@ -7,11 +7,11 @@ import { RunApp } from "./app.js";
 import { type StatusGlyphs, glyphsFor, pickGlyphSet } from "./glyphs.js";
 import type { MergeOverlayProps } from "./merge-overlay.js";
 import {
-  createInitialRunState,
+  type ReducerEvent,
   type RunState,
   type RunStateInit,
+  createInitialRunState,
   runReducer,
-  type ReducerEvent,
 } from "./reducer.js";
 
 export interface InkRunRendererOptions {
@@ -94,6 +94,7 @@ function RendererRoot({
   });
 
   // Tick the spinner ~10 fps while a run is live.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: dispatch is stable (setState wrapper)
   useEffect(() => {
     if (state.terminalStatus) return;
     const interval = setInterval(() => {
@@ -111,14 +112,7 @@ function RendererRoot({
     onMerge,
   };
 
-  return (
-    <RunApp
-      state={state}
-      glyphs={glyphs}
-      handlers={handlers}
-      mergeOverlay={mergeOverlay}
-    />
-  );
+  return <RunApp state={state} glyphs={glyphs} handlers={handlers} mergeOverlay={mergeOverlay} />;
 }
 
 async function defaultInvokeMerge(

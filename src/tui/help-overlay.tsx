@@ -25,9 +25,7 @@ export function HelpOverlay(): ReactElement {
         </Box>
       ))}
       <Box marginTop={1}>
-        <Text color="gray">
-          Below 80×24 the TUI falls back to a single-pane layout (log only).
-        </Text>
+        <Text color="gray">Below 80×24 the TUI falls back to a single-pane layout (log only).</Text>
       </Box>
     </Box>
   );

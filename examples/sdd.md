@@ -35,7 +35,9 @@ Once the brief exists:
 2. Invoke `minifac run <change-name>`. The CLI's lookup precedence
    resolves the bare name to `inputs/<change-name>.md`, loads the
    brief, resolves `factory: sdd` to `examples/sdd.yaml`, and runs
-   the factory with the brief in scope.
+   the factory with the brief in scope. In a TTY the run opens an
+   inline TUI (see `docs/concepts/Run-TUI.md`); for scripts or CI
+   pass `--raw` to keep the line-prefixed output.
 3. The runner substitutes `{{ brief.change }}` (the change name) and
    `{{ brief.body }}` (the brief body) into the node prompts before
    dispatch.

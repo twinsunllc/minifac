@@ -136,81 +136,81 @@
 
 ## 8. CLI snapshot / behavior tests
 
-- [ ] 8.1 Add a test that `process.stdout.isTTY = true` with
+- [x] 8.1 Add a test that `process.stdout.isTTY = true` with
       no flags routes to the TUI path (assert the raw
       formatter is NOT called; the renderer is constructed).
-- [ ] 8.2 Add a test that `process.stdout.isTTY = false` with
+- [x] 8.2 Add a test that `process.stdout.isTTY = false` with
       no flags routes to the raw path (assert today's raw
       output is produced; the renderer is NOT constructed).
-- [ ] 8.3 Add tests for `--raw` (forces raw in a TTY) and
+- [x] 8.3 Add tests for `--raw` (forces raw in a TTY) and
       `--tui` (forces TUI in a non-TTY).
-- [ ] 8.4 Add a test that `--raw --tui` together exits `1`
+- [x] 8.4 Add a test that `--raw --tui` together exits `1`
       with the flag-conflict stderr message and starts no
       run.
-- [ ] 8.5 Add a test that the `[run] <status> cwd=<path>`
+- [x] 8.5 Add a test that the `[run] <status> cwd=<path>`
       summary line is present on stderr in both modes.
 
 ## 9. TUI render snapshot tests
 
-- [ ] 9.1 Using `ink-testing-library`, render `<RunApp>` with
+- [x] 9.1 Using `ink-testing-library`, render `<RunApp>` with
       a synthetic initial `RunState` (all nodes pending) and
       snapshot the frame.
-- [ ] 9.2 Snapshot a `RunState` with one node running (spinner
+- [x] 9.2 Snapshot a `RunState` with one node running (spinner
       frame pinned via prop).
-- [ ] 9.3 Snapshot a `RunState` with all nodes succeeded.
-- [ ] 9.4 Snapshot a `RunState` with one node failed and the
+- [x] 9.3 Snapshot a `RunState` with all nodes succeeded.
+- [x] 9.4 Snapshot a `RunState` with one node failed and the
       next iteration retrying.
-- [ ] 9.5 Snapshot the terminal `succeeded` state — verify the
+- [x] 9.5 Snapshot the terminal `succeeded` state — verify the
       bottom hint includes `m merge` when `branchName` is non-
       null.
-- [ ] 9.6 Snapshot the terminal `failed` state — verify the
+- [x] 9.6 Snapshot the terminal `failed` state — verify the
       bottom hint does NOT include `m merge`.
-- [ ] 9.7 Snapshot the sub-80×24 single-pane fallback.
-- [ ] 9.8 Snapshot the help overlay (`?`) and the merge
+- [x] 9.7 Snapshot the sub-80×24 single-pane fallback.
+- [x] 9.8 Snapshot the help overlay (`?`) and the merge
       overlay.
 
 ## 10. Hotkey behavior tests
 
-- [ ] 10.1 Test `↓` (and `j`) moves selection and sets
+- [x] 10.1 Test `↓` (and `j`) moves selection and sets
       `followMode = false`.
-- [ ] 10.2 Test `Enter` sets `followMode = true` and snaps to
+- [x] 10.2 Test `Enter` sets `followMode = true` and snaps to
       the currently-running node.
-- [ ] 10.3 Test `<` / `>` cycle through prior iterations for a
+- [x] 10.3 Test `<` / `>` cycle through prior iterations for a
       cycling node.
-- [ ] 10.4 Test `d` toggles details on the highlighted log
+- [x] 10.4 Test `d` toggles details on the highlighted log
       line.
-- [ ] 10.5 Test `r` unmounts ink and resolves the renderer's
+- [x] 10.5 Test `r` unmounts ink and resolves the renderer's
       `waitForExit()` with `action: "raw-switch"`.
-- [ ] 10.6 Test `q` mid-run shows the confirmation prompt; on
+- [x] 10.6 Test `q` mid-run shows the confirmation prompt; on
       `y` the renderer requests quit and the run row records
       `user_quit`.
-- [ ] 10.7 Test `q` on a terminal-status run exits without a
+- [x] 10.7 Test `q` on a terminal-status run exits without a
       prompt.
-- [ ] 10.8 Test `m` on a succeeded run with a non-null
+- [x] 10.8 Test `m` on a succeeded run with a non-null
       `branchName` invokes the merge action and renders the
       overlay; `m` is a no-op on a succeeded run with null
       `branchName` and on any failed run.
-- [ ] 10.9 Test `?` toggles the help overlay.
+- [x] 10.9 Test `?` toggles the help overlay.
 
 ## 11. Documentation
 
-- [ ] 11.1 Update `docs/concepts/Run.md` to mention the TUI is
+- [x] 11.1 Update `docs/concepts/Run.md` to mention the TUI is
       the default in a TTY and `--raw` is the escape hatch.
-- [ ] 11.2 Create `docs/concepts/Run-TUI.md` describing the
+- [x] 11.2 Create `docs/concepts/Run-TUI.md` describing the
       layout, hotkeys, log-rendering rules, and the sub-80×24
       fallback.
-- [ ] 11.3 Update `README.md` quickstart to call out `--raw`
+- [x] 11.3 Update `README.md` quickstart to call out `--raw`
       for scripts / CI.
-- [ ] 11.4 Update `examples/sdd.md` quickstart with the same
+- [x] 11.4 Update `examples/sdd.md` quickstart with the same
       callout.
 
 ## 12. Acceptance
 
-- [ ] 12.1 `minifac run <brief>` in a TTY shows the TUI.
-- [ ] 12.2 `minifac run <brief> > log` (non-TTY) falls back
+- [x] 12.1 `minifac run <brief>` in a TTY shows the TUI.
+- [x] 12.2 `minifac run <brief> > log` (non-TTY) falls back
       to raw with no behavior change vs today.
-- [ ] 12.3 `--raw` and `--tui` overrides work in both
+- [x] 12.3 `--raw` and `--tui` overrides work in both
       directions.
-- [ ] 12.4 All existing tests still pass (357+ baseline).
-- [ ] 12.5 `npm run build` is clean.
-- [ ] 12.6 `openspec validate run-tui` exits `0`.
+- [x] 12.4 All existing tests still pass (357+ baseline).
+- [x] 12.5 `npm run build` is clean.
+- [x] 12.6 `openspec validate run-tui` exits `0`.

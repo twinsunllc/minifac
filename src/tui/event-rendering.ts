@@ -139,7 +139,9 @@ export function renderStreamJsonLine(line: string): RenderedEvent {
         } else if (Array.isArray(raw)) {
           const firstText = raw.find(
             (x) =>
-              x && typeof x === "object" && (x as Record<string, unknown>).type === "text" &&
+              x &&
+              typeof x === "object" &&
+              (x as Record<string, unknown>).type === "text" &&
               typeof (x as Record<string, unknown>).text === "string",
           ) as Record<string, unknown> | undefined;
           resultText = firstText ? (firstText.text as string) : compact(raw);

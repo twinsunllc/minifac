@@ -65,8 +65,11 @@ export type UIEvent =
 export type ReducerEvent = UIEvent | EmittedEvent;
 
 function isUIEvent(event: ReducerEvent): event is UIEvent {
-  return "kind" in event && typeof (event as { kind: string }).kind === "string" &&
-    !(event as Record<string, unknown>).nodeId;
+  return (
+    "kind" in event &&
+    typeof (event as { kind: string }).kind === "string" &&
+    !(event as Record<string, unknown>).nodeId
+  );
 }
 
 export interface RunStateInit {
@@ -301,13 +304,19 @@ export function isMergeAvailable(state: RunState): boolean {
 }
 
 /** Returns the visible events for the selected (node, iteration). */
-export function visibleEvents(
-  state: RunState,
-): { events: RenderedEvent[]; nodeId: string; iteration: number } {
+export function visibleEvents(state: RunState): {
+  events: RenderedEvent[];
+  nodeId: string;
+  iteration: number;
+} {
   const node = state.nodes.find((n) => n.id === state.selectedNodeId);
   const empty = { events: [], nodeId: state.selectedNodeId, iteration: state.selectedIteration };
   if (!node) return empty;
   const log = node.iterations.find((it) => it.iteration === state.selectedIteration);
   if (!log) return empty;
-  return { events: log.events.filter((e) => !e.suppressed), nodeId: node.id, iteration: log.iteration };
+  return {
+    events: log.events.filter((e) => !e.suppressed),
+    nodeId: node.id,
+    iteration: log.iteration,
+  };
 }

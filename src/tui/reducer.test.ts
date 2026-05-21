@@ -1,11 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { EmittedEvent } from "../executor/types.js";
-import {
-  createInitialRunState,
-  isMergeAvailable,
-  runReducer,
-  visibleEvents,
-} from "./reducer.js";
+import { createInitialRunState, isMergeAvailable, runReducer, visibleEvents } from "./reducer.js";
 
 const init = () =>
   createInitialRunState({
@@ -45,7 +40,14 @@ describe("runReducer", () => {
 
   it("status=succeeded sets node status and iteration terminalStatus", () => {
     let s = init();
-    s = runReducer(s, stdoutEvent("propose", 1, '{"type":"assistant","message":{"content":[{"type":"text","text":"ok"}]}}'));
+    s = runReducer(
+      s,
+      stdoutEvent(
+        "propose",
+        1,
+        '{"type":"assistant","message":{"content":[{"type":"text","text":"ok"}]}}',
+      ),
+    );
     s = runReducer(s, statusEvent("propose", 1, "succeeded"));
     const propose = s.nodes.find((n) => n.id === "propose");
     expect(propose?.status).toBe("succeeded");
@@ -54,13 +56,27 @@ describe("runReducer", () => {
 
   it("a status=failed then a new stdout starts iteration 2", () => {
     let s = init();
-    s = runReducer(s, stdoutEvent("verify", 1, '{"type":"assistant","message":{"content":[{"type":"text","text":"x"}]}}'));
+    s = runReducer(
+      s,
+      stdoutEvent(
+        "verify",
+        1,
+        '{"type":"assistant","message":{"content":[{"type":"text","text":"x"}]}}',
+      ),
+    );
     s = runReducer(s, statusEvent("verify", 1, "failed"));
     let verify = s.nodes.find((n) => n.id === "verify");
     expect(verify?.status).toBe("failed");
     expect(verify?.iterations[0]?.terminalStatus).toBe("failed");
 
-    s = runReducer(s, stdoutEvent("verify", 2, '{"type":"assistant","message":{"content":[{"type":"text","text":"y"}]}}'));
+    s = runReducer(
+      s,
+      stdoutEvent(
+        "verify",
+        2,
+        '{"type":"assistant","message":{"content":[{"type":"text","text":"y"}]}}',
+      ),
+    );
     verify = s.nodes.find((n) => n.id === "verify");
     expect(verify?.status).toBe("running");
     expect(verify?.iteration).toBe(2);
@@ -86,7 +102,14 @@ describe("runReducer", () => {
 
   it("enter-follow flips followMode true and jumps to running node", () => {
     let s = init();
-    s = runReducer(s, stdoutEvent("apply", 1, '{"type":"assistant","message":{"content":[{"type":"text","text":"a"}]}}'));
+    s = runReducer(
+      s,
+      stdoutEvent(
+        "apply",
+        1,
+        '{"type":"assistant","message":{"content":[{"type":"text","text":"a"}]}}',
+      ),
+    );
     s = runReducer(s, { kind: "navigate-up" });
     expect(s.followMode).toBe(false);
     s = runReducer(s, { kind: "enter-follow" });

@@ -12,9 +12,8 @@ export function Header({ state }: HeaderProps): ReactElement {
     state.nodes.find((n) => n.status === "running" || n.status === "retrying")?.id ??
     state.selectedNodeId;
   const status = state.terminalStatus ? ` · ${state.terminalStatus}` : "";
-  const reason = state.terminalStatus === "failed" && state.terminalReason
-    ? ` (${state.terminalReason})`
-    : "";
+  const reason =
+    state.terminalStatus === "failed" && state.terminalReason ? ` (${state.terminalReason})` : "";
   return (
     <Box>
       <Text bold>minifac</Text>

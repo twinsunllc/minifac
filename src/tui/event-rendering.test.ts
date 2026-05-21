@@ -34,7 +34,9 @@ describe("renderStreamJsonLine", () => {
   });
 
   it("highlights rejected rate_limit_event events", () => {
-    const r = renderStreamJsonLine('{"type":"rate_limit_event","status":"rejected","reason":"quota"}');
+    const r = renderStreamJsonLine(
+      '{"type":"rate_limit_event","status":"rejected","reason":"quota"}',
+    );
     expect(r.kind).toBe("rate_limit");
     expect(r.suppressed).toBeFalsy();
     expect(r.highlight).toBe("rejected");

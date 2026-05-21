@@ -9,7 +9,12 @@ export interface MergeOverlayProps {
   pending: boolean;
 }
 
-export function MergeOverlay({ stdout, stderr, exitCode, pending }: MergeOverlayProps): ReactElement {
+export function MergeOverlay({
+  stdout,
+  stderr,
+  exitCode,
+  pending,
+}: MergeOverlayProps): ReactElement {
   const status = pending
     ? "running…"
     : exitCode === 0
@@ -24,9 +29,8 @@ export function MergeOverlay({ stdout, stderr, exitCode, pending }: MergeOverlay
           {stdout
             .split(/\n/)
             .filter((l) => l.length > 0)
-            // biome-ignore lint/suspicious/noArrayIndexKey: stable ordering
             .map((l, i) => (
-              <Text key={i}>{l}</Text>
+              <Text key={`o${i}:${l}`}>{l}</Text>
             ))}
         </Box>
       ) : null}
@@ -36,9 +40,8 @@ export function MergeOverlay({ stdout, stderr, exitCode, pending }: MergeOverlay
           {stderr
             .split(/\n/)
             .filter((l) => l.length > 0)
-            // biome-ignore lint/suspicious/noArrayIndexKey: stable ordering
             .map((l, i) => (
-              <Text key={i} color="red">
+              <Text key={`e${i}:${l}`} color="red">
                 {l}
               </Text>
             ))}

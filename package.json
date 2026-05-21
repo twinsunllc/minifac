@@ -17,10 +17,7 @@
       "types": "./dist/index.d.ts"
     }
   },
-  "files": [
-    "dist",
-    "README.md"
-  ],
+  "files": ["dist", "README.md"],
   "scripts": {
     "build": "tsc -p tsconfig.json && node scripts/copy-web-assets.mjs",
     "start": "node dist/cli.js",

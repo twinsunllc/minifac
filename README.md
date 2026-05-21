@@ -66,10 +66,16 @@ node dist/cli.js run hello
 
 This invokes `examples/hello.yaml` by name. The factory declares
 `brief: none`, so no brief is needed. `examples/hello.yaml` defines a
-single `claude` node, so the `claude` CLI must be on `$PATH`. Output
-from each node is streamed to the terminal with a `[<node_id>]` prefix;
-the run exits with code `0` on success, `1` on load/validation errors,
-`2` on node failure, and `3` on budget exhaustion.
+single `claude` node, so the `claude` CLI must be on `$PATH`.
+
+In an interactive terminal `minifac run` opens an inline TUI (status
+pane + log pane + hotkey bar — see [`docs/concepts/Run-TUI.md`](docs/concepts/Run-TUI.md)).
+For pipes, redirects, and CI it falls back to line-prefixed raw
+output. Pass `--raw` to force the raw output even in a TTY (the
+form scripts and CI should rely on); `--tui` forces the TUI in a
+non-TTY. The run exits with code `0` on success, `1` on
+load/validation errors, `2` on node failure, and `3` on budget
+exhaustion.
 
 To run the SDD loop on a real change, author a brief and invoke it by
 name:
