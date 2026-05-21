@@ -38,7 +38,7 @@ describe("SqliteRunStore", () => {
     }
   });
 
-  it("creates the DB file lazily and applies the v1 schema", async () => {
+  it("creates the DB file lazily and applies migrations through v2", async () => {
     const dbPath = path.join(dir, "nested", "runs.db");
     store = SqliteRunStore.open(dbPath);
     // Verify by opening a parallel read-only handle.
@@ -51,7 +51,7 @@ describe("SqliteRunStore", () => {
       const ver = inspector
         .prepare("SELECT COALESCE(MAX(version), 0) AS v FROM schema_version")
         .get() as { v: number };
-      expect(ver.v).toBe(1);
+      expect(ver.v).toBe(2);
       const tables = inspector
         .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
         .all() as Array<{ name: string }>;
@@ -59,9 +59,111 @@ describe("SqliteRunStore", () => {
       expect(names).toContain("runs");
       expect(names).toContain("events");
       expect(names).toContain("node_executions");
+      // branch_name column added by 0002.
+      const cols = inspector.prepare("PRAGMA table_info(runs)").all() as Array<{ name: string }>;
+      expect(cols.map((c) => c.name)).toContain("branch_name");
     } finally {
       inspector.close();
     }
+  });
+
+  it("applies 0002 to a pre-existing v1 database and preserves prior rows", async () => {
+    const dbPath = path.join(dir, "preexisting.db");
+    // Seed a v1 database manually: schema_version=1 with the v1 runs columns.
+    const seed = new DatabaseSync(dbPath);
+    seed.exec("CREATE TABLE schema_version (version INTEGER PRIMARY KEY)");
+    seed.prepare("INSERT INTO schema_version (version) VALUES (?)").run(1);
+    seed.exec(`
+      CREATE TABLE runs (
+        id                TEXT PRIMARY KEY,
+        factory_path      TEXT NOT NULL,
+        factory_name      TEXT NOT NULL,
+        brief_path        TEXT,
+        change            TEXT,
+        base_branch       TEXT,
+        worktree_path     TEXT,
+        status            TEXT NOT NULL,
+        reason            TEXT,
+        proximate_node_id TEXT,
+        started_at        INTEGER NOT NULL,
+        ended_at          INTEGER
+      )`);
+    seed.exec(`
+      CREATE TABLE events (
+        run_id     TEXT    NOT NULL,
+        seq        INTEGER NOT NULL,
+        node_id    TEXT,
+        iteration  INTEGER NOT NULL,
+        kind       TEXT    NOT NULL,
+        payload    TEXT    NOT NULL,
+        emitted_at INTEGER NOT NULL,
+        PRIMARY KEY (run_id, seq)
+      )`);
+    seed.exec(`
+      CREATE TABLE node_executions (
+        run_id          TEXT    NOT NULL,
+        node_id         TEXT    NOT NULL,
+        iteration       INTEGER NOT NULL,
+        status          TEXT    NOT NULL,
+        started_at      INTEGER NOT NULL,
+        ended_at        INTEGER,
+        sentinel_status TEXT,
+        exit_code       INTEGER,
+        PRIMARY KEY (run_id, node_id, iteration)
+      )`);
+    seed
+      .prepare(
+        `INSERT INTO runs (id, factory_path, factory_name, status, started_at)
+         VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run("legacy-1", "/p/f.yaml", "f", "succeeded", 1);
+    seed.close();
+
+    // Open via SqliteRunStore so it applies pending migrations.
+    store = SqliteRunStore.open(dbPath);
+    const row = await store.getRun("legacy-1");
+    expect(row).not.toBeNull();
+    expect(row?.branchName).toBeNull();
+
+    const inspector = new DatabaseSync(dbPath);
+    try {
+      const ver = inspector
+        .prepare("SELECT COALESCE(MAX(version), 0) AS v FROM schema_version")
+        .get() as { v: number };
+      expect(ver.v).toBe(2);
+      const cols = inspector.prepare("PRAGMA table_info(runs)").all() as Array<{ name: string }>;
+      expect(cols.map((c) => c.name)).toContain("branch_name");
+    } finally {
+      inspector.close();
+    }
+  });
+
+  it("createRun persists and round-trips branchName, listRuns surfaces it", async () => {
+    const dbPath = path.join(dir, "bn.db");
+    store = SqliteRunStore.open(dbPath);
+    await store.createRun({
+      id: "with-branch",
+      factoryPath: "/p/f.yaml",
+      factoryName: "f",
+      change: "feat-a",
+      branchName: "run/feat-a-abc123",
+      startedAt: 1,
+    });
+    await store.createRun({
+      id: "without-branch",
+      factoryPath: "/p/f.yaml",
+      factoryName: "f",
+      change: "feat-b",
+      startedAt: 2,
+    });
+    const a = await store.getRun("with-branch");
+    expect(a?.branchName).toBe("run/feat-a-abc123");
+    const b = await store.getRun("without-branch");
+    expect(b?.branchName).toBeNull();
+    const all = await store.listRuns();
+    const byId = new Map(all.map((r) => [r.id, r]));
+    expect(byId.get("with-branch")?.branchName).toBe("run/feat-a-abc123");
+    expect(byId.get("without-branch")?.branchName).toBeNull();
   });
 
   it("refuses to open a DB whose schema_version exceeds the binary's highest", async () => {

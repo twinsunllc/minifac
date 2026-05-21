@@ -47,13 +47,26 @@ have OpenSpec installed and the relevant verify commands wired up
 ### Worktree-by-default
 
 `minifac run <change>` creates a fresh git worktree at
-`~/.minifac/worktrees/<repo-hash>-<change>/`, branches off
-`base_branch` from the brief (defaulting to caller's `HEAD`), and runs
-every node inside it. Each node's `cwd: "{{ run.cwd }}"` resolves to
-the worktree path automatically, so the shipped factory does not
-hard-code any target path. The branch and worktree are left in place
-when the run ends — review and merge the branch like any other
-contributor's; reclaim disk with `minifac prune` when you're done.
+`~/.minifac/worktrees/run-<change>-<slug>/` (where `<slug>` is the
+first 6 hex chars of the run id), cuts a branch
+`run/<change>-<slug>` from `base_branch` (defaulting to caller's
+`HEAD`), and runs every node inside it. Each node's
+`cwd: "{{ run.cwd }}"` resolves to the worktree path automatically,
+so the shipped factory does not hard-code any target path. The branch
+and worktree are left in place when the run ends — ship the run with
+`minifac merge <change>` (the ship-this-run verb), or review the
+branch manually. Reclaim disk with `minifac prune` when you're done;
+it deletes the directories and the branches they owned.
+
+You can see the branch for any run in `minifac runs --change <change>`:
+
+```
+ID        CHANGE/FACTORY                STATUS     STARTED                  BRANCH                          DURATION
+3f9e1a44  my-change                     succeeded  2026-05-21T15:12:33.001Z run/my-change-3f9e1a            12345ms
+```
+
+`minifac merge <change>` then fast-forwards (or, if the default branch
+has advanced, falls back to a merge commit) using that branch name.
 
 For CI environments, read-only factories, or when you want the factory
 to run inside your existing checkout, pass `--in-place` (or set

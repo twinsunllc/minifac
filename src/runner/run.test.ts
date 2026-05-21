@@ -49,6 +49,7 @@ class FakeStore implements RunStore {
       change: input.change ?? null,
       baseBranch: input.baseBranch ?? null,
       worktreePath: input.worktreePath ?? null,
+      branchName: input.branchName ?? null,
       status: "running",
       reason: null,
       proximateNodeId: null,

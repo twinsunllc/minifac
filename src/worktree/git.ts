@@ -88,6 +88,20 @@ export async function gitWorktreePrune(repoCwd: string): Promise<void> {
 }
 
 /**
+ * Delete a local branch ref. Force-deletes by default (-D); the only
+ * caller is `minifac prune`, which has already removed the worktree and
+ * thus opted into discarding the branch even if its tip was unmerged.
+ */
+export async function gitBranchDelete(
+  repoCwd: string,
+  branch: string,
+  opts: { force?: boolean } = {},
+): Promise<void> {
+  const flag = opts.force === false ? "-d" : "-D";
+  await runOrThrow(repoCwd, ["branch", flag, branch]);
+}
+
+/**
  * Resolve the default branch of `repoCwd`:
  * 1. `configuredDefault` (when set)
  * 2. The branch that `origin/HEAD` points to

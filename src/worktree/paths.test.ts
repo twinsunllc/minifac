@@ -6,6 +6,10 @@ import type { WorktreeConfig } from "./config.js";
 import {
   computeRepoHash,
   lockPathForKey,
+  runBranchName,
+  runSlugFromId,
+  runWorktreeDirName,
+  runWorktreePathForDir,
   worktreeKeyForBrief,
   worktreeKeyForFactory,
   worktreePathForKey,
@@ -63,5 +67,33 @@ describe("paths", () => {
     };
     expect(worktreePathForKey(cfg, "abc-foo")).toBe(path.join("/wt", "abc-foo"));
     expect(lockPathForKey(cfg, "abc-foo")).toBe(path.join("/locks", "abc-foo.lock"));
+  });
+
+  it("runSlugFromId is the first 6 chars lowercased", () => {
+    expect(runSlugFromId("ABCDEF1234567890")).toBe("abcdef");
+    expect(runSlugFromId("a1b2c3d4")).toBe("a1b2c3");
+    // UUIDs are already lowercase but the contract still lowercases:
+    expect(runSlugFromId("F0F0F0F0-1111-2222-3333-444444444444")).toBe("f0f0f0");
+  });
+
+  it("runBranchName shape is `run/<segment>-<slug>`", () => {
+    expect(runBranchName("my-change", "abcdef")).toBe("run/my-change-abcdef");
+    // Works the same when the segment is a factory name (brief-less callers).
+    expect(runBranchName("hello", "012345")).toBe("run/hello-012345");
+  });
+
+  it("runWorktreeDirName shape is `run-<segment>-<slug>`", () => {
+    expect(runWorktreeDirName("my-change", "abcdef")).toBe("run-my-change-abcdef");
+    expect(runWorktreeDirName("hello", "012345")).toBe("run-hello-012345");
+  });
+
+  it("runWorktreePathForDir joins the dir name under config.worktreesDir", () => {
+    const cfg: WorktreeConfig = {
+      worktreesDir: "/wt",
+      locksDir: "/locks",
+    };
+    expect(runWorktreePathForDir(cfg, "run-my-change-abcdef")).toBe(
+      path.join("/wt", "run-my-change-abcdef"),
+    );
   });
 });

@@ -75,8 +75,8 @@ export class SqliteRunStore implements RunStore {
     const stmt = this.db.prepare(
       `INSERT INTO runs
         (id, factory_path, factory_name, brief_path, change, base_branch,
-         worktree_path, status, reason, proximate_node_id, started_at, ended_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'running', NULL, NULL, ?, NULL)`,
+         worktree_path, branch_name, status, reason, proximate_node_id, started_at, ended_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'running', NULL, NULL, ?, NULL)`,
     );
     stmt.run(
       input.id,
@@ -86,6 +86,7 @@ export class SqliteRunStore implements RunStore {
       input.change ?? null,
       input.baseBranch ?? null,
       input.worktreePath ?? null,
+      input.branchName ?? null,
       input.startedAt,
     );
   }
@@ -246,6 +247,7 @@ interface RunRow {
   change: string | null;
   base_branch: string | null;
   worktree_path: string | null;
+  branch_name: string | null;
   status: RunStatus;
   reason: string | null;
   proximate_node_id: string | null;
@@ -272,6 +274,7 @@ function rowToStoredRun(r: RunRow): StoredRun {
     change: r.change,
     baseBranch: r.base_branch,
     worktreePath: r.worktree_path,
+    branchName: r.branch_name ?? null,
     status: r.status,
     reason: r.reason,
     proximateNodeId: r.proximate_node_id,

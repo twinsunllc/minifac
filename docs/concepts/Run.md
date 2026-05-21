@@ -11,8 +11,19 @@ ones). It's the atomic unit of work in minifac.
 
 ## Identity
 
-Each run has a unique id (generated when the [[Runner]] starts). The
-id is also embedded in the [[Worktree]] path and the lockfile name.
+Each run has a unique id (a UUID generated when the run is dispatched).
+The first 6 hex chars of the id form the *run slug*, which is embedded
+in the [[Worktree]] directory name (`run-<change>-<slug>`) and the
+per-run branch name (`run/<change>-<slug>`). The lockfile name keeps
+the older `<repo-hash>-<change>` shape — see
+[[0019-Run-Scoped-Branches]] for why.
+
+The branch name for any persisted run lives in the [[Runs-DB]] row as
+`branch_name`. To find the branch for a given run, use
+`minifac runs` (the table includes the branch) or
+`minifac runs show <id>`. Rows from before this change carry
+`branch_name = NULL`; their branches (if any still exist) were named
+exactly after `change`.
 
 ## Anatomy
 
@@ -42,13 +53,16 @@ run in parallel without contention — runs share no resources except
 ## Lifecycle of a typical run
 
 1. `minifac run <brief>` invoked
-2. Worktree created at `~/.minifac/worktrees/<repo>-<change>/`, branch
-   from `base_branch`
-3. Lockfile claimed; runs.db row created with `status: running`
+2. Worktree created at
+   `~/.minifac/worktrees/run-<change>-<slug>/`, with branch
+   `run/<change>-<slug>` cut from `base_branch`
+3. Lockfile claimed; runs.db row created with `status: running` and
+   the per-run `branch_name` persisted
 4. Runner walks the factory graph; events stream out as they arrive
 5. Terminal node succeeds → run row updated to `succeeded`, lockfile
    released
-6. Worktree (and branch) left intact for user review + merge
+6. Worktree (and branch) left intact for `minifac merge <change>` or
+   manual review
 
 ## Related
 

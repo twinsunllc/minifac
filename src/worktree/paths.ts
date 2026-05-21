@@ -41,3 +41,34 @@ export function worktreePathForKey(config: WorktreeConfig, key: string): string 
 export function lockPathForKey(config: WorktreeConfig, key: string): string {
   return path.join(config.locksDir, `${key}.lock`);
 }
+
+/**
+ * 6 lowercase hex chars of the run id (UUID). Used as the per-run
+ * disambiguator inside the per-change branch and worktree-directory
+ * namespace. See `docs/decisions/0019-Run-Scoped-Branches.md`.
+ */
+export function runSlugFromId(runId: string): string {
+  return runId.slice(0, 6).toLowerCase();
+}
+
+/**
+ * Branch name for a run: `run/<segment>-<slug>` where `segment` is the
+ * brief's `change` (brief-driven) or the factory name (brief-less).
+ */
+export function runBranchName(changeOrFactory: string, slug: string): string {
+  return `run/${changeOrFactory}-${slug}`;
+}
+
+/**
+ * Worktree directory leaf for a run: `run-<segment>-<slug>`. Mirrors the
+ * branch name with the path separator swapped so the directory leaf is
+ * a single path component on every filesystem.
+ */
+export function runWorktreeDirName(changeOrFactory: string, slug: string): string {
+  return `run-${changeOrFactory}-${slug}`;
+}
+
+/** Absolute path under `config.worktreesDir` for a given run-directory leaf. */
+export function runWorktreePathForDir(config: WorktreeConfig, dirName: string): string {
+  return path.join(config.worktreesDir, dirName);
+}

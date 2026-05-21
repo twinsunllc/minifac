@@ -2,7 +2,9 @@ import { spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, readdir, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { Writable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { SqliteRunStore } from "../storage/sqlite.js";
 import type { WorktreeConfig } from "./config.js";
 import { parseOlderThan, pruneWorktrees } from "./prune.js";
 
@@ -254,6 +256,140 @@ describe("pruneWorktrees", () => {
     });
     // Budget of 0 should mean no iterations complete.
     expect(counts.errors).toEqual([]);
+  });
+});
+
+describe("pruneWorktrees branch deletion", () => {
+  let savedHome: string | undefined;
+  let fx: Fixture;
+
+  beforeEach(async () => {
+    savedHome = process.env.MINIFAC_HOME;
+    fx = await makeFixture();
+    process.env.MINIFAC_HOME = fx.home;
+  });
+
+  afterEach(() => {
+    // biome-ignore lint/performance/noDelete: env var must be unset, not assigned undefined
+    if (savedHome === undefined) delete process.env.MINIFAC_HOME;
+    else process.env.MINIFAC_HOME = savedHome;
+  });
+
+  it("deletes the per-run branch after pruning its worktree (DB-resolved)", async () => {
+    const dir = path.join(fx.worktreesDir, "run-feat-a-abc123");
+    sh(fx.repo, ["git", "worktree", "add", "-b", "run/feat-a-abc123", dir, "HEAD"]);
+    // Merge it so the no-flag policy treats it as merged-old.
+    sh(fx.repo, ["git", "merge", "-q", "--ff-only", "run/feat-a-abc123"]);
+    await setOld(dir, 10);
+
+    const store = SqliteRunStore.open(path.join(fx.home, "runs.db"));
+    try {
+      await store.createRun({
+        id: "rid-1",
+        factoryPath: "/p/f.yaml",
+        factoryName: "f",
+        change: "feat-a",
+        worktreePath: dir,
+        branchName: "run/feat-a-abc123",
+        startedAt: 1,
+      });
+      await store.finalizeRun("rid-1", {
+        status: "succeeded",
+        reason: null,
+        endedAt: 2,
+      });
+
+      const counts = await pruneWorktrees({
+        config: fx.config,
+        callerRepoCwd: fx.repo,
+        options: {},
+        store,
+      });
+      expect(counts.removed["merged-old"]).toBe(1);
+    } finally {
+      await store.close();
+    }
+    const branches = spawnSync("git", ["branch", "--list", "run/feat-a-abc123"], {
+      cwd: fx.repo,
+      encoding: "utf8",
+    });
+    expect(branches.stdout.trim()).toBe("");
+  });
+
+  it("regression: after prune, a new run of the same change produces a fresh branch", async () => {
+    // Create + merge + age a `run-`-prefixed worktree.
+    const dir = path.join(fx.worktreesDir, "run-feat-b-aaaaaa");
+    sh(fx.repo, ["git", "worktree", "add", "-b", "run/feat-b-aaaaaa", dir, "HEAD"]);
+    sh(fx.repo, ["git", "merge", "-q", "--ff-only", "run/feat-b-aaaaaa"]);
+    await setOld(dir, 10);
+
+    await pruneWorktrees({
+      config: fx.config,
+      callerRepoCwd: fx.repo,
+      options: {},
+    });
+
+    // After prune, the branch is gone — a fresh `git worktree add -b run/feat-b-<slug>`
+    // for a *different* slug succeeds.
+    const freshDir = path.join(fx.worktreesDir, "run-feat-b-bbbbbb");
+    expect(() =>
+      sh(fx.repo, ["git", "worktree", "add", "-b", "run/feat-b-bbbbbb", freshDir, "HEAD"]),
+    ).not.toThrow();
+  });
+
+  it("legacy directory naming (no `run-` prefix) is removed without branch deletion", async () => {
+    const dir = path.join(fx.worktreesDir, "legacy-merged");
+    sh(fx.repo, ["git", "worktree", "add", "-b", "legacy-merged", dir, "HEAD"]);
+    sh(fx.repo, ["git", "merge", "-q", "--ff-only", "legacy-merged"]);
+    await setOld(dir, 10);
+
+    const counts = await pruneWorktrees({
+      config: fx.config,
+      callerRepoCwd: fx.repo,
+      options: {},
+    });
+    expect(counts.removed["merged-old"]).toBe(1);
+    // Branch SHOULD still exist (no `run-` prefix → caller-owned).
+    const branches = spawnSync("git", ["branch", "--list", "legacy-merged"], {
+      cwd: fx.repo,
+      encoding: "utf8",
+    });
+    expect(branches.stdout).toMatch(/legacy-merged/);
+  });
+
+  it("git branch -D failure is surfaced on stderr but does not abort prune", async () => {
+    // Force a failure: create a `run-`-named directory without a real
+    // worktree (rm + journal) so the branch doesn't exist; `git branch -D`
+    // for the inferred branch name will then fail.
+    const dir = path.join(fx.worktreesDir, "run-orphan-ffffff");
+    await mkdir(dir, { recursive: true });
+    await writeFile(path.join(dir, ".keep"), "x");
+    await setOld(dir, 10);
+
+    class BufStream extends Writable {
+      chunks: string[] = [];
+      // biome-ignore lint/suspicious/noExplicitAny: Writable callback uses any
+      _write(chunk: any, _enc: BufferEncoding, cb: (err?: Error | null) => void): void {
+        this.chunks.push(chunk.toString());
+        cb();
+      }
+      text(): string {
+        return this.chunks.join("");
+      }
+    }
+    const stderr = new BufStream();
+
+    const counts = await pruneWorktrees({
+      config: fx.config,
+      callerRepoCwd: fx.repo,
+      options: { all: true },
+      stderr,
+    });
+    // Removal succeeded (1 fresh/unmerged-old removed, depending on
+    // default-branch resolution against a bare dir; either way, no error
+    // in the counts.errors array).
+    expect(counts.errors).toEqual([]);
+    expect(stderr.text()).toMatch(/failed to delete branch/i);
   });
 });
 

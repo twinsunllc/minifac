@@ -60,6 +60,10 @@ CREATE TABLE node_executions (
 );
 `;
 
+const SQL_0002 = `
+ALTER TABLE runs ADD COLUMN branch_name TEXT;
+`;
+
 export interface Migration {
   version: number;
   name: string;
@@ -68,6 +72,7 @@ export interface Migration {
 
 export const MIGRATIONS: readonly Migration[] = Object.freeze([
   { version: 1, name: "initial", sql: SQL_0001 },
+  { version: 2, name: "add_branch_name", sql: SQL_0002 },
 ]);
 
 export function highestMigration(): number {

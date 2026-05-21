@@ -5,6 +5,7 @@ import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   GitError,
+  gitBranchDelete,
   gitBranchMerged,
   gitDefaultBranch,
   gitRemoteOriginUrl,
@@ -130,5 +131,26 @@ describe("git wrappers", () => {
   it("gitWorktreePrune runs without error", async () => {
     const repo = await makeRepo();
     await gitWorktreePrune(repo);
+  });
+
+  it("gitBranchDelete removes an existing local branch", async () => {
+    const repo = await makeRepo();
+    sh(repo, ["git", "branch", "to-delete"]);
+    const before = spawnSync("git", ["branch", "--list", "to-delete"], {
+      cwd: repo,
+      encoding: "utf8",
+    });
+    expect(before.stdout).toMatch(/to-delete/);
+    await gitBranchDelete(repo, "to-delete");
+    const after = spawnSync("git", ["branch", "--list", "to-delete"], {
+      cwd: repo,
+      encoding: "utf8",
+    });
+    expect(after.stdout.trim()).toBe("");
+  });
+
+  it("gitBranchDelete throws GitError when the branch does not exist", async () => {
+    const repo = await makeRepo();
+    await expect(gitBranchDelete(repo, "no-such-branch")).rejects.toBeInstanceOf(GitError);
   });
 });

@@ -11,16 +11,26 @@ checkout stays clean and parallel runs don't collide.
 
 ## Location
 
-`~/.minifac/worktrees/<repo-hash>-<change>/` by default. Configurable
-globally via `~/.minifac/config.yaml` and per-repo via
+`~/.minifac/worktrees/run-<change>-<slug>/` by default, where `<slug>`
+is the first 6 hex chars of the [[Run]] id. Brief-less factory
+invocations use `run-<factory>-<slug>` with the same shape.
+Configurable globally via `~/.minifac/config.yaml` and per-repo via
 `.minifac/config.yaml`. Lives outside the repo so it's machine-state
 not repo-state — see [[0012-Where-State-Lives]].
 
 ## Branch
 
 Created off `base_branch` from the [[Brief]] (default: caller's HEAD),
-named after `change`. The factory's commits land on this branch; the
-user reviews and merges to main like any other contributor's branch.
+named `run/<change>-<slug>` (or `run/<factory>-<slug>` for brief-less
+invocations). The slug is the same one in the worktree directory name,
+so a reader can map between them at a glance.
+
+The slug makes the branch per-run: two consecutive invocations of the
+same change (e.g. after a failed run is retried) produce two distinct
+branches and do not collide. See
+[[0019-Run-Scoped-Branches]]. `minifac prune` deletes both the
+directory and the branch it owns; `minifac merge <change>` ships the
+branch into the default branch.
 
 ## Concurrency
 

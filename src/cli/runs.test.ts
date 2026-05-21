@@ -175,6 +175,68 @@ describe("minifac runs (listAction)", () => {
     }
   });
 
+  it("includes a branch column with null and non-null values", async () => {
+    const store = await freshStore();
+    try {
+      await store.createRun({
+        id: "br-with-1",
+        factoryPath: "/p",
+        factoryName: "f",
+        change: "feat-1",
+        branchName: "run/feat-1-abcdef",
+        startedAt: 10,
+      });
+      await store.createRun({
+        id: "br-null-1",
+        factoryPath: "/p",
+        factoryName: "f",
+        change: "feat-2",
+        startedAt: 20,
+      });
+      const out = new BufferStream();
+      const err = new BufferStream();
+      const code = await listAction({ store, io: { stdout: out, stderr: err } });
+      expect(code).toBe(0);
+      expect(out.text()).toMatch(/BRANCH/);
+      expect(out.text()).toMatch(/run\/feat-1-abcdef/);
+      // Null renders as `-`.
+      expect(out.text()).toMatch(/feat-2\s+.*?-\s/);
+    } finally {
+      await store.close();
+    }
+  });
+
+  it("--json includes branchName per row", async () => {
+    const store = await freshStore();
+    try {
+      await store.createRun({
+        id: "br-with-2",
+        factoryPath: "/p",
+        factoryName: "f",
+        change: "feat-3",
+        branchName: "run/feat-3-bbbbbb",
+        startedAt: 30,
+      });
+      await store.createRun({
+        id: "br-null-2",
+        factoryPath: "/p",
+        factoryName: "f",
+        change: "feat-4",
+        startedAt: 40,
+      });
+      const out = new BufferStream();
+      const err = new BufferStream();
+      const code = await listAction({ json: true, store, io: { stdout: out, stderr: err } });
+      expect(code).toBe(0);
+      const parsed = JSON.parse(out.text()) as Array<{ id: string; branchName: string | null }>;
+      const byId = new Map(parsed.map((r) => [r.id, r]));
+      expect(byId.get("br-with-2")?.branchName).toBe("run/feat-3-bbbbbb");
+      expect(byId.get("br-null-2")?.branchName).toBeNull();
+    } finally {
+      await store.close();
+    }
+  });
+
   it("no matches exits 0 with an empty result", async () => {
     const store = await freshStore();
     try {

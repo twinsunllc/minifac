@@ -1,10 +1,12 @@
 #!/usr/bin/env node
+import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { Command } from "commander";
 import { BriefLoadError } from "./brief/loader.js";
 import { briefCommandAction } from "./cli/brief.js";
 import { initAction } from "./cli/init.js";
+import { runMerge } from "./cli/merge.js";
 import { RunArgResolutionError, resolveRunArg } from "./cli/resolve.js";
 import { listAction as runsListAction, showAction as runsShowAction } from "./cli/runs.js";
 import { ClaudeExecutor } from "./executor/claude.js";
@@ -21,9 +23,12 @@ import { type LockHandle, LockHeldError, claimLock } from "./worktree/lock.js";
 import {
   computeRepoHash,
   lockPathForKey,
+  runBranchName,
+  runSlugFromId,
+  runWorktreeDirName,
+  runWorktreePathForDir,
   worktreeKeyForBrief,
   worktreeKeyForFactory,
-  worktreePathForKey,
 } from "./worktree/paths.js";
 import { type PruneOptions, parseOlderThan, pruneWorktrees } from "./worktree/prune.js";
 
@@ -123,15 +128,20 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
 
         const config = await loadWorktreeConfig(cwd);
         const repoHash = await computeRepoHash(cwd);
+        // Generate the run id up front so we can derive a per-run slug
+        // before the runner row exists.
+        const runId = randomUUID();
+        const slug = runSlugFromId(runId);
+        const segment = brief ? brief.frontmatter.change : factoryName;
+        const branchName = runBranchName(segment, slug);
+        const worktreeDirName = runWorktreeDirName(segment, slug);
+        // Lockfile key keeps the old shape — see docs/decisions/0019.
         let key: string;
-        let branchName: string;
         if (brief) {
           key = worktreeKeyForBrief(repoHash, brief.frontmatter.change);
-          branchName = brief.frontmatter.change;
         } else {
           const timestamp = Date.now();
           key = worktreeKeyForFactory(repoHash, factoryName, timestamp);
-          branchName = `${factoryName}-${timestamp.toString(36)}`;
         }
 
         // Lazy-prune (worktree mode only). Best-effort; failures don't
@@ -155,7 +165,11 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
         } catch (err) {
           if (err instanceof LockHeldError) {
             io.stderr.write(
-              `Another minifac run is in progress for key \`${key}\` (PID ${err.holdingPid}, lockfile ${err.lockPath}).\n`,
+              `Another minifac run is in progress for key \`${key}\` (PID ${err.holdingPid}, lockfile ${err.lockPath}). ` +
+                `The lockfile serializes same-change invocations even though per-run branches no longer collide; ` +
+                `\`--force\` does not override it. ` +
+                `For parallel A/B runs of the same change, see the future \`--factory\` flag described in ` +
+                `docs/decisions/0020-Factory-Override-At-Invocation.md.\n`,
             );
             exitCode = 1;
             return;
@@ -166,7 +180,7 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
         if (inPlace) {
           runCwd = cwd;
         } else {
-          const wtPath = worktreePathForKey(config, key);
+          const wtPath = runWorktreePathForDir(config, worktreeDirName);
           let baseRev: string;
           if (brief?.frontmatter.base_branch && brief.frontmatter.base_branch.length > 0) {
             baseRev = brief.frontmatter.base_branch;
@@ -202,6 +216,8 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
           brief,
           runCwd,
           store,
+          runId,
+          branchName: inPlace ? undefined : branchName,
           onEvent: (entry) => {
             const prefix = `[${entry.nodeId}]`;
             const e = entry.event;
@@ -311,6 +327,46 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
     });
 
   program
+    .command("merge")
+    .description(
+      "Merge the branch produced by a run into the default branch. Argument is a run-id prefix or a change name.",
+    )
+    .argument("<arg>", "run-id prefix (≥6 hex chars) or change name")
+    .option("--ff-only", "Refuse the merge-commit fallback if fast-forward fails")
+    .option("--pick", "When multiple runs match a change, prompt to pick one")
+    .option("--force", "Allow merging a non-succeeded run")
+    .action(async (arg: string, opts: { ffOnly?: boolean; pick?: boolean; force?: boolean }) => {
+      const cwd = io.runCwd ?? process.cwd();
+      let store: RunStore | undefined;
+      try {
+        store = await (io.openRunStore ?? openDefaultRunStore)(cwd);
+      } catch (err) {
+        io.stderr.write(`Could not open run history store: ${(err as Error).message}\n`);
+        exitCode = 1;
+        return;
+      }
+      try {
+        exitCode = await runMerge({
+          arg,
+          ffOnly: opts.ffOnly === true,
+          pick: opts.pick === true,
+          force: opts.force === true,
+          store,
+          cwd,
+          stdin: io.stdin ?? process.stdin,
+          stdout: io.stdout,
+          stderr: io.stderr,
+        });
+      } finally {
+        try {
+          await store.close();
+        } catch {
+          // best effort
+        }
+      }
+    });
+
+  program
     .command("prune")
     .description(
       "Prune worktrees per the hybrid policy. See docs/decisions/0010-Worktree-Cleanup-Hybrid.md.",
@@ -354,11 +410,33 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
           if (opts.failed) options.failed = true;
           if (olderThan) options.olderThan = olderThan;
 
-          const counts = await pruneWorktrees({
-            config,
-            callerRepoCwd: cwd,
-            options,
-          });
+          // Open the runs DB so prune can look up `branchName` for each
+          // pruned worktree. Best-effort — the inference fallback covers
+          // the case where the store can't open.
+          let pruneStore: RunStore | undefined;
+          try {
+            pruneStore = await (io.openRunStore ?? openDefaultRunStore)(cwd);
+          } catch {
+            pruneStore = undefined;
+          }
+          let counts: Awaited<ReturnType<typeof pruneWorktrees>>;
+          try {
+            counts = await pruneWorktrees({
+              config,
+              callerRepoCwd: cwd,
+              options,
+              ...(pruneStore !== undefined ? { store: pruneStore } : {}),
+              stderr: io.stderr,
+            });
+          } finally {
+            if (pruneStore) {
+              try {
+                await pruneStore.close();
+              } catch {
+                // best effort
+              }
+            }
+          }
 
           io.stdout.write(
             `Pruned: merged-old=${counts.removed["merged-old"]}, unmerged-old=${counts.removed["unmerged-old"]}, fresh=${counts.removed.fresh}, failed=${counts.removed.failed}\n`,

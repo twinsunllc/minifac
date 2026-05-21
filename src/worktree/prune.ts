@@ -1,7 +1,9 @@
 import { readFile, readdir, rm, stat } from "node:fs/promises";
 import path from "node:path";
+import type { RunStore } from "../storage/run-store.js";
 import type { WorktreeConfig } from "./config.js";
 import {
+  gitBranchDelete,
   gitBranchMerged,
   gitDefaultBranch,
   gitWorktreePrune,
@@ -137,11 +139,18 @@ export interface PruneInput {
   options: PruneOptions;
   /** Override "now" for deterministic tests. */
   now?: number;
+  /** Optional runs DB. When supplied, prune queries it for the branch name
+   * to delete after a successful directory removal; when omitted, prune
+   * falls back to inferring the branch from the `run-` directory leaf. */
+  store?: RunStore;
+  /** Override stderr for tests; defaults to `process.stderr`. */
+  stderr?: NodeJS.WritableStream;
 }
 
 export async function pruneWorktrees(input: PruneInput): Promise<PruneCounts> {
   const counts = emptyCounts();
-  const { config, callerRepoCwd, options } = input;
+  const { config, callerRepoCwd, options, store } = input;
+  const stderr = input.stderr ?? process.stderr;
   const now = input.now ?? Date.now();
 
   let entries: string[];
@@ -193,6 +202,18 @@ export async function pruneWorktrees(input: PruneInput): Promise<PruneCounts> {
       try {
         await removeWorktree(callerRepoCwd, dir);
         counts.removed[cls] += 1;
+        // After a successful removal, delete the branch this worktree
+        // owned — see docs/decisions/0019-Run-Scoped-Branches.md.
+        const branch = await resolveOwnedBranch(dir, name, store);
+        if (branch !== undefined) {
+          try {
+            await gitBranchDelete(callerRepoCwd, branch);
+          } catch (err) {
+            stderr.write(
+              `Warning: failed to delete branch \`${branch}\` for pruned worktree ${dir}: ${(err as Error).message}\n`,
+            );
+          }
+        }
       } catch (err) {
         counts.errors.push({ dir, message: (err as Error).message });
         counts.kept[cls] += 1;
@@ -203,6 +224,40 @@ export async function pruneWorktrees(input: PruneInput): Promise<PruneCounts> {
   }
 
   return counts;
+}
+
+/**
+ * Resolve the branch name that a now-removed worktree directory owned.
+ *
+ * Order:
+ *   1. The runs DB row whose `worktreePath` matches `dir` (when a store
+ *      is supplied and the row carries a non-null `branchName`).
+ *   2. The `run-<segment>-<slug>` directory leaf inferred as
+ *      `run/<segment>-<slug>`.
+ *   3. Otherwise (legacy directory naming): undefined — caller MUST NOT
+ *      delete the branch.
+ */
+async function resolveOwnedBranch(
+  dir: string,
+  leaf: string,
+  store: RunStore | undefined,
+): Promise<string | undefined> {
+  if (store) {
+    try {
+      // Bounded scan: realistically the DB has thousands of rows at most,
+      // and the indices favor recent runs first. We accept the cost.
+      const rows = await store.listRuns({ limit: 1000 });
+      const hit = rows.find((r) => r.worktreePath === dir && r.branchName !== null);
+      if (hit?.branchName) return hit.branchName;
+    } catch {
+      // best effort — fall through to inference.
+    }
+  }
+  const RUN_PREFIX = "run-";
+  if (leaf.startsWith(RUN_PREFIX)) {
+    return `run/${leaf.slice(RUN_PREFIX.length)}`;
+  }
+  return undefined;
 }
 
 /** Parse a `--older-than` value like `7d`, `12h`, `30m`. */

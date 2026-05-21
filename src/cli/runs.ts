@@ -52,6 +52,7 @@ export async function listAction(input: ListActionInput): Promise<number> {
       id: r.id,
       factoryName: r.factoryName,
       change: r.change,
+      branchName: r.branchName,
       status: r.status,
       startedAt: r.startedAt,
       endedAt: r.endedAt,
@@ -66,14 +67,17 @@ export async function listAction(input: ListActionInput): Promise<number> {
   }
 
   const lines: string[] = [];
-  lines.push("ID        CHANGE/FACTORY              STATUS     STARTED                 DURATION");
+  lines.push(
+    "ID        CHANGE/FACTORY              STATUS     STARTED                  BRANCH                          DURATION",
+  );
   for (const r of rows) {
     const idPrefix = r.id.slice(0, 8);
     const label = r.change ?? r.factoryName;
     const started = new Date(r.startedAt).toISOString();
+    const branch = r.branchName ?? "-";
     const duration = r.endedAt !== null ? `${r.endedAt - r.startedAt}ms` : "—";
     lines.push(
-      `${idPrefix}  ${pad(label, 28)}  ${pad(r.status, 9)}  ${pad(started, 24)} ${duration}`,
+      `${idPrefix}  ${pad(label, 28)}  ${pad(r.status, 9)}  ${pad(started, 24)} ${pad(branch, 32)} ${duration}`,
     );
   }
   input.io.stdout.write(`${lines.join("\n")}\n`);

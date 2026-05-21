@@ -87,14 +87,19 @@ skill), pass `--from answers.yaml` for scripted input, or hand-edit
 
 The CLI looks for `inputs/my-change.md`, resolves its `factory:` field
 (usually `sdd`) to `examples/sdd.yaml`, creates a fresh git worktree
-at `~/.minifac/worktrees/<repo-hash>-my-change/`, and runs the factory
+at `~/.minifac/worktrees/run-my-change-<slug>/` (where `<slug>` is
+the first 6 hex chars of the run id), cuts a branch
+`run/my-change-<slug>` from `base_branch`, and runs the factory
 inside it with the brief in scope. The runner substitutes
 `{{ brief.change }}`, `{{ brief.body }}`, and `{{ run.cwd }}` (the
 worktree path) into each node's prompt and `cwd` before dispatch.
-Reclaim disk with `minifac prune` once your branches have merged. See
-[`examples/sdd.md`](examples/sdd.md) for the full per-node contract
-and [`examples/sample-brief.md`](examples/sample-brief.md) for the
-brief template.
+Ship the result with `minifac merge my-change` (fast-forwards by
+default; falls back to a merge commit when the default branch has
+advanced). Reclaim disk with `minifac prune` once your branches
+have merged; it deletes both the directory and the per-run branch.
+See [`examples/sdd.md`](examples/sdd.md) for the full per-node
+contract and [`examples/sample-brief.md`](examples/sample-brief.md)
+for the brief template.
 
 Pass `--in-place` (or set `mode: in-place` in the brief frontmatter)
 to skip worktree creation and run in the current cwd — useful for CI

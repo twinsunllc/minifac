@@ -21,6 +21,7 @@ export interface CreateRunInput {
   change?: string | null;
   baseBranch?: string | null;
   worktreePath?: string | null;
+  branchName?: string | null;
   startedAt: number;
 }
 
@@ -71,6 +72,7 @@ export interface StoredRun {
   change: string | null;
   baseBranch: string | null;
   worktreePath: string | null;
+  branchName: string | null;
   status: RunStatus;
   reason: string | null;
   proximateNodeId: string | null;

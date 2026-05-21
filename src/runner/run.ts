@@ -29,6 +29,10 @@ export interface RunOptions {
    * Callers (CLI, daemon) supply this so they can reference the row before
    * the runner returns. */
   runId?: string;
+  /** Optional branch name to persist on the runs DB row. Set by the CLI's
+   * worktree path so `minifac merge` and `minifac prune` can find the
+   * branch by id without parsing directory names. */
+  branchName?: string;
 }
 
 interface QueueItem {
@@ -57,6 +61,7 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
         change: brief?.frontmatter.change ?? null,
         baseBranch: brief?.frontmatter.base_branch ?? null,
         worktreePath: runCwd ?? null,
+        branchName: options.branchName ?? null,
         startedAt: runStart,
       });
     } catch (err) {

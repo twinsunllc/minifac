@@ -547,12 +547,14 @@ base_branch: main
       expect(seenCwds[0]).toContain(path.join(home, "worktrees"));
       const entries = await readdir(path.join(home, "worktrees"));
       expect(entries.length).toBe(1);
-      // Branch should exist on the source repo
-      const branches = spawnSync("git", ["branch", "--list", "my-change"], {
+      // Per-run worktree directory: `run-<change>-<slug>`.
+      expect(entries[0]).toMatch(/^run-my-change-[0-9a-f]{6}$/);
+      // Per-run branch: `run/<change>-<slug>`.
+      const branches = spawnSync("git", ["branch", "--list", "run/my-change-*"], {
         cwd: repo,
         encoding: "utf8",
       });
-      expect(branches.stdout).toMatch(/my-change/);
+      expect(branches.stdout).toMatch(/run\/my-change-[0-9a-f]{6}/);
     });
 
     it("a second concurrent claim of the same key is refused (exit 1)", async () => {
@@ -591,6 +593,10 @@ base_branch: main
       });
       expect(code).toBe(1);
       expect(err.text()).toMatch(/Another minifac run is in progress/);
+      // Clarification + pointer to --factory override doc.
+      expect(err.text()).toMatch(/lockfile serializes same-change invocations/);
+      expect(err.text()).toMatch(/--factory/);
+      expect(err.text()).toMatch(/0020-Factory-Override-At-Invocation/);
     });
 
     it("--in-place claims a lock but skips worktree creation", async () => {
