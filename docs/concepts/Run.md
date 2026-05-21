@@ -64,6 +64,21 @@ run in parallel without contention — runs share no resources except
 6. Worktree (and branch) left intact for `minifac merge <change>` or
    manual review
 
+## Output: TUI vs raw
+
+When stdout is a TTY, `minifac run` defaults to an interactive TUI
+(see [[Run-TUI]]). For pipes, redirects, and CI the same command
+falls back to line-prefixed raw output. Two flags override the
+auto-detection:
+
+- `--raw` — force the raw line-prefixed output even in a TTY (useful
+  inside `tmux` panes you intend to pipe).
+- `--tui` — force the TUI even when stdout is not a TTY (used by
+  snapshot tests).
+
+Either way, the final `[run] <status> cwd=<path>` summary is
+written to stderr on completion.
+
 ## Related
 
 - [[Factory]] — what the run executes
@@ -71,4 +86,5 @@ run in parallel without contention — runs share no resources except
 - [[Worktree]] — where the run happens
 - [[Runner]] — what executes the run
 - [[Runs-DB]] — where the run persists
+- [[Run-TUI]] — the interactive surface
 - [[Sentinel]] — how nodes signal their status

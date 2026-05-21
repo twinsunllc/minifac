@@ -33,6 +33,12 @@ export interface RunOptions {
    * worktree path so `minifac merge` and `minifac prune` can find the
    * branch by id without parsing directory names. */
   branchName?: string;
+  /** Optional cancellation signal. When aborted, the runner short-circuits
+   * after the current node's next yielded event and finalizes the run with
+   * `{ status: "failed", reason: "user_quit" }`. The in-flight executor
+   * child is not killed by the runner itself — callers that need prompt
+   * cancellation should also signal the child (e.g. via process exit). */
+  abortSignal?: AbortSignal;
 }
 
 interface QueueItem {
@@ -126,6 +132,15 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
   const edgeKey = (from: string, to: string, when: string): string => `${from}|${to}|${when}`;
 
   while (queue.length > 0 && result === null) {
+    if (options.abortSignal?.aborted) {
+      result = {
+        status: "failed",
+        reason: "user_quit",
+        log,
+        durationMs: Date.now() - runStart,
+      };
+      break;
+    }
     const next = queue.shift();
     if (!next) break;
     const { nodeId } = next;
@@ -195,7 +210,12 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
     let finalStatus: "succeeded" | "failed" | null = null;
     let terminalMeta: unknown = undefined;
 
+    let aborted = false;
     for await (const event of executor.run(resolvedNode, ctx)) {
+      if (options.abortSignal?.aborted) {
+        aborted = true;
+        break;
+      }
       const emittedAt = Date.now() - runStart;
       const entry: EmittedEvent = {
         nodeId,
@@ -212,6 +232,16 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
           terminalMeta = event.meta;
         }
       }
+    }
+    if (aborted) {
+      result = {
+        status: "failed",
+        reason: "user_quit",
+        proximateNodeId: nodeId,
+        log,
+        durationMs: Date.now() - runStart,
+      };
+      break;
     }
 
     const endedAt = Date.now() - runStart;

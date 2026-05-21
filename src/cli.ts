@@ -11,11 +11,13 @@ import { RunArgResolutionError, resolveRunArg } from "./cli/resolve.js";
 import { listAction as runsListAction, showAction as runsShowAction } from "./cli/runs.js";
 import { ClaudeExecutor } from "./executor/claude.js";
 import { ExecutorRegistry } from "./executor/registry.js";
+import type { EmittedEvent } from "./executor/types.js";
 import { FactoryLoadError, loadFactory } from "./factory/loader.js";
 import { runFactory } from "./runner/run.js";
 import { type DaemonHandle, startDaemon } from "./serve/server.js";
 import { openDefaultRunStore } from "./storage/open.js";
 import type { RunStore } from "./storage/run-store.js";
+import { type InkRunRenderer, createInkRunRenderer } from "./tui/renderer.js";
 import { WorktreeConfigError, loadWorktreeConfig } from "./worktree/config.js";
 import { GitError, gitRevParseHead, gitWorktreeAdd } from "./worktree/git.js";
 import { appendFailedRun } from "./worktree/journal.js";
@@ -33,7 +35,7 @@ import {
 import { type PruneOptions, parseOlderThan, pruneWorktrees } from "./worktree/prune.js";
 
 export interface CliIO {
-  stdout: NodeJS.WritableStream;
+  stdout: NodeJS.WritableStream & { isTTY?: boolean };
   stderr: NodeJS.WritableStream;
   stdin?: NodeJS.ReadableStream & { isTTY?: boolean };
   buildRegistry?: () => ExecutorRegistry;
@@ -42,12 +44,45 @@ export interface CliIO {
   runCwd?: string;
   /** Optional override of the run-history store opener (tests). */
   openRunStore?: (cwd: string) => Promise<RunStore>;
+  /** Optional override of the TUI renderer factory (tests). */
+  createTuiRenderer?: typeof createInkRunRenderer;
+  /** Optional override of the run-mode picker (tests). */
+  pickOutputMode?: typeof pickOutputMode;
 }
 
 function defaultRegistry(): ExecutorRegistry {
   const reg = new ExecutorRegistry();
   reg.register(new ClaudeExecutor());
   return reg;
+}
+
+export type OutputMode = "raw" | "tui";
+
+/**
+ * Pick the event output mode per spec precedence: `--raw` > `--tui` > stdout.isTTY > raw.
+ */
+export function pickOutputMode(
+  flags: { raw?: boolean; tui?: boolean },
+  io: { stdout: NodeJS.WritableStream & { isTTY?: boolean } },
+): OutputMode {
+  if (flags.raw) return "raw";
+  if (flags.tui) return "tui";
+  if (io.stdout.isTTY) return "tui";
+  return "raw";
+}
+
+function makeRawOnEvent(io: CliIO): (entry: EmittedEvent) => void {
+  return (entry) => {
+    const prefix = `[${entry.nodeId}]`;
+    const e = entry.event;
+    if (e.kind === "stdout") {
+      io.stdout.write(`${prefix} ${e.line}\n`);
+    } else if (e.kind === "stderr") {
+      io.stderr.write(`${prefix} ${e.line}\n`);
+    } else {
+      io.stderr.write(`[status] ${entry.nodeId} iter=${entry.iteration}: ${e.status}\n`);
+    }
+  };
 }
 
 function describeError(err: unknown, io: CliIO): void {
@@ -94,11 +129,26 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
     .description("Run a factory by brief path, brief name, or factory name.")
     .argument("<thing>", "brief path, brief name, or factory name")
     .option("--in-place", "Skip worktree creation; run the factory in the current cwd")
-    .action(async (arg: string, opts: { inPlace?: boolean }) => {
+    .option("--raw", "Force raw line-prefixed output even when stdout is a TTY")
+    .option("--tui", "Force the interactive TUI even when stdout is not a TTY")
+    .action(async (arg: string, opts: { inPlace?: boolean; raw?: boolean; tui?: boolean }) => {
       const cwd = io.runCwd ?? process.cwd();
       let lock: LockHandle | undefined;
       let runCwd: string | undefined;
       let store: RunStore | undefined;
+
+      if (opts.raw && opts.tui) {
+        io.stderr.write("--raw and --tui are mutually exclusive\n");
+        exitCode = 1;
+        return;
+      }
+      const outputMode = (io.pickOutputMode ?? pickOutputMode)(
+        {
+          ...(opts.raw !== undefined ? { raw: opts.raw } : {}),
+          ...(opts.tui !== undefined ? { tui: opts.tui } : {}),
+        },
+        io,
+      );
 
       try {
         const resolved = await resolveRunArg(arg, cwd);
@@ -207,6 +257,41 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
           io.stderr.write(`Warning: could not open run history store: ${(err as Error).message}\n`);
           store = undefined;
         }
+
+        const rawOnEvent = makeRawOnEvent(io);
+        let renderer: InkRunRenderer | null = null;
+        let activeOnEvent: (entry: EmittedEvent) => void = rawOnEvent;
+        const abortController = new AbortController();
+
+        if (outputMode === "tui") {
+          const create = io.createTuiRenderer ?? createInkRunRenderer;
+          renderer = create({
+            factory: { name: factoryName },
+            ...(brief ? { brief: { change: brief.frontmatter.change } } : {}),
+            nodeIds: Object.keys(loaded.factory.nodes),
+            branchName: inPlace ? null : branchName,
+            stdout: io.stdout as NodeJS.WriteStream,
+            stderr: io.stderr as NodeJS.WriteStream,
+          });
+          activeOnEvent = (entry) => {
+            renderer?.onEvent(entry);
+          };
+          // Drive the renderer's exit semantics: rawSwitch swaps the formatter
+          // for the remainder of the run; quit cancels the run.
+          renderer
+            .waitForExit()
+            .then(({ action }) => {
+              if (action === "raw-switch") {
+                activeOnEvent = rawOnEvent;
+              } else if (action === "quit") {
+                abortController.abort();
+              }
+            })
+            .catch(() => {
+              /* renderer should never reject; best-effort */
+            });
+        }
+
         const result = await runFactory(loaded, {
           registry,
           brief,
@@ -214,18 +299,18 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
           store,
           runId,
           branchName: inPlace ? undefined : branchName,
+          abortSignal: abortController.signal,
           onEvent: (entry) => {
-            const prefix = `[${entry.nodeId}]`;
-            const e = entry.event;
-            if (e.kind === "stdout") {
-              io.stdout.write(`${prefix} ${e.line}\n`);
-            } else if (e.kind === "stderr") {
-              io.stderr.write(`${prefix} ${e.line}\n`);
-            } else {
-              io.stderr.write(`[status] ${entry.nodeId} iter=${entry.iteration}: ${e.status}\n`);
-            }
+            activeOnEvent(entry);
           },
         });
+
+        // Notify the renderer of terminal status so the spinner stops and
+        // the hotkey bar updates. Then await user dismissal.
+        if (renderer) {
+          renderer.terminate(result.status, result.reason);
+          await renderer.waitForExit().catch(() => undefined);
+        }
 
         let runStatus: "succeeded" | "failed" = "succeeded";
         if (result.status === "succeeded") {
@@ -245,6 +330,12 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
               exitCode = 2;
               io.stderr.write(
                 `Run failed: ${result.reason}${result.proximateNodeId ? ` at node "${result.proximateNodeId}"` : ""}\n`,
+              );
+              break;
+            case "user_quit":
+              exitCode = 2;
+              io.stderr.write(
+                `Run aborted by user${result.proximateNodeId ? ` at node "${result.proximateNodeId}"` : ""}\n`,
               );
               break;
             default:
