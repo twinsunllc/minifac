@@ -732,20 +732,15 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
 
   program
     .command("autorun")
-    .description(
-      "Poll inputs/ and run ready briefs. Long-running by default; use --once for CI.",
-    )
+    .description("Poll inputs/ and run ready briefs. Long-running by default; use --once for CI.")
     .option("--watch <dir>", "Directory to poll (default <cwd>/inputs)")
     .option("--max-concurrent <n>", "Parallel run cap (default 1)", "1")
     .option("--interval <ms>", "Poll cadence in milliseconds (default 10000)", "10000")
     .option("--once", "Run a single poll cycle, wait for runs, then exit")
-    .option("--filter <expr>", "Glob (e.g. \"feat-*\") or /regex/ against the brief's change name")
+    .option("--filter <expr>", 'Glob (e.g. "feat-*") or /regex/ against the brief\'s change name')
     .option("--dry-run", "Run a single poll cycle, print decisions, invoke no runs")
     .option("--json", "Emit log lines as one JSON object per line")
-    .option(
-      "--force",
-      "On first SIGINT/SIGTERM, kill in-flight child executors instead of waiting",
-    )
+    .option("--force", "On first SIGINT/SIGTERM, kill in-flight child executors instead of waiting")
     .action(
       async (opts: {
         watch?: string;
