@@ -47,6 +47,12 @@ enforces this beyond explicit `depends_on` fields.
   auto-fallback to raw output on non-TTY; `m` hotkey invokes
   `minifac merge` inline. Visible quality-of-life payoff on
   every subsequent dogfood.
+- [ ] **`run-tui-bounded-borders`** —
+  [[0022-Run-TUI-Bounded-Borders]]. Bounded-height
+  (`floor(rows/2)`) bordered layout — fixes the rolling
+  overdraw / flicker and gives the three zones (header, body,
+  hotkey bar) a clear visual frame. Pure presentation; no
+  event-pipeline change. Depends on `run-tui` having landed.
 - [ ] **`reusable-steps`** — [[0018-Reusable-Steps]]. Steps as
   first-class, versioned, typed-input artifacts that nodes can
   reference via `uses:`. "GitHub Actions for factories." The
