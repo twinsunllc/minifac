@@ -145,8 +145,10 @@ the total run duration.
 The runner SHALL accept an optional `brief` argument identifying the
 brief that initiated the run and an optional `runCwd` argument
 carrying the run-level cwd (see the "Run-level cwd resolution"
-requirement). Together these form the substitution namespaces the
-runner offers to each scheduled node.
+requirement). Together with the per-node inputs map produced by step
+inlining (see the `factory-schema` capability's "Step inlining order"
+and "Step input validation" requirements), these form the
+substitution namespaces the runner offers to each scheduled node.
 
 For each scheduled node, immediately before dispatching to the
 node's executor, the runner SHALL substitute template tokens in
@@ -156,8 +158,8 @@ both:
 - the node's `cwd` field (if and only if it is a non-empty string)
 
 The token grammar SHALL be: literal `{{`, optional ASCII whitespace,
-a namespace identifier (`brief` or `run`), literal `.`, a field
-identifier matching `[a-zA-Z_][a-zA-Z0-9_]*`, optional ASCII
+a namespace identifier (`brief`, `run`, or `inputs`), literal `.`, a
+field identifier matching `[a-zA-Z_][a-zA-Z0-9_]*`, optional ASCII
 whitespace, literal `}}`. The runner SHALL match this grammar
 globally across each target string.
 
@@ -171,16 +173,33 @@ Field resolution rules per matched token:
 - `run.cwd`: substitute the run's `runCwd` value (the worktree path
   or the in-place cwd, as supplied by the CLI) when `runCwd` is in
   scope; otherwise leave the token verbatim.
+- `inputs.<field>`: substitute the corresponding value from the
+  per-node inputs map produced by step inlining. When the value is
+  a string, substitute it verbatim. When the value is a number,
+  boolean, array, or object, substitute its `String(value)` form
+  (numbers and booleans stringify to their natural string
+  representations; arrays and objects stringify via
+  `JSON.stringify` so the executor receives a deterministic
+  textual form). When the node has no `inputs` map in scope (the
+  node was not inlined from a step), `inputs.*` tokens SHALL be
+  left verbatim. When the node has an inputs map but the named
+  field is absent (optional input with no default and no node
+  supply), the token SHALL substitute the empty string. When the
+  node has an inputs map and the named field is present but its
+  value is `null` or `undefined`, the token SHALL substitute the
+  empty string.
 - For any other identifier under a known namespace (e.g.
   `brief.depends_on`, `run.id`): leave the token verbatim in the
   string (no error, no substitution).
-- For any token whose namespace is not `brief` or `run`: leave the
-  token verbatim in the string.
+- For any token whose namespace is not `brief`, `run`, or `inputs`:
+  leave the token verbatim in the string.
 
 When the run has no brief, `brief.*` tokens SHALL be left verbatim.
 When the run has no `runCwd` in scope (e.g. a unit-test invocation
 of `runFactory` without the CLI sequencing wrapper), `run.*` tokens
-SHALL be left verbatim.
+SHALL be left verbatim. When the node has no inputs map (inline
+node, not produced by step inlining), `inputs.*` tokens SHALL be
+left verbatim.
 
 Substitution SHALL happen in the runner, not in the executor. The
 executor sees the resolved strings with no tokens (when the relevant
@@ -272,6 +291,77 @@ requirement.
   `"Run id: {{ run.id }}."` and the runner's `runCwd` is set
 - **THEN** the executor receives `with.prompt` equal to
   `"Run id: {{ run.id }}."` (verbatim, no error)
+
+#### Scenario: `{{ inputs.<field> }}` substitutes a string input value
+
+- **WHEN** a node was inlined from a step whose factory supplied
+  `inputs: { change: "foo" }`, and the node's `with.prompt` (sourced
+  from the step body) is `"Work on {{ inputs.change }}."`
+- **THEN** the executor receives `with.prompt` equal to
+  `"Work on foo."`
+
+#### Scenario: `{{ inputs.<field> }}` stringifies a number
+
+- **WHEN** a node was inlined from a step whose factory supplied
+  `inputs: { iterations: 3 }`, and the node's `with.prompt` is
+  `"Run {{ inputs.iterations }} times."`
+- **THEN** the executor receives `with.prompt` equal to
+  `"Run 3 times."`
+
+#### Scenario: `{{ inputs.<field> }}` stringifies a boolean
+
+- **WHEN** a node was inlined from a step whose factory supplied
+  `inputs: { dry_run: true }`, and the node's `with.prompt` is
+  `"Dry run: {{ inputs.dry_run }}."`
+- **THEN** the executor receives `with.prompt` equal to
+  `"Dry run: true."`
+
+#### Scenario: `{{ inputs.<field> }}` stringifies an array as JSON
+
+- **WHEN** a node was inlined from a step whose factory supplied
+  `inputs: { commands: ["npm test", "npm run build"] }`, and the
+  node's `with.prompt` is `"Commands: {{ inputs.commands }}."`
+- **THEN** the executor receives `with.prompt` equal to
+  `"Commands: [\"npm test\",\"npm run build\"]."`
+
+#### Scenario: `{{ inputs.<field> }}` with an absent optional input substitutes empty string
+
+- **WHEN** a node was inlined from a step that declares
+  `model: { type: "string" }` (optional, no default) and the
+  factory's node-level `inputs:` did not supply `model`, and the
+  node's `with.prompt` is `"Model: {{ inputs.model }}."`
+- **THEN** the executor receives `with.prompt` equal to
+  `"Model: ."`
+
+#### Scenario: `{{ inputs.<field> }}` on an inline node passes through verbatim
+
+- **WHEN** a node was NOT inlined from a step (declared inline
+  `executor:` + `with:`) and the node's `with.prompt` is
+  `"Foo: {{ inputs.bar }}."`
+- **THEN** the executor receives `with.prompt` equal to
+  `"Foo: {{ inputs.bar }}."` (verbatim, no error)
+
+#### Scenario: `{{ inputs.<field> }}` and `{{ brief.<field> }}` cooperate
+
+- **WHEN** a factory node declares `uses: minifac:openspec-propose`
+  with `inputs: { change: "{{ brief.change }}" }`, and the step's
+  body contains `"Work on {{ inputs.change }}."`, and the run's
+  brief has `change: "foo"`
+- **THEN** at load time the step is inlined with the input value
+  preserved as the literal token string `"{{ brief.change }}"`
+  (since the brief is not in scope at load); at dispatch time the
+  runner first substitutes `{{ inputs.change }}` to the literal
+  `"{{ brief.change }}"`, then a subsequent pass substitutes
+  `{{ brief.change }}` to `"foo"`; the executor receives
+  `with.prompt` equal to `"Work on foo."`
+
+#### Scenario: Inputs substitution preserves null/undefined values as empty string
+
+- **WHEN** a node was inlined from a step whose factory supplied
+  `inputs: { note: null }` (explicit null) and the node's
+  `with.prompt` is `"Note: {{ inputs.note }}."`
+- **THEN** the executor receives `with.prompt` equal to
+  `"Note: ."`
 
 ### Requirement: Run-level cwd resolution
 

@@ -117,10 +117,15 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
 
   let result: RunResult | null = null;
 
-  const resolveCwd = (nodeCwd: string | undefined): string => {
+  const resolveCwd = (
+    nodeCwd: string | undefined,
+    nodeInputs: Record<string, unknown> | undefined,
+  ): string => {
     let effective = nodeCwd;
     if (typeof effective === "string" && effective.length > 0) {
-      effective = substitute(effective, subs);
+      const localSubs: Substitutions = { ...subs };
+      if (nodeInputs !== undefined) localSubs.inputs = nodeInputs;
+      effective = substitute(effective, localSubs);
     }
     if (effective !== undefined && effective.length > 0) {
       if (path.isAbsolute(effective)) return effective;
@@ -166,7 +171,10 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
       continue;
     }
 
-    const executor = registry.get(node.executor);
+    // After loadFactory, every resolved node has an executor populated
+    // (either inline or inlined from a step). Defensively coerce.
+    const executorType = node.executor ?? "";
+    const executor = registry.get(executorType);
     if (!executor) {
       result = {
         status: "failed",
@@ -189,9 +197,28 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
       }
     }
 
+    // Per-node inputs map attached at step inlining time. Inline nodes
+    // (declared with `executor:`/`with:`) have no inputs map; for them,
+    // `{{ inputs.* }}` tokens pass through verbatim.
+    const nodeInputs = (node as { __inputs?: unknown }).__inputs;
+    const inputsMap =
+      nodeInputs !== undefined &&
+      nodeInputs !== null &&
+      typeof nodeInputs === "object" &&
+      !Array.isArray(nodeInputs)
+        ? (nodeInputs as Record<string, unknown>)
+        : undefined;
+
+    const nodeSubs: Substitutions = { ...subs };
+    if (inputsMap !== undefined) nodeSubs.inputs = inputsMap;
+
     let resolvedNode: ResolvedNode = { ...node, id: nodeId };
-    if ((subs.brief || subs.run) && node.with && typeof node.with.prompt === "string") {
-      const substituted = substitute(node.with.prompt, subs);
+    if (
+      (nodeSubs.brief || nodeSubs.run || nodeSubs.inputs) &&
+      node.with &&
+      typeof node.with.prompt === "string"
+    ) {
+      const substituted = substitute(node.with.prompt, nodeSubs);
       resolvedNode = {
         ...resolvedNode,
         with: { ...node.with, prompt: substituted },
@@ -204,7 +231,7 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
       priorResults: snapshot,
       nodeId,
       iteration,
-      cwd: resolveCwd(node.cwd),
+      cwd: resolveCwd(node.cwd, inputsMap),
     };
 
     const startedAt = Date.now() - runStart;

@@ -107,3 +107,68 @@ describe("substitute (Substitutions record)", () => {
     expect(substitute("{{ env.HOME }}", { run: { cwd: "/x" } })).toBe("{{ env.HOME }}");
   });
 });
+
+describe("substitute inputs namespace", () => {
+  it("substitutes a string input value", () => {
+    expect(substitute("Work on {{ inputs.change }}.", { inputs: { change: "foo" } })).toBe(
+      "Work on foo.",
+    );
+  });
+
+  it("stringifies a number input", () => {
+    expect(substitute("Run {{ inputs.iterations }} times.", { inputs: { iterations: 3 } })).toBe(
+      "Run 3 times.",
+    );
+  });
+
+  it("stringifies a boolean input", () => {
+    expect(substitute("Dry run: {{ inputs.dry_run }}.", { inputs: { dry_run: true } })).toBe(
+      "Dry run: true.",
+    );
+  });
+
+  it("JSON-stringifies an array input", () => {
+    expect(
+      substitute("Commands: {{ inputs.commands }}.", {
+        inputs: { commands: ["npm test", "npm run build"] },
+      }),
+    ).toBe('Commands: ["npm test","npm run build"].');
+  });
+
+  it("JSON-stringifies an object input", () => {
+    expect(substitute("Config: {{ inputs.cfg }}.", { inputs: { cfg: { mode: "fast" } } })).toBe(
+      'Config: {"mode":"fast"}.',
+    );
+  });
+
+  it("absent optional input → empty string", () => {
+    expect(substitute("Model: {{ inputs.model }}.", { inputs: {} })).toBe("Model: .");
+  });
+
+  it("null input → empty string", () => {
+    expect(substitute("Note: {{ inputs.note }}.", { inputs: { note: null } })).toBe("Note: .");
+  });
+
+  it("inline node (no inputs map) leaves inputs.* verbatim", () => {
+    expect(substitute("Foo: {{ inputs.bar }}.", {})).toBe("Foo: {{ inputs.bar }}.");
+  });
+
+  it("inputs and brief cooperate when input value is a brief token", () => {
+    const b: Brief = {
+      frontmatter: { change: "foo", factory: "sdd" },
+      body: "",
+      sourcePath: "/x.md",
+    };
+    expect(
+      substitute("Work on {{ inputs.change }}.", {
+        brief: b,
+        inputs: { change: "{{ brief.change }}" },
+      }),
+    ).toBe("Work on foo.");
+  });
+
+  it("tolerates whitespace around inputs.<field>", () => {
+    expect(substitute("{{inputs.x}}", { inputs: { x: "v" } })).toBe("v");
+    expect(substitute("{{   inputs.x   }}", { inputs: { x: "v" } })).toBe("v");
+  });
+});

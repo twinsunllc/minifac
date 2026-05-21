@@ -212,6 +212,31 @@ looping back to apply on failure (bounded at three retries). It is
 See [examples/sdd.md](examples/sdd.md) for the full per-node contract,
 the brief-driven workflow, and known friction points.
 
+## Reusable steps
+
+A node's behavior can be inlined directly (`executor:` + `with:`) or
+referenced from a published **step** via `uses:`. Steps are reusable,
+typed-input units of behavior that ship under `examples/steps/<name>.yaml`
+(built-in) or `.minifac/steps/<name>.yaml` (per-repo custom):
+
+```yaml
+nodes:
+  propose:
+    uses: minifac:openspec-propose
+    inputs:
+      change: "{{ brief.change }}"
+      brief_body: "{{ brief.body }}"
+    cwd: "{{ run.cwd }}"
+```
+
+Steps are the per-node composition story; `extends:` is the
+whole-factory composition story (override one node at a layer). The
+two compose: a derived factory can replace just one node's body with
+a `uses:` reference to a published step, leaving the rest of the base
+factory intact. See `docs/concepts/Factory.md` → "Steps" and
+`docs/concepts/Step.md` for the deep dive, and `minifac steps` to list
+the steps your cwd currently exposes.
+
 ## `minifac runs` — inspect history
 
 Every run is persisted to `~/.minifac/runs.db` (a SQLite file; the path

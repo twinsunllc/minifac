@@ -1,20 +1,42 @@
 import type { Brief } from "../brief/loader.js";
 
-const TOKEN_REGEX = /\{\{\s*(brief|run)\.([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}/g;
+const TOKEN_REGEX = /\{\{\s*(brief|run|inputs)\.([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}/g;
 
 export interface Substitutions {
   brief?: Brief;
   run?: { cwd: string };
+  /** Per-node inputs map produced at step inlining time. Absent on inline
+   * nodes (never inlined from a step). When absent, `{{ inputs.* }}`
+   * tokens pass through verbatim. */
+  inputs?: Record<string, unknown>;
 }
 
 /**
- * Substitute `{{ <ns>.<field> }}` tokens (ns ∈ {brief, run}) in `input` using
- * values from `subs`. Unknown ns or unknown fields under a known ns pass
- * through verbatim. Optional brief fields (`base_branch`, `model`)
- * substitute the empty string when absent on the brief. `run.cwd` resolves
- * to `subs.run?.cwd` when in scope; other `run.*` identifiers pass through.
+ * Substitute `{{ <ns>.<field> }}` tokens (ns ∈ {brief, run, inputs}) in
+ * `input` using values from `subs`. Unknown ns or unknown fields under
+ * a known ns pass through verbatim.
+ *
+ * `inputs` stringification rules:
+ *  - string → verbatim
+ *  - number/boolean → `String(value)`
+ *  - array/object → `JSON.stringify(value)`
+ *  - null/undefined → empty string
+ *  - absent (when the field isn't in the inputs map at all) → empty string
+ *    if `subs.inputs` is in scope; verbatim if no inputs map is in scope
+ *    (inline node).
  */
 export function substitute(input: string, subs: Substitutions): string {
+  // Two passes so a templated input value (e.g. `inputs.change ===
+  // "{{ brief.change }}"`) gets resolved end-to-end: first pass swaps
+  // `{{ inputs.change }}` for the brief token, second pass resolves the
+  // brief token to its value. The second pass is a no-op when the first
+  // pass introduced no new tokens.
+  const first = substituteOnce(input, subs);
+  if (first === input) return first;
+  return substituteOnce(first, subs);
+}
+
+function substituteOnce(input: string, subs: Substitutions): string {
   return input.replace(TOKEN_REGEX, (match, ns: string, field: string) => {
     if (ns === "brief") {
       const brief = subs.brief;
@@ -40,8 +62,21 @@ export function substitute(input: string, subs: Substitutions): string {
       if (field === "cwd") return run.cwd;
       return match;
     }
+    if (ns === "inputs") {
+      if (subs.inputs === undefined) return match;
+      if (!Object.hasOwn(subs.inputs, field)) return "";
+      return stringifyInputValue(subs.inputs[field]);
+    }
     return match;
   });
+}
+
+function stringifyInputValue(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  // array or object — deterministic JSON
+  return JSON.stringify(value);
 }
 
 /**
