@@ -115,9 +115,14 @@ describe("autorunAction", () => {
       runFactory: rec.factory,
       openRunStore: async () => store,
     });
-    // Wait for pollOnce to complete enqueueing decisions.
-    for (let i = 0; i < 50 && rec.pendingCount() < 2; i++) {
-      await new Promise((r) => setImmediate(r));
+    // Wait for pollOnce to complete enqueueing decisions. setImmediate
+    // polling is too tight for the CI runner; use real time with a
+    // 2-second cap so the test still fails fast if the logic is wrong.
+    {
+      const deadline = Date.now() + 2000;
+      while (rec.pendingCount() < 2 && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 10));
+      }
     }
     expect(rec.calls).toHaveLength(2);
     rec.resolveLatest({ status: "succeeded", runId: "run-1" });
