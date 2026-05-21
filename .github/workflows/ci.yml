@@ -27,6 +27,12 @@ jobs:
           node-version: "22"
           cache: npm
 
+      # Defense against publish-then-yank supply-chain attacks. Runs
+      # before install so a fresh dep can't execute postinstall hooks
+      # even once. See docs/decisions/0024-CI-Security-Policy.md.
+      - name: Check dependency freshness (3-day cooldown)
+        run: npm run check:dep-freshness
+
       - name: Install dependencies
         run: npm ci
 

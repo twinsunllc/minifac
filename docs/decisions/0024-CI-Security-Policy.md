@@ -71,7 +71,35 @@ dependency-review comments) declare it at the job level, not the
 workflow level. Default token scope is therefore the minimum
 viable.
 
-### 4. Coverage
+### 4. Dependency-age cooldown (publish-then-yank defense)
+
+A newly-published npm package gets ~3 days before we'll install
+it. The check lives in `scripts/check-dep-freshness.mjs`, runs as
+the first build step in `ci.yml` (before `npm ci`), and fails if
+any package in `package-lock.json` was published less than
+`MIN_DEP_AGE_DAYS` ago (default 3).
+
+The rationale: most recent supply-chain attacks via npm (the nx
+postinstall worm, several typosquats, the `event-stream`
+incident) were caught and yanked within 24–72 hours of publish.
+A cooldown window forces the malicious version through that
+detection-and-yank window before our CI will ever execute its
+postinstall hook.
+
+Cost: dep upgrades from a freshly-released upstream sit red for
+up to 3 days. That's almost always fine — emergencies (a real
+CVE that needs a same-day patch) can override by setting
+`MIN_DEP_AGE_DAYS=0` in the workflow with the rationale in the
+PR description.
+
+Why a custom script instead of Renovate's `minimumReleaseAge`:
+Renovate prevents *automated* PR creation against fresh deps,
+but doesn't gate *manual* PRs. The CI script gates everything
+that hits the build, regardless of how the lockfile change
+arrived. Both layered (eventual Renovate setup) is better than
+either alone, but the CI script is the floor.
+
+### 5. Coverage
 
 The initial workflow set:
 
@@ -96,7 +124,7 @@ We avoid running anything on `pull_request_target` until there's a
 concrete reason to. That trigger has untrusted-input semantics
 that have produced most public Action-related CVEs.
 
-### 5. Audit signal handling
+### 6. Audit signal handling
 
 When the nightly `security.yml` fails, the on-call response is:
 

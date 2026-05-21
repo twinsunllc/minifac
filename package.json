@@ -47,6 +47,7 @@
     "lint": "biome lint .",
     "format": "biome format --write .",
     "check": "biome check .",
+    "check:dep-freshness": "node scripts/check-dep-freshness.mjs",
     "prepare": "npm run build"
   },
   "dependencies": {

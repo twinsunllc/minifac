@@ -48,6 +48,20 @@ We only consume actions from verified publishers (or first-party
 [`docs/decisions/0024-CI-Security-Policy.md`](docs/decisions/0024-CI-Security-Policy.md)
 for the policy and the rationale.
 
+## Dependency cooldown
+
+CI rejects any package in `package-lock.json` published less than
+3 days ago (`npm run check:dep-freshness`). This is supply-chain
+hygiene — the nx postinstall worm and several typosquats were
+caught and yanked within 24–72 hours of publish. The cooldown
+forces malicious versions through that detection window before
+we ever execute their postinstall hooks.
+
+If you bump a dep and CI is red on freshness, just wait. For a
+genuine same-day emergency (e.g., a CVE that needs an immediate
+patch), set `MIN_DEP_AGE_DAYS=0` in the workflow with the
+rationale in the PR description.
+
 ## Reporting issues
 
 Open a GitHub issue. Include:
