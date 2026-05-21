@@ -38,18 +38,14 @@ enforces this beyond explicit `depends_on` fields.
   `npx minifac` invocations silently no-op. Switch to a
   realpath comparison. Hard prerequisite for the
   open-source-readiness install-path story.
-- [ ] **`factory-override-at-invocation`** —
-  [[0020-Factory-Override-At-Invocation]]. `--factory <name>`
-  flag on `minifac run`; widens lockfile to (change, factory).
-  Unlocks A/B factory comparisons. `depends_on:
-  [run-scoped-branches]`.
+- [ ] **`vitest-3-upgrade`** — [[0025-Vitest-3-Upgrade]].
+  Bump vitest 2.x → 3.x to clear 5 moderate-severity audit
+  findings in the dev `vite`/`esbuild` chain. Mostly mechanical;
+  watch for the new default `threads` pool affecting
+  isolation-sensitive tests.
 - [ ] **`callback-status-signaling`** — [[0017-Callback-Status-Signaling]].
   Opt-in HTTP endpoint per node for bidirectional comms. Unblocks
   mid-run human-in-the-loop and the future [[Studio]] chat surface.
-- [ ] **`auto-mode`** — [[0016-Auto-Mode]]. Long-running `minifac
-  autorun` polls inputs/ for ready briefs and schedules them.
-  `depends_on: [brief-deps-and-state]` — that has now landed,
-  so this is ready.
 
 ## Open-source readiness (chore tier)
 
@@ -89,6 +85,12 @@ fix ([[cli-symlink-main-guard]]) and possibly the examples library.
 
 ## Already landed (newest first)
 
+- ✅ `auto-mode` — long-running `minifac autorun` polls
+  `inputs/` for ready briefs and schedules them; depends_on
+  resolution drives the queue order
+- ✅ `factory-override-at-invocation` — `--factory <name>` flag
+  on `minifac run`; lockfile widens to (change, factory); A/B
+  factory comparisons unlocked
 - ✅ `reusable-steps` — steps as first-class, versioned,
   typed-input artifacts; nodes reference via `uses:`; the
   "GitHub Actions for factories" piece
