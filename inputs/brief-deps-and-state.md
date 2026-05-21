@@ -2,6 +2,7 @@
 change: brief-deps-and-state
 factory: sdd
 base_branch: main
+depends_on: [run-scoped-branches]
 ---
 
 ## Background
@@ -30,23 +31,7 @@ Implement what 0015 describes. Concretely:
 - Update `examples/sample-brief.md` to show `depends_on` with a
   short comment.
 
-### 2. Runs.db migration: `branch_name` column
-
-- Add a new migration file `src/storage/migrations/0002_add_branch_name.sql`
-  that ALTERs the `runs` table to add `branch_name TEXT` (nullable
-  for rows from existing DBs).
-- Mirror the SQL in `src/storage/migrations/index.ts`'s inline
-  table (`MIGRATIONS` array) per the existing convention there.
-- The runner starts populating `branch_name` when it creates a
-  worktree (the branch name the worktree was created on — for v0
-  this is still `<change>`; once
-  [[0019-Run-Scoped-Branches]] lands it will be
-  `run/<change>-<slug>`).
-- `minifac runs` / `minifac runs show` and any viewer code that
-  surfaces "merge this with..." should use `branch_name` from the
-  row.
-
-### 3. Brief doneness derivation (git, not runs.db)
+### 2. Brief doneness derivation (git, not runs.db)
 
 - New module `src/brief/doneness.ts` (or fold into
   `src/brief/state.ts` — your judgment) exposing:
@@ -62,7 +47,7 @@ Implement what 0015 describes. Concretely:
   one minifac was invoked from). No git operations needed beyond
   the `inputs/` directory layout being committed.
 
-### 4. Brief activity derivation (runs.db)
+### 3. Brief activity derivation (runs.db)
 
 - New module `src/brief/activity.ts` exposing:
 
@@ -76,7 +61,7 @@ Implement what 0015 describes. Concretely:
   `change = ?`, ordered by `started_at DESC LIMIT 1`. Map its
   `status` to one of the four Activity values. `none` if no rows.
 
-### 5. Combined `computeBriefState` and dep satisfaction
+### 4. Combined `computeBriefState` and dep satisfaction
 
 - A wrapper that returns both axes and resolves deps:
 
@@ -89,7 +74,7 @@ Implement what 0015 describes. Concretely:
   via a visited-set during recursion and surfaced as
   `BriefCycleError`.
 
-### 6. Runner refuses blocked briefs
+### 5. Runner refuses blocked briefs
 
 - Before worktree creation in `minifac run`, compute brief state.
   If `blocked`, exit non-zero with a clear error naming each
@@ -98,7 +83,7 @@ Implement what 0015 describes. Concretely:
 - `--force` flag on `minifac run` overrides the block. Document
   as "use when you know what you're doing."
 
-### 7. Minifac marks brief done after factory terminal-success
+### 6. Minifac marks brief done after factory terminal-success
 
 - After the runner observes the factory's terminal-success status,
   but **before** writing `status = succeeded` to runs.db, the
@@ -116,7 +101,7 @@ Implement what 0015 describes. Concretely:
 - The factory's nodes (including the SDD archive node) are
   unchanged — they have no responsibility for the move.
 
-### 8. New CLI command `minifac briefs`
+### 7. New CLI command `minifac briefs`
 
 - `src/cli/briefs.ts` implementing the subcommand:
 
@@ -131,7 +116,7 @@ Implement what 0015 describes. Concretely:
   `change`, `state`, `activity`, `deps_summary` (e.g. `2/3 done`),
   `last_run` (id + branch + ended_at if any).
 
-### 9. Tests
+### 8. Tests
 
 - `computeBriefDoneness` covering: active, done, missing.
 - `computeBriefActivity` covering: none, running, succeeded,
@@ -147,7 +132,7 @@ Implement what 0015 describes. Concretely:
 - `minifac briefs` output stability (table + JSON).
 - All existing 332+ tests still pass.
 
-### 10. Specs
+### 9. Specs
 
 - NEW capability `brief-state` covering the doneness rule, the
   activity rule, dep satisfaction, cycle detection, the runner's
@@ -157,13 +142,11 @@ Implement what 0015 describes. Concretely:
   and the `--force` flag on `run`.
 - `brief-schema`: MODIFIED requirement to add `depends_on` as a
   known optional field.
-- `run-storage`: MODIFIED requirement to add `branch_name` column;
-  add scenario covering the `0002_*.sql` migration.
 
 When MODIFYING, copy the entire requirement block from
 `openspec/specs/<capability>/spec.md`; do not partial-paste.
 
-### 11. Documentation
+### 10. Documentation
 
 - Update `docs/concepts/Brief.md`'s Lifecycle section to describe
   the two-axis model (doneness in git, activity in runs.db).
@@ -177,12 +160,13 @@ When MODIFYING, copy the entire requirement block from
 
 ## Out of scope
 
-- **Run-scoped branch naming** (`run/<change>-<slug>`). Separate
-  proposal ([[0019-Run-Scoped-Branches]]). For this change, the
-  `branch_name` column is populated with whatever the current
-  branch-naming scheme produces (today: just `<change>`).
+- **Run-scoped branch naming** (`run/<change>-<slug>`) and the
+  `branch_name` column in runs.db. Both ship in
+  [[0019-Run-Scoped-Branches]], which should land before this
+  change. This brief assumes that migration has already run.
 - **`factory:` override at invocation** (`minifac run X
-  --factory Y`). Separate proposal.
+  --factory Y`). Separate proposal at
+  [[0020-Factory-Override-At-Invocation]].
 - **`priority` field on briefs.** Future enhancement.
 - **Auto-mode itself.** This change provides the `ready` predicate;
   auto-mode consumes it.
@@ -212,3 +196,12 @@ When MODIFYING, copy the entire requirement block from
   mark-done post-step
 - `docs/Open-Questions.md` no longer has the "Brief dependencies
   and state" entry
+
+## Note on ordering
+
+This change should land **after** [[0019-Run-Scoped-Branches]]
+so the `branch_name` column is already present and run-scoped
+branch naming is in effect when the mark-done post-step starts
+running. Carries `depends_on: [run-scoped-branches]` for that
+reason (which itself becomes meaningful once the dep-checking
+this very change implements is live).
