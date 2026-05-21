@@ -19,6 +19,7 @@ The system has a small vocabulary. Click any of these to read what it is.
 - [[Cycle]] — bounded recovery loops in the graph
 - [[SDD-Loop]] — the canonical factory: propose/apply/verify/archive
 - [[Runs-DB]] — persistent run history
+- [[Auto-Mode]] — long-running `minifac autorun` that picks up ready briefs
 
 ## Decisions
 

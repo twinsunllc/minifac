@@ -111,6 +111,13 @@ Pass `--in-place` (or set `mode: in-place` in the brief frontmatter)
 to skip worktree creation and run in the current cwd — useful for CI
 or read-only factories.
 
+For a long-running companion to `minifac run`, use `minifac autorun`:
+it polls `inputs/` for ready briefs and schedules them as they appear,
+using the same primitive `minifac run` does. See
+[`docs/concepts/Auto-Mode.md`](docs/concepts/Auto-Mode.md) for the
+poll loop, concurrency cap, signal handling, `--once` (CI), and
+`--dry-run` (rehearsal) details.
+
 ### Dependent briefs
 
 A brief MAY declare `depends_on: [<other-change>]` in its frontmatter

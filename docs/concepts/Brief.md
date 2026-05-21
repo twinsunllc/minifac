@@ -83,6 +83,14 @@ manually with one `git mv`.
 Factory authors do not need to know any of this exists. The mark-done
 step is a minifac-level contract, not a per-factory responsibility.
 
+### Autorun consumption
+
+`minifac autorun` (see [[Auto-Mode]]) polls the inputs directory and
+runs ready briefs using the same primitive manual `minifac run`
+invocations use. It relies on the mark-done post-step to move
+processed briefs from `inputs/` to `inputs/done/`, which removes them
+from the next poll's candidate set without further coordination.
+
 ### Why the split
 
 See [[0015-Brief-Deps-and-State]] for the rationale: doneness needs
