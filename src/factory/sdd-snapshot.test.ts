@@ -7,7 +7,10 @@ const sddPath = path.resolve(__dirname, "..", "..", "examples", "sdd.yaml");
 const repoRoot = path.resolve(__dirname, "..", "..");
 
 const norm = (s: string): string =>
-  s.replace(/\r\n/g, "\n").replace(/[ \t]+\n/g, "\n").trim();
+  s
+    .replace(/\r\n/g, "\n")
+    .replace(/[ \t]+\n/g, "\n")
+    .trim();
 
 /**
  * Deep-equality regression guard for the SDD factory. Whitespace is

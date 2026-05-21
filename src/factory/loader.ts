@@ -82,10 +82,7 @@ function validateNodeShape(factory: Factory, sourcePath: string): void {
     }
     if (n.uses !== undefined && !hasUses) {
       // covers empty-string and non-string-after-schema (defensive)
-      throw new FactoryLoadError(
-        `Node "${nodeId}" has invalid \`uses:\` value`,
-        sourcePath,
-      );
+      throw new FactoryLoadError(`Node "${nodeId}" has invalid \`uses:\` value`, sourcePath);
     }
   }
 }

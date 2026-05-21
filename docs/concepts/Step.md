@@ -29,30 +29,50 @@ A step is a YAML file with:
 
 ## Where steps live
 
-- **Per-repo custom**: `.minifac/steps/<name>.yaml`
-- **Built-in shipped**: `examples/steps/<name>.yaml`
+- **Per-repo custom**: `<callerCwd>/.minifac/steps/<name>.yaml`
+- **Built-in shipped**: `<callerCwd>/examples/steps/<name>.yaml`
 - **External, future**: published references resolving against a
   registry. Deferred.
+
+## Reference syntax and lookup precedence
+
+The `uses:` field on a node accepts three forms:
+
+- `minifac:<name>[@<version>]` — built-in only. Skips the local lookup
+  and resolves directly to `<callerCwd>/examples/steps/<name>.yaml`.
+- `<scope>/<name>[@<version>]` — namespaced. In v0 the `<scope>/`
+  prefix carries no runtime semantics beyond being preserved in error
+  messages; lookup follows the bare-name precedence below.
+- `<name>[@<version>]` — bare. Tries
+  `<callerCwd>/.minifac/steps/<name>.yaml` first; if absent, falls
+  back to `<callerCwd>/examples/steps/<name>.yaml`.
+
+The `@<version>` pin is parsed off the reference but ignored for path
+resolution in v0 — every reference resolves to the single bundled
+version. Independent step versioning is filed under [[Open-Questions]].
+
+Path-like values (separators outside the single `<scope>/<name>`
+slash), file extensions, whitespace, and empty pins are rejected.
 
 ## How factories use steps
 
 ```yaml
 nodes:
   propose:
-    uses: minifac/openspec-propose@1
+    uses: minifac:openspec-propose
     inputs:
       change: "{{ brief.change }}"
       brief_body: "{{ brief.body }}"
   apply:
-    uses: minifac/openspec-apply@1
+    uses: minifac:openspec-apply
     inputs:
       change: "{{ brief.change }}"
   verify:
-    uses: minifac/openspec-verify@1
+    uses: minifac:openspec-verify
     inputs:
       commands: ["npm test", "npm run build", "npm run check"]
   archive:
-    uses: minifac/openspec-archive@1
+    uses: minifac:openspec-archive
     inputs:
       change: "{{ brief.change }}"
     terminal: true

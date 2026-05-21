@@ -39,26 +39,21 @@ export const InputDefSchema = InputDefBase.superRefine((val, ctx) => {
 
 export type StepInputDef = z.infer<typeof InputDefSchema>;
 
-export const StepInputsRecord = z
-  .record(InputDefSchema)
-  .superRefine((rec, ctx) => {
-    for (const key of Object.keys(rec)) {
-      if (!INPUT_NAME_RE.test(key)) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: [key],
-          message: `Invalid input name \`${key}\`: must match [a-zA-Z_][a-zA-Z0-9_]*`,
-        });
-      }
+export const StepInputsRecord = z.record(InputDefSchema).superRefine((rec, ctx) => {
+  for (const key of Object.keys(rec)) {
+    if (!INPUT_NAME_RE.test(key)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [key],
+        message: `Invalid input name \`${key}\`: must match [a-zA-Z_][a-zA-Z0-9_]*`,
+      });
     }
-  });
+  }
+});
 
 export const StepSchema = z
   .object({
-    name: z
-      .string()
-      .min(1)
-      .regex(STEP_NAME_RE, "Step name must match [a-z][a-z0-9-]*"),
+    name: z.string().min(1).regex(STEP_NAME_RE, "Step name must match [a-z][a-z0-9-]*"),
     version: z.string().min(1),
     description: z.string().optional(),
     inputs: StepInputsRecord.optional(),
@@ -80,10 +75,6 @@ export function matchesDeclaredType(type: InputType, value: unknown): boolean {
     case "array":
       return Array.isArray(value);
     case "object":
-      return (
-        value !== null &&
-        typeof value === "object" &&
-        !Array.isArray(value)
-      );
+      return value !== null && typeof value === "object" && !Array.isArray(value);
   }
 }

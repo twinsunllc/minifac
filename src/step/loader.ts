@@ -21,10 +21,7 @@ export async function loadStep(absPath: string): Promise<LoadedStep> {
   try {
     raw = await readFile(absolute, "utf8");
   } catch (err) {
-    throw new StepLoadError(
-      `Could not read step file: ${(err as Error).message}`,
-      absolute,
-    );
+    throw new StepLoadError(`Could not read step file: ${(err as Error).message}`, absolute);
   }
 
   const doc = parseDocument(raw, { prettyErrors: true });
@@ -48,10 +45,7 @@ export async function loadStep(absPath: string): Promise<LoadedStep> {
       const issue = err.issues[0];
       const dotted = issue ? issue.path.join(".") : "(root)";
       const detail = issue ? issue.message : "schema validation failed";
-      throw new StepLoadError(
-        `Schema error at ${dotted}: ${detail}`,
-        absolute,
-      );
+      throw new StepLoadError(`Schema error at ${dotted}: ${detail}`, absolute);
     }
     throw err;
   }

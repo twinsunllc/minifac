@@ -289,7 +289,9 @@ nodes:
     );
     const { factory } = await loadFactory(derived, repo);
     expect(factory.nodes.verify?.executor).toBe("claude");
-    expect((factory.nodes.verify?.with as { prompt: string }).prompt).toBe("Verify {{ inputs.change }}");
+    expect((factory.nodes.verify?.with as { prompt: string }).prompt).toBe(
+      "Verify {{ inputs.change }}",
+    );
     expect((factory.nodes.propose?.with as { prompt: string }).prompt).toBe("inline-propose");
   });
 

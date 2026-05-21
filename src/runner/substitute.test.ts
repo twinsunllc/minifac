@@ -136,9 +136,9 @@ describe("substitute inputs namespace", () => {
   });
 
   it("JSON-stringifies an object input", () => {
-    expect(
-      substitute("Config: {{ inputs.cfg }}.", { inputs: { cfg: { mode: "fast" } } }),
-    ).toBe('Config: {"mode":"fast"}.');
+    expect(substitute("Config: {{ inputs.cfg }}.", { inputs: { cfg: { mode: "fast" } } })).toBe(
+      'Config: {"mode":"fast"}.',
+    );
   });
 
   it("absent optional input → empty string", () => {

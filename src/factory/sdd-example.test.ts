@@ -35,9 +35,7 @@ describe("examples/sdd.yaml", () => {
       const inputs = getInlinedInputs(node as object);
       expect(inputs?.change).toBe("{{ brief.change }}");
     }
-    expect(getInlinedInputs(factory.nodes.propose as object)?.brief_body).toBe(
-      "{{ brief.body }}",
-    );
+    expect(getInlinedInputs(factory.nodes.propose as object)?.brief_body).toBe("{{ brief.body }}");
   });
 
   it("no resolved prompt contains <CHANGE_NAME>, /path/to/target/repo, or MINIFAC_STATUS", async () => {
@@ -49,9 +47,7 @@ describe("examples/sdd.yaml", () => {
         expect(p, `${id} prompt should not contain /path/to/target/repo`).not.toContain(
           "/path/to/target/repo",
         );
-        expect(p, `${id} prompt should not contain MINIFAC_STATUS`).not.toContain(
-          "MINIFAC_STATUS",
-        );
+        expect(p, `${id} prompt should not contain MINIFAC_STATUS`).not.toContain("MINIFAC_STATUS");
       }
     }
   });

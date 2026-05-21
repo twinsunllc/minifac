@@ -1,9 +1,9 @@
-import type { FactoryNode } from "../factory/schema.js";
 import { FactoryLoadError } from "../factory/loader-error.js";
+import type { FactoryNode } from "../factory/schema.js";
 import { StepLoadError } from "./loader-error.js";
 import { loadStep } from "./loader.js";
 import { resolveStepRef } from "./resolve.js";
-import { matchesDeclaredType, type Step } from "./schema.js";
+import { type Step, matchesDeclaredType } from "./schema.js";
 
 const TOKEN_RE = /\{\{\s*[a-zA-Z_][a-zA-Z0-9_]*\.[a-zA-Z_][a-zA-Z0-9_]*\s*\}\}/g;
 
@@ -37,10 +37,7 @@ export async function inlineStepIntoNode(args: InlineArgs): Promise<InlinedNode>
   const { factoryPath, nodeId, node, callerCwd } = args;
   const usesRaw = node.uses;
   if (typeof usesRaw !== "string" || usesRaw.length === 0) {
-    throw new FactoryLoadError(
-      `Node "${nodeId}" has invalid \`uses:\` value`,
-      factoryPath,
-    );
+    throw new FactoryLoadError(`Node "${nodeId}" has invalid \`uses:\` value`, factoryPath);
   }
 
   let stepPath: string;
@@ -48,10 +45,7 @@ export async function inlineStepIntoNode(args: InlineArgs): Promise<InlinedNode>
     stepPath = await resolveStepRef(usesRaw, callerCwd);
   } catch (err) {
     if (err instanceof StepLoadError) {
-      throw new FactoryLoadError(
-        `Node "${nodeId}": ${err.message}`,
-        factoryPath,
-      );
+      throw new FactoryLoadError(`Node "${nodeId}": ${err.message}`, factoryPath);
     }
     throw err;
   }
@@ -71,11 +65,11 @@ export async function inlineStepIntoNode(args: InlineArgs): Promise<InlinedNode>
   }
 
   const nodeInputsRaw = node.inputs;
-  if (nodeInputsRaw !== undefined && (typeof nodeInputsRaw !== "object" || nodeInputsRaw === null || Array.isArray(nodeInputsRaw))) {
-    throw new FactoryLoadError(
-      `Node "${nodeId}" \`inputs:\` must be an object`,
-      factoryPath,
-    );
+  if (
+    nodeInputsRaw !== undefined &&
+    (typeof nodeInputsRaw !== "object" || nodeInputsRaw === null || Array.isArray(nodeInputsRaw))
+  ) {
+    throw new FactoryLoadError(`Node "${nodeId}" \`inputs:\` must be an object`, factoryPath);
   }
   const nodeInputs = (nodeInputsRaw as Record<string, unknown> | undefined) ?? {};
   const stepInputs = step.inputs ?? {};

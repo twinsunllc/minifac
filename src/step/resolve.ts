@@ -25,7 +25,7 @@ export interface ParsedStepRef {
  */
 export function parseStepRef(ref: string): ParsedStepRef {
   if (typeof ref !== "string" || ref.length === 0) {
-    throw new StepLoadError(`Invalid step reference: value is empty`, "(reference)");
+    throw new StepLoadError("Invalid step reference: value is empty", "(reference)");
   }
   if (/\s/.test(ref)) {
     throw new StepLoadError(
@@ -108,10 +108,7 @@ export function parseStepRef(ref: string): ParsedStepRef {
   }
 
   if (name.length === 0) {
-    throw new StepLoadError(
-      `Invalid step reference \`${ref}\`: empty step name`,
-      "(reference)",
-    );
+    throw new StepLoadError(`Invalid step reference \`${ref}\`: empty step name`, "(reference)");
   }
   if (!NAME_RE.test(name)) {
     throw new StepLoadError(

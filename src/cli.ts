@@ -11,6 +11,7 @@ import { initAction } from "./cli/init.js";
 import { runMerge } from "./cli/merge.js";
 import { RunArgResolutionError, gateBriefDeps, resolveRunArg } from "./cli/resolve.js";
 import { listAction as runsListAction, showAction as runsShowAction } from "./cli/runs.js";
+import { stepsAction } from "./cli/steps.js";
 import { ClaudeExecutor } from "./executor/claude.js";
 import { ExecutorRegistry } from "./executor/registry.js";
 import type { EmittedEvent } from "./executor/types.js";
@@ -710,6 +711,21 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
       } finally {
         await store.close();
       }
+    });
+
+  program
+    .command("steps")
+    .description("List reusable steps under .minifac/steps/ and examples/steps/.")
+    .option("--source <s>", "Filter by source (local | built-in | all)", "all")
+    .option("--json", "Emit a JSON array instead of a table")
+    .action(async (opts: { source?: string; json?: boolean }) => {
+      const cwd = io.runCwd ?? process.cwd();
+      exitCode = await stepsAction({
+        ...(opts.source !== undefined ? { source: opts.source } : {}),
+        ...(opts.json !== undefined ? { json: opts.json } : {}),
+        cwd,
+        io: { stdout: io.stdout, stderr: io.stderr },
+      });
     });
 
   program

@@ -297,28 +297,28 @@
 
 ## 7. `minifac steps` CLI subcommand
 
-- [ ] 7.1 Add a `steps` subcommand in `src/cli.ts` (via Commander).
+- [x] 7.1 Add a `steps` subcommand in `src/cli.ts` (via Commander).
       Accept `--source <local | built-in | all>` (default `all`)
       and `--json`. The action lives in
       `src/cli/steps.ts`.
-- [ ] 7.2 Implement the action: scan `<cwd>/.minifac/steps/*.yaml`
+- [x] 7.2 Implement the action: scan `<cwd>/.minifac/steps/*.yaml`
       and `<cwd>/examples/steps/*.yaml` (filtering by
       `--source`). For each file, attempt `loadStep`. On
       success, collect `{ name, version, source, path,
       description }`. On failure, collect a placeholder row with
       the loader error message. Sort by source then name.
-- [ ] 7.3 Default output: plain-text table with columns
+- [x] 7.3 Default output: plain-text table with columns
       `NAME`, `VERSION`, `SOURCE`, `DESCRIPTION`. Truncate
       description to fit the terminal width. Emit a one-line
       summary on empty results.
-- [ ] 7.4 With `--json`: emit a JSON array of the same objects.
+- [x] 7.4 With `--json`: emit a JSON array of the same objects.
       Stable ordering. Exit `0` on success; `1` on usage error
       or fatal I/O.
-- [ ] 7.5 Reject unrecognized `--source` values as a usage error
+- [x] 7.5 Reject unrecognized `--source` values as a usage error
       (`1` exit), writing the supported set to stderr.
-- [ ] 7.6 Confirm the subcommand makes no network call, no
+- [x] 7.6 Confirm the subcommand makes no network call, no
       `git` call, and writes nothing to disk.
-- [ ] 7.7 Add tests in `src/cli/steps.test.ts` covering: lists
+- [x] 7.7 Add tests in `src/cli/steps.test.ts` covering: lists
       built-ins only when no local exists; `--source local`
       filters; `--source built-in` filters; `--json` emits a
       parseable array; same-name local and built-in both appear
@@ -328,37 +328,37 @@
 
 ## 8. Documentation
 
-- [ ] 8.1 Update `docs/concepts/Factory.md` to add a "Steps"
+- [x] 8.1 Update `docs/concepts/Factory.md` to add a "Steps"
       section. Worked example: a factory whose node declares
       `uses: minifac:openspec-verify` with `inputs:` mapped from
       the brief. Show the on-disk shape, not just prose. Cross-link
       to `Step.md`.
-- [ ] 8.2 Verify `docs/concepts/Step.md` against what shipped.
+- [x] 8.2 Verify `docs/concepts/Step.md` against what shipped.
       Tweak if needed so the document accurately describes the
       lookup precedence, the templating scopes, and the
       versioning model that landed.
-- [ ] 8.3 Update `examples/sdd.md` (already touched in task 6.8;
+- [x] 8.3 Update `examples/sdd.md` (already touched in task 6.8;
       consolidate any remaining edits here). Make sure the doc
       teaches the user that the shipped factory now uses
       `uses:` and that the step bodies live in
       `examples/steps/`.
-- [ ] 8.4 Add a short "Reusable steps" section to `README.md`
+- [x] 8.4 Add a short "Reusable steps" section to `README.md`
       pitching this as the composition story (alongside the
       existing `extends:` mechanism). Reference
       `Factory.md` → "Steps" and `Step.md` for the deep dive.
 
 ## 9. Verify
 
-- [ ] 9.1 Run the full test suite; all pre-existing tests pass
+- [x] 9.1 Run the full test suite; all pre-existing tests pass
       plus the new tests added above (step loader, resolver,
       inliner, factory loader integration, templating,
       `minifac steps`, SDD structural + regression).
-- [ ] 9.2 Run `openspec validate reusable-steps` and confirm
+- [x] 9.2 Run `openspec validate reusable-steps` and confirm
       clean (also under `--strict`).
-- [ ] 9.3 Manually invoke `minifac steps` in a scratch directory
+- [x] 9.3 Manually invoke `minifac steps` in a scratch directory
       seeded with `examples/steps/*.yaml` and confirm the
       table / JSON output matches the spec.
-- [ ] 9.4 Manually invoke `minifac run` against a brief whose
+- [x] 9.4 Manually invoke `minifac run` against a brief whose
       `factory: sdd` resolves to the migrated `examples/sdd.yaml`
       (e.g. one of the briefs in `inputs/`). Confirm the run
       produces the same shape of run as before — same four
