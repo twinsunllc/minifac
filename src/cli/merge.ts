@@ -42,9 +42,7 @@ export async function runMerge(opts: RunMergeOptions): Promise<number> {
 
   if (!row.branchName) {
     stderr.write(
-      `Run \`${row.id}\` predates per-run branch naming (no branch_name persisted). ` +
-        `If a branch matching its change still exists, merge it manually with ` +
-        `\`git merge ${row.change ?? "<change>"}\`.\n`,
+      `Run \`${row.id}\` predates per-run branch naming (no branch_name persisted). If a branch matching its change still exists, merge it manually with \`git merge ${row.change ?? "<change>"}\`.\n`,
     );
     return 1;
   }
@@ -157,7 +155,10 @@ async function resolveRun(arg: string, opts: RunMergeOptions): Promise<ResolveOk
   const filtered = allowNonSucceeded ? rows : rows.filter((r) => r.status === "succeeded");
   if (filtered.length === 0) {
     if (rows.length === 0) {
-      return { ok: false, message: `No runs match change \`${arg}\` (or run-id prefix \`${arg}\`).` };
+      return {
+        ok: false,
+        message: `No runs match change \`${arg}\` (or run-id prefix \`${arg}\`).`,
+      };
     }
     return {
       ok: false,
@@ -174,8 +175,7 @@ async function resolveRun(arg: string, opts: RunMergeOptions): Promise<ResolveOk
       .join("\n");
     return {
       ok: false,
-      message:
-        `Multiple succeeded runs for change \`${arg}\`. Pass --pick or a run-id prefix:\n${ids}`,
+      message: `Multiple succeeded runs for change \`${arg}\`. Pass --pick or a run-id prefix:\n${ids}`,
     };
   }
 

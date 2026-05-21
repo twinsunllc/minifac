@@ -165,11 +165,7 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
         } catch (err) {
           if (err instanceof LockHeldError) {
             io.stderr.write(
-              `Another minifac run is in progress for key \`${key}\` (PID ${err.holdingPid}, lockfile ${err.lockPath}). ` +
-                `The lockfile serializes same-change invocations even though per-run branches no longer collide; ` +
-                `\`--force\` does not override it. ` +
-                `For parallel A/B runs of the same change, see the future \`--factory\` flag described in ` +
-                `docs/decisions/0020-Factory-Override-At-Invocation.md.\n`,
+              `Another minifac run is in progress for key \`${key}\` (PID ${err.holdingPid}, lockfile ${err.lockPath}). The lockfile serializes same-change invocations even though per-run branches no longer collide; \`--force\` does not override it. For parallel A/B runs of the same change, see the future \`--factory\` flag described in docs/decisions/0020-Factory-Override-At-Invocation.md.\n`,
             );
             exitCode = 1;
             return;
