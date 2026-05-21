@@ -1,0 +1,41 @@
+name: openspec-propose
+version: "1.0.0"
+description: |
+  Run the propose step of the SDD loop for a named change: scaffold the
+  OpenSpec change, write proposal/design/spec deltas/tasks, and iterate
+  until `openspec validate` exits 0.
+
+inputs:
+  change:
+    type: string
+    required: true
+    description: The OpenSpec change slug (kebab-case).
+  brief_body:
+    type: string
+    required: true
+    description: The body of the brief, inlined verbatim into the prompt.
+
+executor: claude
+with:
+  permission_mode: "bypass_permissions"
+  prompt: |
+    You are running the propose step of the SDD loop for change
+    {{ inputs.change }}. Work in the current directory, which is an
+    OpenSpec-equipped repo.
+
+    ## Intent for this change
+
+    {{ inputs.brief_body }}
+
+    Do all of the following:
+
+    1. Run `openspec new change {{ inputs.change }}` to scaffold the change.
+    2. Write `openspec/changes/{{ inputs.change }}/proposal.md`,
+       `design.md`, the spec deltas under `specs/`, and `tasks.md`.
+    3. Run `openspec validate {{ inputs.change }}` and iterate until it
+       exits 0.
+
+    Success means `openspec validate {{ inputs.change }}` exits 0 and
+    every required artifact (proposal, design, spec deltas, tasks)
+    is on disk. Failure means validate could not be made clean or
+    a required artifact could not be written.

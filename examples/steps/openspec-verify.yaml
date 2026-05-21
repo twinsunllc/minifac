@@ -1,0 +1,45 @@
+name: openspec-verify
+version: "1.0.0"
+description: |
+  Run the target repo's verify commands and re-validate the OpenSpec
+  change. Reports the failing command on failure so the next apply
+  iteration can act on it.
+
+inputs:
+  change:
+    type: string
+    required: true
+    description: The OpenSpec change slug (kebab-case).
+  commands:
+    type: array
+    default: ["npm test", "npm run build", "npm run check"]
+    description: |
+      Advisory list of verify commands for v0. The prompt enumerates
+      these verbatim; a richer programmatic enumeration is deferred to
+      a follow-on.
+
+executor: claude
+with:
+  permission_mode: "bypass_permissions"
+  prompt: |
+    You are running the verify step of the SDD loop for change
+    {{ inputs.change }}. Prior propose and apply output is in your
+    run-wide history.
+
+    Run the target repo's verify commands in the current directory.
+    For most Node/TS repos that is:
+
+        npm test
+        npm run build
+        npm run check
+
+    Use whatever the target repo actually has. Then run
+    `openspec validate {{ inputs.change }}` once more to confirm the
+    change is still clean.
+
+    Success means every verify command exited 0 (and
+    `openspec validate {{ inputs.change }}` is still clean). Failure
+    means any verify command exited non-zero. On failure, name the
+    failing command and the diagnosable output — that text is what
+    the next `apply` iteration reads out of `ctx.history`, so make
+    it actionable.

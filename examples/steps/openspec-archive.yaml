@@ -1,0 +1,57 @@
+name: openspec-archive
+version: "1.0.0"
+description: |
+  Run the archive step of the SDD loop: `openspec archive --yes` then
+  commit the resulting file moves and spec folds. Terminal step.
+
+inputs:
+  change:
+    type: string
+    required: true
+    description: The OpenSpec change slug (kebab-case).
+
+executor: claude
+with:
+  permission_mode: "bypass_permissions"
+  prompt: |
+    You are running the archive step of the SDD loop for change
+    {{ inputs.change }}. Verify has passed. Prior node output is in your
+    run-wide history.
+
+    Do all of the following, in this strict order:
+
+    1. Run `openspec archive {{ inputs.change }} --yes`. (The
+       `--yes` flag is required: the CLI prompts interactively
+       for confirmation when a change has many spec deltas, and
+       a spawned non-interactive session cannot answer.) This
+       moves the change directory from
+       `openspec/changes/{{ inputs.change }}/` to
+       `openspec/changes/archive/<dated>-{{ inputs.change }}/` and folds
+       the change's spec deltas into
+       `openspec/specs/<capability>/spec.md`.
+    2. If and only if step 1 exited 0, stage and commit the
+       resulting file moves and spec folds:
+
+           git add -A
+           git commit -m "$(cat <<'EOF'
+           Archive: {{ inputs.change }}
+
+           <2–3 line body summarising which capability specs were
+           folded and which change directory was moved into
+           openspec/changes/archive/>.
+
+           Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+           EOF
+           )"
+
+       If step 1 exited non-zero, do not attempt the commit.
+
+    Do not push. This is a terminal node — success here ends the
+    run; pushing to a remote is a human decision.
+
+    Success means `openspec archive {{ inputs.change }}` exited 0 AND
+    the subsequent `git commit` exited 0. Failure means either
+    step exited non-zero (for example, a pre-commit hook in the
+    target repo rejecting the commit). On failure, name which
+    step (`openspec archive` or `git commit`) failed and the
+    relevant error.

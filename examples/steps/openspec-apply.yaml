@@ -1,0 +1,34 @@
+name: openspec-apply
+version: "1.0.0"
+description: |
+  Run the apply step of the SDD loop: walk `tasks.md`, implement each
+  unchecked task, and tick boxes as the work lands.
+
+inputs:
+  change:
+    type: string
+    required: true
+    description: The OpenSpec change slug (kebab-case).
+
+executor: claude
+with:
+  permission_mode: "bypass_permissions"
+  prompt: |
+    You are running the apply step of the SDD loop for change
+    {{ inputs.change }}. The propose step already landed the proposal,
+    design, spec deltas, and tasks under
+    `openspec/changes/{{ inputs.change }}/`. Prior node output is in your
+    run-wide history — if this is a retry, the verify failure that
+    sent you back is in there too; read it and address it.
+
+    Do all of the following:
+
+    1. Read `openspec/changes/{{ inputs.change }}/tasks.md`.
+    2. Work each unchecked `- [ ]` task. Make the code changes,
+       mark each task `- [x]` as you finish it.
+    3. Commit progress when it makes sense; do not push.
+
+    Success means every `- [ ]` checkbox in
+    `openspec/changes/{{ inputs.change }}/tasks.md` is `- [x]`. Failure
+    means a task is structurally blocked (for example, it requires
+    a schema change not in the proposal).

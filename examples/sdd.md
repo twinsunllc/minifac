@@ -4,6 +4,12 @@ This is the canonical Spec-Driven Development factory. It encodes the
 `propose → apply → verify → archive` loop that minifac itself uses, as
 a runnable graph of `claude` nodes.
 
+The four node bodies now live as reusable [[Step]] files under
+`examples/steps/openspec-*.yaml`; `examples/sdd.yaml` is a thin
+topology file that wires brief data into each step via `uses:` +
+`inputs:`. See "Authoring shapes" below for the inline-vs-`uses:`
+choice.
+
 ```
 propose ──▶ apply ──▶ verify ──▶ archive (terminal)
               ▲           │
@@ -90,6 +96,45 @@ creation; the factory runs in `process.cwd()`.
 > Direct factory-YAML invocation (`minifac run examples/sdd.yaml`) is
 > no longer supported. The binding contract lives in
 > `openspec/specs/sdd-factory/spec.md`.
+
+## Authoring shapes
+
+A factory can declare a node two ways. The shipped `examples/sdd.yaml`
+uses the **`uses:` shape** (the migration target):
+
+```yaml
+nodes:
+  propose:
+    uses: minifac:openspec-propose
+    inputs:
+      change: "{{ brief.change }}"
+      brief_body: "{{ brief.body }}"
+    cwd: "{{ run.cwd }}"
+```
+
+The runner resolves the `uses:` reference at load time, validates the
+node's `inputs:` against the step's typed input schema, and inlines the
+step's `executor` and `with` into the resolved node. `{{ inputs.* }}`
+tokens inside the step body resolve at dispatch time from the per-node
+inputs map.
+
+The **inline shape** is still supported and is equivalent for a one-off
+node body:
+
+```yaml
+nodes:
+  propose:
+    executor: claude
+    with:
+      permission_mode: "bypass_permissions"
+      prompt: |
+        You are running the propose step ...
+```
+
+Pick the inline shape when a node is a one-off; pick `uses:` when the
+behavior is something other factories will want to reuse, or when you
+want a typed input schema instead of free-form prompt edits. The
+canonical step library lives under `examples/steps/`.
 
 ## Per-node contract
 

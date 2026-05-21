@@ -213,7 +213,7 @@
 
 ## 6. Migrate `examples/sdd.yaml` to use steps
 
-- [ ] 6.1 Create `examples/steps/openspec-propose.yaml`. Declare
+- [x] 6.1 Create `examples/steps/openspec-propose.yaml`. Declare
       inputs (`change: { type: "string", required: true }`,
       `brief_body: { type: "string", required: true }`).
       Move the existing propose prompt from `examples/sdd.yaml`
@@ -222,11 +222,11 @@
       `{{ inputs.brief_body }}` so the step is brief-agnostic.
       Set `with.permission_mode: "bypass_permissions"` and
       `executor: claude`.
-- [ ] 6.2 Create `examples/steps/openspec-apply.yaml`. Inputs:
+- [x] 6.2 Create `examples/steps/openspec-apply.yaml`. Inputs:
       `change: { type: "string", required: true }`. Body: the
       existing apply prompt, with `{{ brief.change }}` →
       `{{ inputs.change }}`.
-- [ ] 6.3 Create `examples/steps/openspec-verify.yaml`. Inputs:
+- [x] 6.3 Create `examples/steps/openspec-verify.yaml`. Inputs:
       `change: { type: "string", required: true }`,
       `commands: { type: "array", default: ["npm test",
       "npm run build", "npm run check"] }`. Body: the existing
@@ -236,11 +236,11 @@
       them; otherwise leave the verbatim command listing in the
       prompt and document `commands` as advisory for now (defer
       a richer enumeration to a follow-on).
-- [ ] 6.4 Create `examples/steps/openspec-archive.yaml`. Inputs:
+- [x] 6.4 Create `examples/steps/openspec-archive.yaml`. Inputs:
       `change: { type: "string", required: true }`. Body: the
       existing archive prompt, with `{{ brief.change }}` →
       `{{ inputs.change }}`.
-- [ ] 6.5 Rewrite `examples/sdd.yaml` to reference the four steps:
+- [x] 6.5 Rewrite `examples/sdd.yaml` to reference the four steps:
       ```yaml
       nodes:
         propose:
@@ -269,7 +269,7 @@
       Keep the top-level `name: sdd`, `description: ...`,
       `brief: required`, and `edges:` block unchanged. The file
       shrinks from ~150 lines to ~40.
-- [ ] 6.6 Update the structural test
+- [x] 6.6 Update the structural test
       `src/factory/sdd-example.test.ts` to assert against the
       *resolved* factory shape (post step inlining), not the
       raw on-disk shape. The test now checks: four nodes named
@@ -282,7 +282,7 @@
       `/path/to/target/repo`, or the literal substring
       `MINIFAC_STATUS`; the topology / budgets / edges /
       `brief: required` declarations are unchanged.
-- [ ] 6.7 Add a regression test that loads
+- [x] 6.7 Add a regression test that loads
       `examples/sdd.yaml` and deep-equals the resolved factory's
       shape against a fixture snapshot. The fixture
       can be a JSON file checked into the test directory or an
@@ -290,7 +290,7 @@
       normalization on prompt strings is acceptable; the goal
       is to catch unintended drift in node bodies during future
       refactors.
-- [ ] 6.8 Update `examples/sdd.md` to teach both authoring shapes:
+- [x] 6.8 Update `examples/sdd.md` to teach both authoring shapes:
       the inline shape (still supported) and the `uses:` shape
       (now used by the shipped factory). Point readers at
       `examples/steps/` as the canonical step library.
