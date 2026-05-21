@@ -139,296 +139,301 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
         arg: string,
         opts: { inPlace?: boolean; raw?: boolean; tui?: boolean; force?: boolean },
       ) => {
-      const cwd = io.runCwd ?? process.cwd();
-      let lock: LockHandle | undefined;
-      let runCwd: string | undefined;
-      let store: RunStore | undefined;
+        const cwd = io.runCwd ?? process.cwd();
+        let lock: LockHandle | undefined;
+        let runCwd: string | undefined;
+        let store: RunStore | undefined;
 
-      if (opts.raw && opts.tui) {
-        io.stderr.write("--raw and --tui are mutually exclusive\n");
-        exitCode = 1;
-        return;
-      }
-      const outputMode = (io.pickOutputMode ?? pickOutputMode)(
-        {
-          ...(opts.raw !== undefined ? { raw: opts.raw } : {}),
-          ...(opts.tui !== undefined ? { tui: opts.tui } : {}),
-        },
-        io,
-      );
-
-      try {
-        const resolved = await resolveRunArg(arg, cwd);
-        const loaded = await loadFactory(resolved.factoryPath, cwd);
-        const factoryName = loaded.factory.name;
-        const briefMode = loaded.factory.brief;
-        const brief = resolved.kind === "brief" ? resolved.brief : undefined;
-
-        if (resolved.kind === "brief" && briefMode === "none") {
-          io.stderr.write(
-            `Factory \`${factoryName}\` declares \`brief: none\` but was invoked with a brief at ${resolved.brief.sourcePath}.\n`,
-          );
+        if (opts.raw && opts.tui) {
+          io.stderr.write("--raw and --tui are mutually exclusive\n");
           exitCode = 1;
           return;
         }
-        if (resolved.kind === "factory" && briefMode === "required") {
-          io.stderr.write(
-            `Factory \`${factoryName}\` requires a brief; invoke as \`minifac run <brief-name>\` with a brief at inputs/<name>.md.\n`,
-          );
-          exitCode = 1;
-          return;
-        }
+        const outputMode = (io.pickOutputMode ?? pickOutputMode)(
+          {
+            ...(opts.raw !== undefined ? { raw: opts.raw } : {}),
+            ...(opts.tui !== undefined ? { tui: opts.tui } : {}),
+          },
+          io,
+        );
 
-        // Brief deps gate — before lockfile claim, before worktree creation.
-        // Cycle errors are usage errors regardless of --force.
-        if (brief) {
-          let gateStore: RunStore | undefined;
+        try {
+          const resolved = await resolveRunArg(arg, cwd);
+          const loaded = await loadFactory(resolved.factoryPath, cwd);
+          const factoryName = loaded.factory.name;
+          const briefMode = loaded.factory.brief;
+          const brief = resolved.kind === "brief" ? resolved.brief : undefined;
+
+          if (resolved.kind === "brief" && briefMode === "none") {
+            io.stderr.write(
+              `Factory \`${factoryName}\` declares \`brief: none\` but was invoked with a brief at ${resolved.brief.sourcePath}.\n`,
+            );
+            exitCode = 1;
+            return;
+          }
+          if (resolved.kind === "factory" && briefMode === "required") {
+            io.stderr.write(
+              `Factory \`${factoryName}\` requires a brief; invoke as \`minifac run <brief-name>\` with a brief at inputs/<name>.md.\n`,
+            );
+            exitCode = 1;
+            return;
+          }
+
+          // Brief deps gate — before lockfile claim, before worktree creation.
+          // Cycle errors are usage errors regardless of --force.
+          if (brief) {
+            let gateStore: RunStore | undefined;
+            try {
+              gateStore = await (io.openRunStore ?? openDefaultRunStore)(cwd);
+            } catch (err) {
+              io.stderr.write(
+                `Warning: could not open run history store: ${(err as Error).message}\n`,
+              );
+            }
+            if (gateStore) {
+              try {
+                const outcome = await gateBriefDeps({
+                  brief,
+                  runStore: gateStore,
+                  cwd,
+                  force: opts.force === true,
+                });
+                if (outcome.kind === "refuse") {
+                  io.stderr.write(`${outcome.message}\n`);
+                  exitCode = 1;
+                  return;
+                }
+                if (outcome.kind === "warn") {
+                  io.stderr.write(`${outcome.message}\n`);
+                }
+              } catch (err) {
+                if (err instanceof BriefCycleError) {
+                  io.stderr.write(
+                    `Refusing to run \`${brief.frontmatter.change}\`: ${err.message}\n`,
+                  );
+                  exitCode = 1;
+                  return;
+                }
+                throw err;
+              } finally {
+                try {
+                  await gateStore.close();
+                } catch {
+                  // best effort
+                }
+              }
+            }
+          }
+
+          const briefMode_inPlace =
+            brief !== undefined && (brief.frontmatter as { mode?: string }).mode === "in-place";
+          const inPlace = opts.inPlace === true || briefMode_inPlace;
+
+          const config = await loadWorktreeConfig(cwd);
+          const repoHash = await computeRepoHash(cwd);
+          // Generate the run id up front so we can derive a per-run slug
+          // before the runner row exists.
+          const runId = randomUUID();
+          const slug = runSlugFromId(runId);
+          const segment = brief ? brief.frontmatter.change : factoryName;
+          const branchName = runBranchName(segment, slug);
+          const worktreeDirName = runWorktreeDirName(segment, slug);
+          // Lockfile key keeps the old shape — see docs/decisions/0019.
+          let key: string;
+          if (brief) {
+            key = worktreeKeyForBrief(repoHash, brief.frontmatter.change);
+          } else {
+            const timestamp = Date.now();
+            key = worktreeKeyForFactory(repoHash, factoryName, timestamp);
+          }
+
+          // Lazy-prune (worktree mode only). Best-effort; failures don't
+          // stop the run.
+          if (!inPlace) {
+            try {
+              await pruneWorktrees({
+                config,
+                callerRepoCwd: cwd,
+                options: { lazy: true },
+              });
+            } catch {
+              // swallow per spec — explicit `minifac prune` carries the cost.
+            }
+          }
+
+          // Claim lock BEFORE worktree creation.
+          const lockPath = lockPathForKey(config, key);
           try {
-            gateStore = await (io.openRunStore ?? openDefaultRunStore)(cwd);
+            lock = await claimLock(lockPath);
+          } catch (err) {
+            if (err instanceof LockHeldError) {
+              io.stderr.write(
+                `Another minifac run is in progress for key \`${key}\` (PID ${err.holdingPid}, lockfile ${err.lockPath}). The lockfile serializes same-change invocations even though per-run branches no longer collide; \`--force\` does not override it. For parallel A/B runs of the same change, see the future \`--factory\` flag described in docs/decisions/0020-Factory-Override-At-Invocation.md.\n`,
+              );
+              exitCode = 1;
+              return;
+            }
+            throw err;
+          }
+
+          if (inPlace) {
+            runCwd = cwd;
+          } else {
+            const wtPath = runWorktreePathForDir(config, worktreeDirName);
+            let baseRev: string;
+            if (brief?.frontmatter.base_branch && brief.frontmatter.base_branch.length > 0) {
+              baseRev = brief.frontmatter.base_branch;
+            } else {
+              try {
+                baseRev = await gitRevParseHead(cwd);
+              } catch (err) {
+                io.stderr.write(`Could not resolve HEAD in ${cwd}: ${(err as Error).message}\n`);
+                exitCode = 1;
+                return;
+              }
+            }
+            try {
+              await mkdir(config.worktreesDir, { recursive: true });
+              await gitWorktreeAdd(cwd, wtPath, branchName, baseRev);
+            } catch (err) {
+              io.stderr.write(
+                `Failed to create worktree at ${wtPath}: ${(err as Error).message}\n`,
+              );
+              exitCode = 1;
+              return;
+            }
+            runCwd = wtPath;
+          }
+
+          const registry = (io.buildRegistry ?? defaultRegistry)();
+          try {
+            store = await (io.openRunStore ?? openDefaultRunStore)(cwd);
           } catch (err) {
             io.stderr.write(
               `Warning: could not open run history store: ${(err as Error).message}\n`,
             );
+            store = undefined;
           }
-          if (gateStore) {
-            try {
-              const outcome = await gateBriefDeps({
-                brief,
-                runStore: gateStore,
-                cwd,
-                force: opts.force === true,
+
+          const rawOnEvent = makeRawOnEvent(io);
+          let renderer: InkRunRenderer | null = null;
+          let activeOnEvent: (entry: EmittedEvent) => void = rawOnEvent;
+          const abortController = new AbortController();
+
+          if (outputMode === "tui") {
+            const create = io.createTuiRenderer ?? createInkRunRenderer;
+            renderer = create({
+              factory: { name: factoryName },
+              ...(brief ? { brief: { change: brief.frontmatter.change } } : {}),
+              nodeIds: Object.keys(loaded.factory.nodes),
+              branchName: inPlace ? null : branchName,
+              stdout: io.stdout as NodeJS.WriteStream,
+              stderr: io.stderr as NodeJS.WriteStream,
+            });
+            activeOnEvent = (entry) => {
+              renderer?.onEvent(entry);
+            };
+            // Drive the renderer's exit semantics: rawSwitch swaps the formatter
+            // for the remainder of the run; quit cancels the run.
+            renderer
+              .waitForExit()
+              .then(({ action }) => {
+                if (action === "raw-switch") {
+                  activeOnEvent = rawOnEvent;
+                } else if (action === "quit") {
+                  abortController.abort();
+                }
+              })
+              .catch(() => {
+                /* renderer should never reject; best-effort */
               });
-              if (outcome.kind === "refuse") {
-                io.stderr.write(`${outcome.message}\n`);
-                exitCode = 1;
-                return;
-              }
-              if (outcome.kind === "warn") {
-                io.stderr.write(`${outcome.message}\n`);
-              }
-            } catch (err) {
-              if (err instanceof BriefCycleError) {
-                io.stderr.write(
-                  `Refusing to run \`${brief.frontmatter.change}\`: ${err.message}\n`,
-                );
-                exitCode = 1;
-                return;
-              }
-              throw err;
-            } finally {
-              try {
-                await gateStore.close();
-              } catch {
-                // best effort
-              }
-            }
           }
-        }
 
-        const briefMode_inPlace =
-          brief !== undefined && (brief.frontmatter as { mode?: string }).mode === "in-place";
-        const inPlace = opts.inPlace === true || briefMode_inPlace;
-
-        const config = await loadWorktreeConfig(cwd);
-        const repoHash = await computeRepoHash(cwd);
-        // Generate the run id up front so we can derive a per-run slug
-        // before the runner row exists.
-        const runId = randomUUID();
-        const slug = runSlugFromId(runId);
-        const segment = brief ? brief.frontmatter.change : factoryName;
-        const branchName = runBranchName(segment, slug);
-        const worktreeDirName = runWorktreeDirName(segment, slug);
-        // Lockfile key keeps the old shape — see docs/decisions/0019.
-        let key: string;
-        if (brief) {
-          key = worktreeKeyForBrief(repoHash, brief.frontmatter.change);
-        } else {
-          const timestamp = Date.now();
-          key = worktreeKeyForFactory(repoHash, factoryName, timestamp);
-        }
-
-        // Lazy-prune (worktree mode only). Best-effort; failures don't
-        // stop the run.
-        if (!inPlace) {
-          try {
-            await pruneWorktrees({
-              config,
-              callerRepoCwd: cwd,
-              options: { lazy: true },
-            });
-          } catch {
-            // swallow per spec — explicit `minifac prune` carries the cost.
-          }
-        }
-
-        // Claim lock BEFORE worktree creation.
-        const lockPath = lockPathForKey(config, key);
-        try {
-          lock = await claimLock(lockPath);
-        } catch (err) {
-          if (err instanceof LockHeldError) {
-            io.stderr.write(
-              `Another minifac run is in progress for key \`${key}\` (PID ${err.holdingPid}, lockfile ${err.lockPath}). The lockfile serializes same-change invocations even though per-run branches no longer collide; \`--force\` does not override it. For parallel A/B runs of the same change, see the future \`--factory\` flag described in docs/decisions/0020-Factory-Override-At-Invocation.md.\n`,
-            );
-            exitCode = 1;
-            return;
-          }
-          throw err;
-        }
-
-        if (inPlace) {
-          runCwd = cwd;
-        } else {
-          const wtPath = runWorktreePathForDir(config, worktreeDirName);
-          let baseRev: string;
-          if (brief?.frontmatter.base_branch && brief.frontmatter.base_branch.length > 0) {
-            baseRev = brief.frontmatter.base_branch;
-          } else {
-            try {
-              baseRev = await gitRevParseHead(cwd);
-            } catch (err) {
-              io.stderr.write(`Could not resolve HEAD in ${cwd}: ${(err as Error).message}\n`);
-              exitCode = 1;
-              return;
-            }
-          }
-          try {
-            await mkdir(config.worktreesDir, { recursive: true });
-            await gitWorktreeAdd(cwd, wtPath, branchName, baseRev);
-          } catch (err) {
-            io.stderr.write(`Failed to create worktree at ${wtPath}: ${(err as Error).message}\n`);
-            exitCode = 1;
-            return;
-          }
-          runCwd = wtPath;
-        }
-
-        const registry = (io.buildRegistry ?? defaultRegistry)();
-        try {
-          store = await (io.openRunStore ?? openDefaultRunStore)(cwd);
-        } catch (err) {
-          io.stderr.write(`Warning: could not open run history store: ${(err as Error).message}\n`);
-          store = undefined;
-        }
-
-        const rawOnEvent = makeRawOnEvent(io);
-        let renderer: InkRunRenderer | null = null;
-        let activeOnEvent: (entry: EmittedEvent) => void = rawOnEvent;
-        const abortController = new AbortController();
-
-        if (outputMode === "tui") {
-          const create = io.createTuiRenderer ?? createInkRunRenderer;
-          renderer = create({
-            factory: { name: factoryName },
-            ...(brief ? { brief: { change: brief.frontmatter.change } } : {}),
-            nodeIds: Object.keys(loaded.factory.nodes),
-            branchName: inPlace ? null : branchName,
-            stdout: io.stdout as NodeJS.WriteStream,
-            stderr: io.stderr as NodeJS.WriteStream,
+          const result = await runFactory(loaded, {
+            registry,
+            brief,
+            runCwd,
+            store,
+            runId,
+            branchName: inPlace ? undefined : branchName,
+            abortSignal: abortController.signal,
+            onEvent: (entry) => {
+              activeOnEvent(entry);
+            },
           });
-          activeOnEvent = (entry) => {
-            renderer?.onEvent(entry);
-          };
-          // Drive the renderer's exit semantics: rawSwitch swaps the formatter
-          // for the remainder of the run; quit cancels the run.
-          renderer
-            .waitForExit()
-            .then(({ action }) => {
-              if (action === "raw-switch") {
-                activeOnEvent = rawOnEvent;
-              } else if (action === "quit") {
-                abortController.abort();
-              }
-            })
-            .catch(() => {
-              /* renderer should never reject; best-effort */
-            });
-        }
 
-        const result = await runFactory(loaded, {
-          registry,
-          brief,
-          runCwd,
-          store,
-          runId,
-          branchName: inPlace ? undefined : branchName,
-          abortSignal: abortController.signal,
-          onEvent: (entry) => {
-            activeOnEvent(entry);
-          },
-        });
-
-        // Notify the renderer of terminal status so the spinner stops and
-        // the hotkey bar updates. Then await user dismissal.
-        if (renderer) {
-          renderer.terminate(result.status, result.reason);
-          await renderer.waitForExit().catch(() => undefined);
-        }
-
-        let runStatus: "succeeded" | "failed" = "succeeded";
-        if (result.status === "succeeded") {
-          exitCode = 0;
-        } else {
-          runStatus = "failed";
-          switch (result.reason) {
-            case "budget_exhausted":
-              exitCode = 3;
-              io.stderr.write(
-                `Run failed: budget exhausted${result.proximateNodeId ? ` at node "${result.proximateNodeId}"` : ""}\n`,
-              );
-              break;
-            case "node_failed":
-            case "graph_drained":
-            case "unknown_executor":
-              exitCode = 2;
-              io.stderr.write(
-                `Run failed: ${result.reason}${result.proximateNodeId ? ` at node "${result.proximateNodeId}"` : ""}\n`,
-              );
-              break;
-            case "user_quit":
-              exitCode = 2;
-              io.stderr.write(
-                `Run aborted by user${result.proximateNodeId ? ` at node "${result.proximateNodeId}"` : ""}\n`,
-              );
-              break;
-            default:
-              exitCode = 2;
-              break;
+          // Notify the renderer of terminal status so the spinner stops and
+          // the hotkey bar updates. Then await user dismissal.
+          if (renderer) {
+            renderer.terminate(result.status, result.reason);
+            await renderer.waitForExit().catch(() => undefined);
           }
-          try {
-            await appendFailedRun({
-              worktreeDir: runCwd,
-              status: "failed",
-              endedAt: new Date().toISOString(),
-              reason: result.reason,
-            });
-          } catch {
-            // journal errors are non-fatal
+
+          let runStatus: "succeeded" | "failed" = "succeeded";
+          if (result.status === "succeeded") {
+            exitCode = 0;
+          } else {
+            runStatus = "failed";
+            switch (result.reason) {
+              case "budget_exhausted":
+                exitCode = 3;
+                io.stderr.write(
+                  `Run failed: budget exhausted${result.proximateNodeId ? ` at node "${result.proximateNodeId}"` : ""}\n`,
+                );
+                break;
+              case "node_failed":
+              case "graph_drained":
+              case "unknown_executor":
+                exitCode = 2;
+                io.stderr.write(
+                  `Run failed: ${result.reason}${result.proximateNodeId ? ` at node "${result.proximateNodeId}"` : ""}\n`,
+                );
+                break;
+              case "user_quit":
+                exitCode = 2;
+                io.stderr.write(
+                  `Run aborted by user${result.proximateNodeId ? ` at node "${result.proximateNodeId}"` : ""}\n`,
+                );
+                break;
+              default:
+                exitCode = 2;
+                break;
+            }
+            try {
+              await appendFailedRun({
+                worktreeDir: runCwd,
+                status: "failed",
+                endedAt: new Date().toISOString(),
+                reason: result.reason,
+              });
+            } catch {
+              // journal errors are non-fatal
+            }
+          }
+
+          // Final stderr summary line (always emit, success or failure).
+          io.stderr.write(`[run] ${runStatus} cwd=${runCwd}\n`);
+        } catch (err) {
+          describeError(err, io);
+          exitCode = 1;
+        } finally {
+          if (lock) {
+            try {
+              await lock.release();
+            } catch {
+              // best effort
+            }
+          }
+          if (store) {
+            try {
+              await store.close();
+            } catch {
+              // best effort
+            }
           }
         }
-
-        // Final stderr summary line (always emit, success or failure).
-        io.stderr.write(`[run] ${runStatus} cwd=${runCwd}\n`);
-      } catch (err) {
-        describeError(err, io);
-        exitCode = 1;
-      } finally {
-        if (lock) {
-          try {
-            await lock.release();
-          } catch {
-            // best effort
-          }
-        }
-        if (store) {
-          try {
-            await store.close();
-          } catch {
-            // best effort
-          }
-        }
-      }
-    });
+      },
+    );
 
   program
     .command("init")
