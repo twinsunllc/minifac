@@ -6,10 +6,11 @@ TBD - created by archiving change core-graph-runner. Update Purpose after archiv
 ### Requirement: `minifac run` command
 
 The CLI SHALL expose a `run` subcommand that takes a single positional
-argument `<thing>`, an optional `--in-place` flag, and an optional
-`--force` flag. The CLI SHALL resolve `<thing>` to a brief, a factory,
-or an error using the following lookup precedence, evaluated in order
-against the directory the CLI was invoked from (cwd):
+argument `<thing>`, an optional `--in-place` flag, an optional
+`--force` flag, and an optional `--factory <name>` flag. The CLI
+SHALL resolve `<thing>` to a brief, a factory, or an error using the
+following lookup precedence, evaluated in order against the directory
+the CLI was invoked from (cwd):
 
 1. **Brief by path.** If `<thing>` contains a path separator OR ends
    in `.md`, treat `<thing>` as a brief path. Resolve relative paths
@@ -25,9 +26,10 @@ against the directory the CLI was invoked from (cwd):
    not be resolved as a brief path, brief name, or factory name and
    exit `1`.
 
-**Factory-by-name resolution** (used both by step 3 above and by the
-brief's `factory:` field when the brief is loaded via step 1 or 2)
-SHALL accept two forms:
+**Factory-by-name resolution** (used by step 3 above, by the brief's
+`factory:` field when the brief is loaded via step 1 or 2, AND by
+the `--factory <name>` flag value when supplied) SHALL accept two
+forms:
 
 - `minifac:<name>` — the `minifac:` prefix SHALL skip the local
   lookup and resolve directly to `<cwd>/examples/<name>.yaml`. For
@@ -44,6 +46,7 @@ A brief whose `factory:` field uses the `minifac:` prefix SHALL
 resolve directly to the built-in even when an equally-named
 `.minifac/factories/<name>.yaml` exists. A brief whose `factory:`
 field is a bare `<name>` SHALL prefer the local file when present.
+The same precedence applies to the `--factory` flag value.
 
 When a brief is resolved (steps 1 or 2), the CLI SHALL further
 resolve the brief's frontmatter `factory:` field using the same
@@ -51,6 +54,24 @@ factory-by-name resolution above. A brief whose `factory:` field
 does not resolve to any candidate path SHALL exit `1` with an error
 naming the missing factory (and, for the bare `<name>` form, naming
 both paths tried).
+
+**`--factory <name>` override.** When `--factory <name>` is
+supplied (steps 1 or 2 — i.e. a brief-driven invocation), the flag
+value SHALL replace the brief's `factory:` field for this
+invocation. The brief file SHALL NOT be modified. The flag value
+SHALL be resolved through the same factory-by-name resolution
+above and SHALL be subject to the same error contract: a flag
+value that does not resolve to any candidate path SHALL exit `1`
+with an error naming the unresolved value and (for the bare form)
+both paths tried. The override SHALL take effect *before* the
+factory's `brief:` mode is enforced and before the lockfile key is
+derived. When `--factory` is not supplied, behavior is unchanged
+from the brief's declared factory. The `--factory` flag on a
+brief-less factory invocation (step 3) SHALL be a usage error
+(exit `1`) with a stderr message naming the conflict
+("--factory is only meaningful with a brief; <thing> resolved as
+a factory invocation"), since brief-less runs already name the
+factory positionally.
 
 The CLI SHALL enforce the factory's declared brief mode (per the
 `factory-schema` capability's "Factory brief-mode declaration"
@@ -95,9 +116,14 @@ SHALL sequence the run as follows:
    start" requirement).
 4. Claim the per-key lockfile (per the `worktree-management`
    capability's "Per-key lockfile with PID-bearing claim"
-   requirement). The lock key is `<repo-hash>-<change>` for
-   brief-driven runs, or `<repo-hash>-<factory.name>-<timestamp>` for
-   brief-less factory runs.
+   requirement). The lock key SHALL be derived as follows:
+   - For brief-driven runs:
+     `<repo-hash>-<change>-<factory-name>`, where `<factory-name>`
+     is the loaded factory's top-level `name` field (which reflects
+     the `--factory` override when supplied, else the brief's
+     declared factory).
+   - For brief-less factory runs:
+     `<repo-hash>-<factory-name>-<timestamp>` (unchanged).
 5. If mode is `worktree`, create the worktree via
    `git worktree add` (per the `worktree-management` capability's
    "Worktree creation via git worktree" requirement). Set the run's
@@ -121,6 +147,12 @@ The runner streams node events to the terminal per the existing
 event-output requirement, which is unchanged by this revision. The
 final stderr summary line is in addition to the existing per-event
 output, not a replacement for it.
+
+The factory actually used for the run (overridden or default)
+SHALL be recorded in the persisted run row's `factoryName` and
+`factoryPath` columns (per the `run-storage` capability), so
+listings (`minifac runs --change <change>`) accurately reflect
+which factory produced which branch.
 
 #### Scenario: Brief by path loads and runs
 
@@ -317,6 +349,83 @@ output, not a replacement for it.
 - **THEN** the CLI exits `1` with a stderr message naming the full
   cycle (`foo -> bar -> foo`); no worktree is created and no node
   executes
+
+#### Scenario: --factory override replaces the brief's declared factory
+
+- **WHEN** the user invokes `minifac run foo --factory bar`,
+  `inputs/foo.md` declares `factory: sdd`, and
+  `examples/bar.yaml` exists (no `.minifac/factories/bar.yaml`)
+- **THEN** the CLI loads `examples/bar.yaml` (not
+  `examples/sdd.yaml`), the persisted run row's `factoryName` is
+  `bar`, and `inputs/foo.md` is unchanged on disk
+
+#### Scenario: --factory with `minifac:` prefix forces built-in
+
+- **WHEN** the user invokes `minifac run foo --factory minifac:sdd`,
+  both `.minifac/factories/sdd.yaml` and `examples/sdd.yaml` exist
+- **THEN** the CLI loads `examples/sdd.yaml`, ignoring the local
+  file; the run row's `factoryName` is `sdd` and `factoryPath`
+  resolves to the built-in
+
+#### Scenario: --factory with unknown name is rejected
+
+- **WHEN** the user invokes `minifac run foo --factory nonexistent`
+  and neither `.minifac/factories/nonexistent.yaml` nor
+  `examples/nonexistent.yaml` exists
+- **THEN** the CLI exits `1` with a stderr message naming
+  `nonexistent` and both paths tried (matching the error shape
+  produced when a brief's `factory:` field cannot be resolved); no
+  worktree is created, no lock is claimed
+
+#### Scenario: --factory with `minifac:<name>` and no built-in is rejected
+
+- **WHEN** the user invokes `minifac run foo
+  --factory minifac:nonexistent` and `examples/nonexistent.yaml`
+  does not exist
+- **THEN** the CLI exits `1` with a stderr message naming
+  `minifac:nonexistent` and the single built-in path tried; the
+  local `.minifac/factories/nonexistent.yaml` (if any) is not
+  consulted
+
+#### Scenario: --factory on a brief-less invocation is a usage error
+
+- **WHEN** the user invokes `minifac run hello --factory sdd`,
+  `inputs/hello.md` does not exist, `examples/hello.yaml` exists,
+  and the invocation would otherwise resolve as a brief-less
+  factory run
+- **THEN** the CLI exits `1` with a stderr message naming the
+  conflict (`--factory` is only meaningful with a brief); no
+  worktree is created, no lock is claimed
+
+#### Scenario: --factory absent leaves brief behavior unchanged
+
+- **WHEN** the user invokes `minifac run foo` with no `--factory`
+  flag and `inputs/foo.md` declares `factory: sdd`
+- **THEN** the CLI resolves the factory through the brief's
+  declared value (existing behavior); the persisted run row's
+  `factoryName` is `sdd`
+
+#### Scenario: Two concurrent runs of same brief through different factories proceed in parallel
+
+- **WHEN** the user invokes `minifac run foo --factory A` in one
+  shell and `minifac run foo --factory B` in another (both at
+  roughly the same time)
+- **THEN** both invocations claim distinct lockfiles
+  (`<repo-hash>-foo-A.lock` and `<repo-hash>-foo-B.lock`), both
+  create distinct worktrees on distinct branches per
+  `[[0019-Run-Scoped-Branches]]`, and both runs proceed
+  concurrently; both runs are persisted to `runs.db` with
+  `factoryName` reflecting their respective overrides
+
+#### Scenario: Two concurrent runs of same brief through same factory serialize
+
+- **WHEN** the user invokes `minifac run foo --factory A` in two
+  shells at the same time (or one with `--factory A` and one with
+  no flag whose brief declares `factory: A`)
+- **THEN** exactly one invocation claims the lockfile
+  `<repo-hash>-foo-A.lock`; the other exits `1` with the existing
+  "lock held by PID <p>" stderr message; no second worktree is
+  created
 
 ### Requirement: Event output format
 

@@ -47,14 +47,22 @@ SHALL be valid; the body string SHALL be the empty string.
 
 The brief frontmatter SHALL have the following typed shape:
 
-| Field         | Required | Type                       | Purpose                                                    |
-|---------------|----------|----------------------------|------------------------------------------------------------|
-| `change`      | yes      | string                     | The change name (kebab-case by convention, not enforced)   |
-| `factory`     | yes      | string                     | Factory reference resolved against the factory-name lookup |
-| `base_branch` | no       | string                     | Branch this change should be based on                      |
-| `model`       | no       | string                     | Per-brief Claude model override                            |
-| `mode`        | no       | literal `"in-place"`       | When set, the CLI runs the factory in `process.cwd()` instead of creating a worktree |
-| `depends_on`  | no       | string[]                   | Names of other briefs whose completion is a precondition for running this brief |
+| Field         | Required | Type                       | Purpose                                                                                          |
+|---------------|----------|----------------------------|--------------------------------------------------------------------------------------------------|
+| `change`      | yes      | string                     | The change name (kebab-case by convention, not enforced)                                         |
+| `factory`     | yes      | string                     | Default factory reference for the brief, resolved against the factory-name lookup. Overridable at invocation time via the `run-cli` capability's `--factory` flag. |
+| `base_branch` | no       | string                     | Branch this change should be based on                                                            |
+| `model`       | no       | string                     | Per-brief Claude model override                                                                  |
+| `mode`        | no       | literal `"in-place"`       | When set, the CLI runs the factory in `process.cwd()` instead of creating a worktree             |
+| `depends_on`  | no       | string[]                   | Names of other briefs whose completion is a precondition for running this brief                  |
+
+The `factory:` field is required so every brief is self-describing:
+opening the file makes it unambiguous which factory the brief was
+authored against. The field defines the *default* factory used by
+`minifac run <brief>` invocations that pass no `--factory` flag;
+the `run-cli` capability defines the override mechanism and its
+resolution rules (the override reuses the same factory-by-name
+precedence as this field).
 
 The loader SHALL be strict on required-field presence and on known-field
 types: a missing `change` or `factory`, or a non-string value for any
@@ -158,6 +166,15 @@ without requiring a migration.
 - **THEN** the loader returns a typed object whose frontmatter
   contains the two required fields *and* `priority` and `tags`
   preserved verbatim, with no error
+
+#### Scenario: Brief file is not modified by invocation-time override
+
+- **WHEN** the user invokes `minifac run foo --factory bar` (per
+  the `run-cli` capability) against `inputs/foo.md` whose
+  frontmatter declares `factory: sdd`
+- **THEN** `inputs/foo.md` is byte-for-byte identical on disk
+  after the run as before; the loader continues to return
+  `factory === "sdd"` for that file
 
 ### Requirement: Brief location convention and name-based discovery
 
