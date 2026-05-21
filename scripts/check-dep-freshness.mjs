@@ -99,12 +99,10 @@ if (violations.length) {
     const days = (v.ageMs / 86_400_000).toFixed(1);
     console.error(`  - ${v.name}@${v.version}  (${days}d ago, published ${v.publishedAt})`);
   }
-  console.error(`\nSee docs/decisions/0024-CI-Security-Policy.md for the policy.`);
-  console.error(`Emergency override: set MIN_DEP_AGE_DAYS=0 in the workflow,`);
-  console.error(`with rationale in the PR description.`);
+  console.error("\nSee docs/decisions/0024-CI-Security-Policy.md for the policy.");
+  console.error("Emergency override: set MIN_DEP_AGE_DAYS=0 in the workflow,");
+  console.error("with rationale in the PR description.");
   process.exit(1);
 }
 
-console.log(
-  `✓ All ${deps.size} resolved dependencies are at least ${THRESHOLD_DAYS} days old.`,
-);
+console.log(`✓ All ${deps.size} resolved dependencies are at least ${THRESHOLD_DAYS} days old.`);
