@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   npm-audit:
-    name: npm audit (production deps, high+)
+    name: npm audit (full tree, high+)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -23,9 +23,16 @@ jobs:
           node-version: "22"
           cache: npm
 
-      - name: Audit production deps (high + critical)
-        run: npm audit --omit=dev --audit-level=high
+      # Scans the full dep tree (no --omit=dev). Dev deps run on CI
+      # via postinstall hooks and are a real supply-chain surface;
+      # see docs/decisions/0024-CI-Security-Policy.md for the
+      # rationale.
+      - name: Audit full tree (high + critical)
+        run: npm audit --audit-level=high
 
-      - name: Audit full tree (informational)
+      # Moderates are informational: visible in the log without
+      # failing the job. Promote anything that looks load-bearing
+      # to a tracked issue + a real fix.
+      - name: Audit full tree (moderate, informational)
         if: always()
         run: npm audit --audit-level=moderate || true

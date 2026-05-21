@@ -79,9 +79,15 @@ The initial workflow set:
   every PR. Concurrency-cancels superseded runs.
 - **`dependency-review.yml`** — PR gate. Fails on `high` severity
   introduced by a PR. Posts a comment summary on failure.
-- **`security.yml`** — nightly `npm audit --omit=dev
-  --audit-level=high` against production deps. Informational
-  audit of the full tree runs separately and never fails the job.
+- **`security.yml`** — nightly `npm audit --audit-level=high`
+  against the **full** dep tree (production + dev). A separate
+  informational step runs the same audit at `moderate` and
+  never fails the job, for visibility without noise. We do
+  *not* set `--omit=dev` — dev deps execute on CI via
+  postinstall hooks and have been the entry vector for several
+  recent supply-chain attacks (nx postinstall worm,
+  `tj-actions/changed-files`, `reviewdog/action-setup`).
+  Treating them as out-of-scope would be a false economy.
 - **`codeql.yml`** — JS/TS static analysis on push, PR, and a
   weekly schedule. Build-mode `none` (TS is interpreted; CodeQL
   doesn't need to build).
