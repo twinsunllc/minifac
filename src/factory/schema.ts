@@ -4,11 +4,13 @@ const PositiveInt = z.number().int().positive();
 
 export const NodeSchema = z
   .object({
-    executor: z.string().min(1),
+    executor: z.string().min(1).optional(),
     terminal: z.boolean().default(false),
     max_iterations: PositiveInt.optional(),
     cwd: z.string().optional(),
     with: z.record(z.unknown()).optional(),
+    uses: z.string().min(1).optional(),
+    inputs: z.record(z.unknown()).optional(),
   })
   .strict();
 

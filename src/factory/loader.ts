@@ -1,8 +1,9 @@
 import path from "node:path";
+import { inlineStepIntoNode } from "../step/inline.js";
 import { findUncoveredCycles } from "./cycles.js";
 import { resolveExtendsChain } from "./extends.js";
 import { FactoryLoadError } from "./loader-error.js";
-import type { Factory } from "./schema.js";
+import type { Factory, FactoryNode } from "./schema.js";
 
 export { FactoryLoadError };
 
@@ -15,12 +16,15 @@ export interface LoadedFactory {
 /**
  * Load and validate a factory from `sourcePath`.
  *
- * If the file declares a top-level `extends:` field, the chain is resolved
- * (with the calling repo's cwd, `callerCwd`, used to locate `minifac:<name>`
- * built-ins and bare `<name>` local factories) and merged using
- * replace-at-node-level semantics. Post-schema validation runs against the
- * resolved factory; errors continue to cite the entry-point file as
- * `sourcePath` so the operator knows what to edit.
+ * Load pipeline (in order):
+ *   1. Resolve the `extends:` chain → a single merged factory.
+ *   2. Validate node-shape rules (`uses:`/`executor:` mutual exclusion etc.).
+ *   3. Inline step references on every node that declared `uses:`.
+ *   4. Run post-schema validation (cycles, terminal node, edge endpoints).
+ *
+ * `callerCwd` is used both for `extends:` lookup and for `uses:` step
+ * lookup (built-in: `<callerCwd>/examples/steps/<name>.yaml`;
+ * local: `<callerCwd>/.minifac/steps/<name>.yaml`).
  */
 export async function loadFactory(
   sourcePath: string,
@@ -29,6 +33,8 @@ export async function loadFactory(
   const absolute = path.resolve(sourcePath);
   const resolved = await resolveExtendsChain(absolute, callerCwd);
 
+  validateNodeShape(resolved.factory, absolute);
+  await inlineSteps(resolved.factory, absolute, callerCwd);
   validatePostSchema(resolved.factory, absolute);
 
   return {
@@ -36,6 +42,70 @@ export async function loadFactory(
     sourcePath: absolute,
     sourceDir: path.dirname(absolute),
   };
+}
+
+/**
+ * Validate the `uses:` / `executor:` / `with:` / `inputs:` interplay on
+ * every node. Runs after schema parse, before step inlining.
+ */
+function validateNodeShape(factory: Factory, sourcePath: string): void {
+  for (const [nodeId, node] of Object.entries(factory.nodes)) {
+    const n = node as FactoryNode & { uses?: unknown; inputs?: unknown };
+    const hasUses = typeof n.uses === "string" && n.uses.length > 0;
+    const hasInputs = n.inputs !== undefined;
+    const hasExecutor = typeof n.executor === "string" && n.executor.length > 0;
+    const hasWith = n.with !== undefined;
+
+    if (hasUses && hasExecutor) {
+      throw new FactoryLoadError(
+        `Node "${nodeId}" declares both \`uses:\` and \`executor:\`; the two are mutually exclusive`,
+        sourcePath,
+      );
+    }
+    if (hasUses && hasWith) {
+      throw new FactoryLoadError(
+        `Node "${nodeId}" declares both \`uses:\` and \`with:\`; the two are mutually exclusive`,
+        sourcePath,
+      );
+    }
+    if (hasInputs && !hasUses) {
+      throw new FactoryLoadError(
+        `Node "${nodeId}" declares \`inputs:\` without \`uses:\`; \`inputs:\` is only valid alongside \`uses:\``,
+        sourcePath,
+      );
+    }
+    if (!hasUses && !hasExecutor) {
+      throw new FactoryLoadError(
+        `Node "${nodeId}" declares neither \`uses:\` nor \`executor:\`; one is required`,
+        sourcePath,
+      );
+    }
+    if (n.uses !== undefined && !hasUses) {
+      // covers empty-string and non-string-after-schema (defensive)
+      throw new FactoryLoadError(
+        `Node "${nodeId}" has invalid \`uses:\` value`,
+        sourcePath,
+      );
+    }
+  }
+}
+
+async function inlineSteps(
+  factory: Factory,
+  factoryPath: string,
+  callerCwd: string,
+): Promise<void> {
+  for (const [nodeId, node] of Object.entries(factory.nodes)) {
+    const n = node as FactoryNode & { uses?: unknown; inputs?: unknown };
+    if (typeof n.uses !== "string" || n.uses.length === 0) continue;
+    const inlined = await inlineStepIntoNode({
+      factoryPath,
+      nodeId,
+      node: n,
+      callerCwd,
+    });
+    factory.nodes[nodeId] = inlined;
+  }
 }
 
 function validatePostSchema(factory: Factory, sourcePath: string): void {
