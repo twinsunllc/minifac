@@ -1,7 +1,28 @@
 {
   "name": "minifac",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "A miniature factory: directed (possibly cyclic) YAML graphs of agent + tool nodes, executed by a small TypeScript runner.",
+  "keywords": [
+    "agent",
+    "workflow",
+    "graph",
+    "claude",
+    "ai",
+    "factory",
+    "spec-driven-development",
+    "openspec",
+    "cli"
+  ],
+  "homepage": "https://github.com/twinsunllc/minifac#readme",
+  "bugs": {
+    "url": "https://github.com/twinsunllc/minifac/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/twinsunllc/minifac.git"
+  },
+  "license": "MIT",
+  "author": "Jami Couch",
   "type": "module",
   "engines": {
     "node": ">=22.0.0"
@@ -17,7 +38,7 @@
       "types": "./dist/index.d.ts"
     }
   },
-  "files": ["dist", "README.md"],
+  "files": ["dist", "README.md", "LICENSE", "CHANGELOG.md"],
   "scripts": {
     "build": "tsc -p tsconfig.json && node scripts/copy-web-assets.mjs",
     "start": "node dist/cli.js",

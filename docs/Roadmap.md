@@ -54,24 +54,38 @@ enforces this beyond explicit `depends_on` fields.
 ## Open-source readiness (chore tier)
 
 Concrete prerequisites for actually open-sourcing, mostly
-non-architectural. Likely batched into one or two dogfoods after
-the architectural queue clears (especially `reusable-steps`,
-which makes the example library viable):
+non-architectural. Mostly done outside the factory — the work is
+files, not behavior. The factory is reserved for the install-path
+fix ([[cli-symlink-main-guard]]) and possibly the examples library.
 
-- [ ] LICENSE file (MIT, Apache 2.0, or whatever)
-- [ ] Polished user-facing README (current README is honest; needs
-      a quickstart that doesn't require reading `docs/`)
-- [ ] CONTRIBUTING guide
-- [ ] Install path — `npm publish` for the engine; document
-      `npx minifac` as the canonical invocation
-- [ ] Public-friendly examples beyond the SDD loop (e.g.,
+- [x] **LICENSE** — MIT (Jami Couch, 2026)
+- [x] **CHANGELOG.md** — Keep-a-Changelog format, scaffolded with
+      a TBD 0.1.0 entry
+- [x] **CONTRIBUTING.md** — short dev-loop guide + SDD pointer +
+      `pinact` discipline note
+- [x] **package.json polish** — license, repository, homepage,
+      bugs, keywords, author, version bumped to 0.1.0
+- [x] **CI for the repo itself** — `.github/workflows/`:
+      `ci.yml` (build/test/lint), `dependency-review.yml` (PR
+      gate), `security.yml` (nightly `npm audit`),
+      `codeql.yml` (JS/TS static analysis). All actions
+      SHA-pinned per [[0024-CI-Security-Policy]].
+- [ ] **`cli-symlink-main-guard` shipped** — hard prerequisite
+      for the install path. Brief queued; tiny dogfood.
+- [ ] **Polished user-facing README** — current README is
+      honest internal docs; needs a top section that's
+      first-30-seconds compelling. See [[Comparisons]] for the
+      "why over X" material to distill.
+- [ ] **Install path** — `npm publish` for the engine; document
+      `npx minifac` as the canonical invocation. Blocked on
+      cli-symlink-main-guard.
+- [ ] **Public-friendly examples** beyond the SDD loop (e.g.,
       `examples/factories/spec-drift-watch.yaml`,
-      `dependency-bump.yaml`, etc. — earned by reusable-steps)
-- [ ] A short "why minifac" pitch document — distilled from
-      [[Comparisons]]
-- [ ] CI for the repo itself (currently we run verify gates in
-      worktrees but have no GitHub Actions configured for the
-      project's own development)
+      `dependency-bump.yaml`, `code-review.yaml`). Unblocked
+      now that reusable-steps has landed; probably worth its
+      own brief.
+- [ ] **A short "why minifac" pitch document** —
+      `docs/Why-Minifac.md`, distilled from [[Comparisons]].
 
 ## Already landed (newest first)
 
