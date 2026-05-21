@@ -6,10 +6,10 @@ TBD - created by archiving change core-graph-runner. Update Purpose after archiv
 ### Requirement: `minifac run` command
 
 The CLI SHALL expose a `run` subcommand that takes a single positional
-argument `<thing>` and an optional `--in-place` flag. The CLI SHALL
-resolve `<thing>` to a brief, a factory, or an error using the
-following lookup precedence, evaluated in order against the directory
-the CLI was invoked from (cwd):
+argument `<thing>`, an optional `--in-place` flag, and an optional
+`--force` flag. The CLI SHALL resolve `<thing>` to a brief, a factory,
+or an error using the following lookup precedence, evaluated in order
+against the directory the CLI was invoked from (cwd):
 
 1. **Brief by path.** If `<thing>` contains a path separator OR ends
    in `.md`, treat `<thing>` as a brief path. Resolve relative paths
@@ -68,6 +68,18 @@ examples/sdd.yaml`) SHALL NOT be supported. A `.yaml` or `.yml`
 extension on `<thing>` falls into step 1 (treated as a brief path),
 which will fail to parse as a brief; the CLI SHALL exit `1` with the
 brief-load error in that case, surfacing the misuse directly.
+
+When a brief is resolved (steps 1 or 2), the CLI SHALL — before any
+worktree creation, lockfile claim, or node execution — compute the
+brief's state via the `brief-state` capability's "Combined brief
+state and dep satisfaction" requirement. If the computed state is
+`blocked` and `--force` was NOT supplied, the CLI SHALL exit `1`
+with a stderr message naming each unsatisfied dep and its current
+doneness. If the computed state is `blocked` and `--force` WAS
+supplied, the CLI SHALL emit a single stderr warning line naming
+the overridden deps and proceed. If `computeBriefState` throws a
+cycle error, the CLI SHALL exit `1` with a stderr message naming
+the full cycle regardless of `--force`.
 
 After resolution succeeds, and before any node executes, the CLI
 SHALL sequence the run as follows:
@@ -263,6 +275,48 @@ output, not a replacement for it.
 - **THEN** the CLI loads `.minifac/factories/sdd-fast.yaml` as a
   brief-less factory invocation; `examples/sdd-fast.yaml` (if any)
   is not consulted
+
+#### Scenario: Blocked brief is refused before worktree creation
+
+- **WHEN** the user invokes `minifac run foo`, `inputs/foo.md`
+  declares `depends_on: [bar]`, and `inputs/bar.md` exists
+  (so `bar` is active, not done)
+- **THEN** the CLI exits `1` with a stderr message naming `bar`
+  and its current doneness (`active`); no lockfile is claimed,
+  no worktree is created, and no node executes
+
+#### Scenario: Missing dep is refused before worktree creation
+
+- **WHEN** the user invokes `minifac run foo`, `inputs/foo.md`
+  declares `depends_on: [bar]`, and neither `inputs/bar.md` nor
+  `inputs/done/bar.md` exists
+- **THEN** the CLI exits `1` with a stderr message naming `bar`
+  and the doneness `missing`; no worktree is created
+
+#### Scenario: Satisfied deps proceed normally
+
+- **WHEN** the user invokes `minifac run foo`, `inputs/foo.md`
+  declares `depends_on: [bar]`, and `inputs/done/bar.md` exists
+- **THEN** the CLI proceeds with normal `run` sequencing (lock,
+  worktree, runner) as if `depends_on` were empty
+
+#### Scenario: --force overrides a blocked brief
+
+- **WHEN** the user invokes `minifac run foo --force`,
+  `inputs/foo.md` declares `depends_on: [bar]`, and `bar` is not
+  done
+- **THEN** the CLI writes a single stderr warning naming the
+  overridden deps and proceeds with the run (lock, worktree,
+  runner)
+
+#### Scenario: Dependency cycle is refused even with --force
+
+- **WHEN** the user invokes `minifac run foo` (with or without
+  `--force`), `inputs/foo.md` declares `depends_on: [bar]`, and
+  `inputs/bar.md` declares `depends_on: [foo]`
+- **THEN** the CLI exits `1` with a stderr message naming the full
+  cycle (`foo -> bar -> foo`); no worktree is created and no node
+  executes
 
 ### Requirement: Event output format
 
@@ -1074,4 +1128,135 @@ network-touching git command.
   with no network
 - **THEN** the CLI completes (success or refusal) without
   attempting any network-touching git command
+
+### Requirement: `minifac briefs` subcommand
+
+The CLI SHALL expose a `briefs` subcommand that lists briefs across
+both the doneness and activity axes (per the `brief-state`
+capability). The subcommand SHALL accept the following options:
+
+- `--state <s>` — filter by doneness, where `s` is one of `active`,
+  `done`, or `missing`. Any other value SHALL be a usage error.
+- `--activity <s>` — filter by activity, where `s` is one of `none`,
+  `running`, `succeeded`, or `failed`. Any other value SHALL be a
+  usage error.
+- `--ready` — shorthand filter for "active, deps satisfied, and no
+  in-flight or recently-succeeded run." A row is `ready` iff its
+  doneness is `active`, every entry in its `depends_on` resolves to
+  doneness `done`, and its activity is `none` or `failed`.
+- `--inputs <d>` — override the inputs directory (default
+  `<cwd>/inputs`). Both the active set (`<d>/*.md`) and the done
+  set (`<d>/done/*.md`) SHALL be discovered relative to this path.
+- `--json` — emit the result as a JSON array (suitable for
+  piping). Each object SHALL carry at minimum `change`, `state`,
+  `activity`, `deps` (array of `{ change, doneness }`),
+  `deps_summary`, and `last_run` (object with `id`, `branch`, and
+  `ended_at`, or `null` when no run exists). Output SHALL be sorted
+  by `change` ascending for stability.
+
+Default output (no `--json`) SHALL be a compact human-readable
+table with at least the columns `change`, `state`, `activity`,
+`deps_summary` (e.g. `2/3 done` or `—` when the brief has no
+deps), and `last_run` (a short id prefix + branch + ended-at when
+present, else `—`). Rows SHALL be sorted by `change` ascending.
+
+The subcommand SHALL discover the set of briefs by scanning the
+configured inputs directory: `<inputs>/*.md` is the active set;
+`<inputs>/done/*.md` is the done set. A brief that fails to parse
+SHALL be reported in the table (or JSON array) with `state` derived
+from its file location and `activity` rendered as `parse_error`;
+its `deps` SHALL be the empty array. A parse error on a single
+brief SHALL NOT abort the listing.
+
+The subcommand SHALL NOT mutate the filesystem and SHALL NOT mutate
+the run store. The subcommand SHALL exit `0` on success (including
+when zero briefs match the filters) and `1` on a usage error (bad
+filter value, unreadable inputs directory).
+
+#### Scenario: `briefs` with no flags lists active and done briefs
+
+- **WHEN** the user invokes `minifac briefs` in a repo whose
+  `inputs/` contains `foo.md` and `bar.md`, and whose
+  `inputs/done/` contains `baz.md`
+- **THEN** the CLI writes a table with at least three rows: `bar`
+  (state `active`), `baz` (state `done`), `foo` (state `active`),
+  sorted by `change` ascending; the CLI exits `0`
+
+#### Scenario: `--state active` filters out done briefs
+
+- **WHEN** the user invokes `minifac briefs --state active` against
+  a repo whose `inputs/` contains `foo.md` and whose
+  `inputs/done/` contains `baz.md`
+- **THEN** the table contains a row for `foo` only; `baz` is
+  omitted; the CLI exits `0`
+
+#### Scenario: `--state` rejects bad values
+
+- **WHEN** the user invokes `minifac briefs --state wat`
+- **THEN** the CLI exits `1` with a stderr message naming the
+  allowed values (`active`, `done`, `missing`)
+
+#### Scenario: `--activity running` shows only briefs with a running run
+
+- **WHEN** the user invokes `minifac briefs --activity running` and
+  the run store reports the most recent row for `foo` has
+  `status = "running"` (with no other change matching)
+- **THEN** the table contains a row for `foo` only; the CLI exits
+  `0`
+
+#### Scenario: `--ready` excludes briefs with unsatisfied deps
+
+- **WHEN** the user invokes `minifac briefs --ready` against a
+  repo where `inputs/foo.md` declares `depends_on: [bar]`,
+  `inputs/bar.md` is present (active), and no run exists for `foo`
+- **THEN** the row for `foo` is omitted (its dep `bar` is not
+  done); the CLI exits `0`
+
+#### Scenario: `--ready` excludes briefs with an in-flight run
+
+- **WHEN** the user invokes `minifac briefs --ready` against a
+  repo where `inputs/foo.md` has no deps and the most recent run
+  row for `foo` has `status = "running"`
+- **THEN** the row for `foo` is omitted; the CLI exits `0`
+
+#### Scenario: `--ready` includes briefs whose last run failed
+
+- **WHEN** the user invokes `minifac briefs --ready` and
+  `inputs/foo.md` has no deps and the most recent run row for
+  `foo` has `status = "failed"`
+- **THEN** the row for `foo` is included (`failed` is retryable);
+  the CLI exits `0`
+
+#### Scenario: `--json` emits stable array shape
+
+- **WHEN** the user invokes `minifac briefs --json` against a repo
+  with one active brief (`foo`, deps `[bar]`) and one done brief
+  (`baz`, no deps)
+- **THEN** stdout contains exactly one JSON array of length 2,
+  sorted by `change` ascending; each object carries `change`,
+  `state`, `activity`, `deps`, `deps_summary`, and `last_run`;
+  the `last_run` value is an object or `null`; the CLI exits `0`
+
+#### Scenario: Unparseable brief reports parse_error activity
+
+- **WHEN** the user invokes `minifac briefs` in a repo where
+  `inputs/foo.md` is malformed (missing closing fence)
+- **THEN** the table includes a row for `foo` with `state` derived
+  from its file location and `activity` rendered as `parse_error`;
+  the row's `deps_summary` is `—` and `last_run` is `—`; the CLI
+  exits `0`
+
+#### Scenario: `--inputs` overrides the inputs directory
+
+- **WHEN** the user invokes `minifac briefs --inputs /tmp/other`
+- **THEN** the CLI scans `/tmp/other/*.md` for active briefs and
+  `/tmp/other/done/*.md` for done briefs; no files under the
+  default `<cwd>/inputs` are read
+
+#### Scenario: Empty inputs directory exits `0`
+
+- **WHEN** the user invokes `minifac briefs` in a repo whose
+  `inputs/` and `inputs/done/` directories are empty (or absent)
+- **THEN** the CLI prints an empty table (or `[]` with `--json`)
+  and exits `0`
 

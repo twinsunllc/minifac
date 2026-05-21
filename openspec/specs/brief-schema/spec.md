@@ -54,6 +54,7 @@ The brief frontmatter SHALL have the following typed shape:
 | `base_branch` | no       | string                     | Branch this change should be based on                      |
 | `model`       | no       | string                     | Per-brief Claude model override                            |
 | `mode`        | no       | literal `"in-place"`       | When set, the CLI runs the factory in `process.cwd()` instead of creating a worktree |
+| `depends_on`  | no       | string[]                   | Names of other briefs whose completion is a precondition for running this brief |
 
 The loader SHALL be strict on required-field presence and on known-field
 types: a missing `change` or `factory`, or a non-string value for any
@@ -61,12 +62,17 @@ of the string fields, SHALL produce a load error naming the
 offending field and (when available) its actual type or location.
 For the `mode` field, any value other than the literal `"in-place"`
 SHALL produce a load error naming the offending value and listing
-the supported literal.
+the supported literal. For the `depends_on` field, a non-array value
+or an array containing any non-string or empty-string element SHALL
+produce a load error naming the offending element. When the
+`depends_on` field is absent, the loader SHALL surface it on the
+parsed object as the empty array `[]` so downstream code never
+inspects `undefined`.
 
 The loader SHALL be permissive on unknown extras: any frontmatter key
 not in the table above SHALL pass through to the returned object
-without error. Future schemas (e.g. `depends_on`, `priority`, `tags`)
-slot in without requiring a migration.
+without error. Future schemas (e.g. `priority`, `tags`) slot in
+without requiring a migration.
 
 #### Scenario: Required fields present, no extras
 
@@ -110,12 +116,47 @@ slot in without requiring a migration.
 - **THEN** the loader throws a load error naming the offending
   value and the supported literal (`"in-place"`)
 
+#### Scenario: `depends_on` defaults to empty array when absent
+
+- **WHEN** the loader reads a brief whose frontmatter is
+  `{ change: "foo", factory: "sdd" }`
+- **THEN** the returned object's frontmatter exposes
+  `depends_on` as the empty array `[]`
+
+#### Scenario: `depends_on` parses when present
+
+- **WHEN** the loader reads a brief whose frontmatter is
+  `{ change: "foo", factory: "sdd", depends_on: ["bar", "baz"] }`
+- **THEN** the returned object's frontmatter exposes `depends_on`
+  as the array `["bar", "baz"]` in declared order
+
+#### Scenario: `depends_on` rejects non-array value
+
+- **WHEN** the loader reads a brief whose frontmatter is
+  `{ change: "foo", factory: "sdd", depends_on: "bar" }`
+- **THEN** the loader throws a load error naming the
+  `depends_on` field and the array-of-strings requirement
+
+#### Scenario: `depends_on` rejects non-string element
+
+- **WHEN** the loader reads a brief whose frontmatter is
+  `{ change: "foo", factory: "sdd", depends_on: ["bar", 42] }`
+- **THEN** the loader throws a load error naming the offending
+  element (`42`) and the array-of-strings requirement
+
+#### Scenario: `depends_on` rejects empty-string element
+
+- **WHEN** the loader reads a brief whose frontmatter is
+  `{ change: "foo", factory: "sdd", depends_on: ["bar", ""] }`
+- **THEN** the loader throws a load error naming the empty-string
+  element and the non-empty requirement
+
 #### Scenario: Unknown extras pass through without error
 
 - **WHEN** the loader reads a brief whose frontmatter is
-  `{ change: "foo", factory: "sdd", depends_on: ["bar"], priority: "high" }`
+  `{ change: "foo", factory: "sdd", priority: "high", tags: ["x"] }`
 - **THEN** the loader returns a typed object whose frontmatter
-  contains the two required fields *and* `depends_on` and `priority`
+  contains the two required fields *and* `priority` and `tags`
   preserved verbatim, with no error
 
 ### Requirement: Brief location convention and name-based discovery
