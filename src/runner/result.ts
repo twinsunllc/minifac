@@ -18,7 +18,8 @@ export type RunReason =
   | "node_failed"
   | "budget_exhausted"
   | "graph_drained"
-  | "unknown_executor";
+  | "unknown_executor"
+  | "user_quit";
 
 export interface ExecutionLogEntry {
   nodeId: string;
