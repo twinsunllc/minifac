@@ -691,7 +691,7 @@ mode: in-place
       const briefPath = await writeFixture(
         repo,
         "inputs/foo.md",
-        `---\nchange: foo\nfactory: sdd\nmode: in-place\n---\nbody\n`,
+        "---\nchange: foo\nfactory: sdd\nmode: in-place\n---\nbody\n",
       );
       return { repo, briefPath };
     }
@@ -782,7 +782,7 @@ mode: in-place
       await writeFixture(
         dir,
         "inputs/foo.md",
-        `---\nchange: foo\nfactory: sdd\nmode: in-place\n---\nbody\n`,
+        "---\nchange: foo\nfactory: sdd\nmode: in-place\n---\nbody\n",
       );
       const out = new BufferStream();
       const err = new BufferStream();
@@ -820,12 +820,12 @@ mode: in-place
       await writeFixture(
         repo,
         "inputs/foo.md",
-        `---\nchange: foo\nfactory: sdd\nmode: in-place\ndepends_on:\n  - bar\n---\n`,
+        "---\nchange: foo\nfactory: sdd\nmode: in-place\ndepends_on:\n  - bar\n---\n",
       );
       await writeFixture(
         repo,
         "inputs/bar.md",
-        `---\nchange: bar\nfactory: sdd\nmode: in-place\n---\n`,
+        "---\nchange: bar\nfactory: sdd\nmode: in-place\n---\n",
       );
       sh(repo, ["git", "add", path.join("inputs", "foo.md")]);
       sh(repo, ["git", "commit", "-q", "-m", "foo depends on bar"]);

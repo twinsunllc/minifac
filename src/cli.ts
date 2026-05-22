@@ -277,9 +277,7 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
           // ignored. See `run-cli` capability, "`minifac run` brief
           // cleanliness gate".
           if (brief) {
-            const { checkBriefAndAncestorsCleanliness } = await import(
-              "./brief/cleanliness.js"
-            );
+            const { checkBriefAndAncestorsCleanliness } = await import("./brief/cleanliness.js");
             const { loadBrief: loadBriefForCleanliness } = await import("./brief/loader.js");
             const cleanResult = await checkBriefAndAncestorsCleanliness(brief, {
               inputsDir: path.resolve(cwd, "inputs"),

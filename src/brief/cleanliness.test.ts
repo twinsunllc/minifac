@@ -3,10 +3,7 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import {
-  checkBriefAndAncestorsCleanliness,
-  checkBriefCleanliness,
-} from "./cleanliness.js";
+import { checkBriefAndAncestorsCleanliness, checkBriefCleanliness } from "./cleanliness.js";
 import { loadBrief } from "./loader.js";
 import { BriefCycleError } from "./state.js";
 
@@ -38,9 +35,7 @@ async function writeBriefFile(
   depends_on: string[] = [],
 ): Promise<string> {
   const deps =
-    depends_on.length === 0
-      ? ""
-      : `depends_on:\n${depends_on.map((d) => `  - ${d}`).join("\n")}\n`;
+    depends_on.length === 0 ? "" : `depends_on:\n${depends_on.map((d) => `  - ${d}`).join("\n")}\n`;
   const fp = path.join(repo, "inputs", `${change}.md`);
   await writeFile(fp, `---\nchange: ${change}\nfactory: sdd\n${deps}---\nbody\n`, "utf8");
   return fp;

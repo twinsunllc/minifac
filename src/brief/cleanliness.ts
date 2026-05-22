@@ -7,7 +7,7 @@
 // graph depth-first and surfaces the first unclean brief.
 
 import { type GitResult, runGit } from "../worktree/git.js";
-import { type Brief } from "./loader.js";
+import type { Brief } from "./loader.js";
 import { BriefCycleError } from "./state.js";
 
 export type CleanlinessResult =
@@ -21,10 +21,7 @@ export type AncestorCleanlinessResult =
   | { status: "unclean"; offending: string; code: string };
 
 /** Injectable git runner for tests. Defaults to the real `git` subprocess. */
-export type GitStatusRunner = (
-  repoRoot: string,
-  briefPath: string,
-) => Promise<GitResult>;
+export type GitStatusRunner = (repoRoot: string, briefPath: string) => Promise<GitResult>;
 
 const defaultRunner: GitStatusRunner = (repoRoot, briefPath) =>
   runGit(repoRoot, ["status", "--porcelain", "--", briefPath]);

@@ -138,7 +138,7 @@ Event kinds SHALL be exactly:
 - `skipped` — emitted when a brief is not scheduled; carries
   `change` and a `reason` value drawn from the set: `blocked`,
   `concurrency`, `failure-cap`, `filtered`, `in-flight`,
-  `running-elsewhere`, `activity-succeeded`, `done`.
+  `running-elsewhere`, `activity-succeeded`, `done`, `unclean`.
 - `completed` — emitted when an in-flight run finishes; carries
   `change`, `runId` (when available), and `status` (one of
   `succeeded`, `failed`).
@@ -169,6 +169,32 @@ The raw-mode log line SHALL include the recovery gesture
 the action without a docs lookup. The JSON-mode object SHALL
 carry the same `detail` field; the recovery gesture itself is
 not a structured field (it lives in the docs and in the raw line).
+
+When the `skipped` event's `reason` is `unclean`, the event SHALL
+carry a `detail` string identifying the offending file and its
+porcelain status code. The shape is:
+
+- `"<code>"` when the brief being decided is itself the offender
+  (e.g. `"??"`, `" M"`, `"A "`).
+- `"<offending> (<code>)"` when an ancestor named `<offending>`
+  is the offender (e.g. `"bar (??)"`).
+
+The raw-mode log lines for `unclean` SHALL include the recovery
+gesture "commit or stash before autorun picks it up". For the
+root-offender case:
+
+```
+[autorun] skipped <change>: brief is uncommitted (<code>); commit or stash before autorun picks it up
+```
+
+For the ancestor-offender case:
+
+```
+[autorun] skipped <change>: ancestor brief <offending> is uncommitted (<code>); commit or stash before autorun picks it up
+```
+
+The JSON-mode object SHALL carry the same `detail` field; the
+recovery-gesture text is not a structured field.
 
 Every event SHALL include an ISO-8601 timestamp.
 
@@ -222,6 +248,24 @@ real time.
   string of the shape `<count>/<max>` (e.g. `3/3`); the
   human-readable line additionally includes the gesture text
   "restart autorun to retry"
+
+#### Scenario: Unclean skip on root brief uses the code as detail
+
+- **WHEN** the autorun process skips `foo` because `inputs/foo.md`
+  is untracked
+- **THEN** the emitted log line carries `event = "skipped"`,
+  `change = "foo"`, `reason = "unclean"`, and `detail = "??"`; the
+  raw-mode line includes the text
+  "brief is uncommitted (??); commit or stash before autorun picks it up"
+
+#### Scenario: Unclean skip on ancestor names the offender in detail
+
+- **WHEN** the autorun process skips `foo` because its ancestor
+  `bar` is modified-but-tracked
+- **THEN** the emitted log line carries `event = "skipped"`,
+  `change = "foo"`, `reason = "unclean"`, and `detail = "bar ( M)"`;
+  the raw-mode line includes the text
+  "ancestor brief bar is uncommitted ( M); commit or stash before autorun picks it up"
 
 ### Requirement: Autorun signal handling
 
@@ -649,7 +693,6 @@ abort the poll cycle.
   `reason='running-elsewhere'` for that brief, does NOT modify the
   `runs` row, and continues the poll cycle for other briefs
 
-
 ### Requirement: Autorun per-session failure cap
 
 The autorun process SHALL maintain a per-session, in-memory
@@ -1069,4 +1112,109 @@ launched.
   were supplied, and exits with the usual exit codes
   (NOT a usage error)
 
+### Requirement: Autorun brief cleanliness gate
+
+The autorun process SHALL refuse to dispatch a brief whose
+`inputs/<change>.md` file (or any of its `depends_on` ancestors'
+files) is in an unclean git working-tree state, as determined by
+the `brief-cleanliness` capability's
+`checkBriefAndAncestorsCleanliness` requirement.
+
+The cleanliness check SHALL run inside the scheduler's `decide()`
+method, after the `in-flight` and `filtered` short-circuits and
+*before* `computeBriefState`. When the check returns
+`{ status: "unclean", offending, code }`, the scheduler SHALL
+return a skip decision with `reason: "unclean"` and a `detail`
+string of:
+
+- `"<code>"` when `offending` equals the brief being decided
+  (i.e. the root brief itself is unclean), or
+- `"<offending> (<code>)"` when an ancestor brief is the offender.
+
+When the check returns `{ status: "clean" }`, scheduling
+proceeds to the existing state-based dispatch path unchanged.
+
+When the check returns `{ status: "disabled" }`, scheduling
+proceeds as if the gate did not exist. The scheduler SHALL emit
+exactly one warning at process startup (NOT per poll cycle) of
+the form:
+
+```
+[autorun] inputs/ is not inside a git working tree; brief cleanliness gate disabled
+```
+
+When the underlying recursive walk throws `BriefCycleError`, the
+scheduler SHALL treat the cycle the same way the existing
+state-machine path does — surfacing the cycle as a `blocked`
+skip (NOT an `unclean` skip).
+
+The gate SHALL NOT be bypassable by any autorun flag. The
+operator-side recovery gestures are: commit the brief, stash it,
+or invoke `minifac run <change>` (which has its own warn-and-pause
+flow per the `run-cli` capability).
+
+#### Scenario: Untracked brief is skipped with reason unclean
+
+- **WHEN** the autorun process polls and observes
+  `inputs/foo.md` that is otherwise ready (no in-flight run, no
+  filter, etc.) but has never been `git add`ed
+- **THEN** the scheduler returns
+  `{ action: "skip", reason: "unclean", detail: "??" }` and the
+  poll loop emits a `skipped` event for `foo` with the same
+  reason and detail
+
+#### Scenario: Modified brief is skipped with reason unclean
+
+- **WHEN** `inputs/foo.md` is tracked but its working-tree copy
+  differs from the index
+- **THEN** the scheduler skips `foo` with
+  `reason: "unclean", detail: " M"`
+
+#### Scenario: Unclean ancestor blocks descendant with named detail
+
+- **WHEN** `inputs/foo.md` is committed, `foo`'s `depends_on`
+  includes `bar`, and `inputs/bar.md` is untracked
+- **THEN** the scheduler skips `foo` with
+  `reason: "unclean", detail: "bar (??)"`
+
+#### Scenario: Clean brief falls through to state-based dispatch
+
+- **WHEN** `inputs/foo.md` and all of its `depends_on` ancestors
+  are clean and the brief is otherwise ready
+- **THEN** the scheduler does NOT short-circuit on cleanliness;
+  it proceeds to `computeBriefState` and the existing scheduling
+  rules
+
+#### Scenario: Disabled gate emits one-time startup warning
+
+- **WHEN** the autorun process starts in a working tree where
+  `inputs/` is not inside any git repository
+- **THEN** the autorun log contains exactly one
+  `inputs/ is not inside a git working tree; brief cleanliness gate disabled`
+  line at startup; subsequent polls do NOT emit the warning
+  again, and dispatching proceeds as if the gate were absent
+
+#### Scenario: in-flight precedence over unclean
+
+- **WHEN** `inputs/foo.md` is unclean AND `foo` is already in the
+  scheduler's in-flight set
+- **THEN** the scheduler skips `foo` with `reason: "in-flight"`,
+  NOT `reason: "unclean"` — the in-flight short-circuit runs
+  first
+
+#### Scenario: filtered precedence over unclean
+
+- **WHEN** `inputs/foo.md` is unclean AND the autorun process was
+  invoked with `--filter "bar-*"` (so `foo` does not match)
+- **THEN** the scheduler skips `foo` with `reason: "filtered"`,
+  NOT `reason: "unclean"`
+
+#### Scenario: depends_on cycle is reported as blocked, not unclean
+
+- **WHEN** the autorun scheduler decides on `foo`, `foo` depends
+  on `bar`, and `bar` depends on `foo` (cycle), regardless of
+  whether any brief in the cycle is clean
+- **THEN** the scheduler skips `foo` with `reason: "blocked"`
+  via the existing state-machine path; the cleanliness gate does
+  NOT emit a separate `unclean` skip for the cycle
 
