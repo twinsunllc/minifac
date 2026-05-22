@@ -25,6 +25,10 @@ export interface RunFactoryResult {
 export interface RunFactoryArgs {
   brief: Brief;
   abortSignal?: AbortSignal;
+  /** Optional per-event sink: each `EmittedEvent` the run primitive yields
+   *  for this brief's run is forwarded here. Used by the autorun TUI so
+   *  the per-brief embedded run view reflects live progress. */
+  onRunEvent?: (entry: import("../executor/types.js").EmittedEvent) => void;
 }
 
 export interface ChildHandle {
@@ -59,6 +63,10 @@ export interface SchedulerCallbacks {
   onStarted?(event: AutorunStartedEvent): void;
   onCompleted?(event: AutorunCompletedEvent): void;
   onError?(change: string, err: Error): void;
+  /** Optional per-event sink: every `EmittedEvent` from a brief's run is
+   *  forwarded here (tagged with the brief's change name). Used by the
+   *  autorun TUI to drive each brief's embedded `RunState`. */
+  onRunEvent?(change: string, entry: import("../executor/types.js").EmittedEvent): void;
 }
 
 export interface SchedulerDeps {
@@ -158,7 +166,11 @@ export class Scheduler {
   start(brief: Brief): void {
     const change = brief.frontmatter.change;
     if (this.inFlight.has(change)) return;
-    const started = this.deps.runFactory({ brief });
+    const onRunEvent = this.deps.callbacks?.onRunEvent;
+    const started = this.deps.runFactory({
+      brief,
+      ...(onRunEvent ? { onRunEvent: (entry) => onRunEvent(change, entry) } : {}),
+    });
     const entry: InFlightEntry = {
       change,
       promise: started.promise,

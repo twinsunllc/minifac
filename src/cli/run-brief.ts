@@ -28,6 +28,9 @@ export interface RunBriefAutomatedArgs {
   store?: RunStore;
   buildRegistry?: () => ExecutorRegistry;
   abortSignal?: AbortSignal;
+  /** Optional per-event sink. The autorun TUI threads this through so the
+   *  embedded run view reflects live executor output. */
+  onEvent?: (entry: import("../executor/types.js").EmittedEvent) => void;
 }
 
 export interface RunBriefAutomatedResult {
@@ -143,7 +146,7 @@ export async function runBriefAutomated(
       runId,
       ...(briefMode_inPlace ? {} : { branchName }),
       ...(abortSignal ? { abortSignal } : {}),
-      onEvent: () => undefined,
+      onEvent: args.onEvent ?? (() => undefined),
     });
     if (result.status === "failed") {
       try {

@@ -8,6 +8,7 @@ export interface StatusGlyphs {
   succeeded: string;
   failed: string;
   retrying: string;
+  skipped: string;
   arrow: string;
   check: string;
   cross: string;
@@ -20,6 +21,7 @@ export const UNICODE_GLYPHS: StatusGlyphs = {
   succeeded: "●",
   failed: "●",
   retrying: "↻",
+  skipped: "↷",
   arrow: "→",
   check: "✓",
   cross: "✗",
@@ -32,6 +34,7 @@ export const ASCII_GLYPHS: StatusGlyphs = {
   succeeded: "o",
   failed: "!",
   retrying: "*",
+  skipped: "~",
   arrow: ">",
   check: "+",
   cross: "-",
