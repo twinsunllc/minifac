@@ -1,9 +1,19 @@
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { parseDocument } from "yaml";
 import { ZodError } from "zod";
+import { installRoot } from "../packaging/install-root.js";
 import { FactoryLoadError } from "./loader-error.js";
 import { type Factory, type FactoryLayer, FactoryLayerSchema, FactorySchema } from "./schema.js";
+
+async function fileExists(p: string): Promise<boolean> {
+  try {
+    const s = await stat(p);
+    return s.isFile();
+  } catch {
+    return false;
+  }
+}
 
 interface ParsedLayer {
   layer: FactoryLayer;
@@ -16,7 +26,16 @@ function isPathLike(ref: string): boolean {
   );
 }
 
-function resolveExtendsRef(ref: string, callerCwd: string, declaringFile: string): string {
+interface ExtendsCandidates {
+  primary: string;
+  fallback?: string;
+}
+
+function extendsCandidates(
+  ref: string,
+  callerCwd: string,
+  declaringFile: string,
+): ExtendsCandidates {
   if (ref.startsWith("minifac:")) {
     const name = ref.slice("minifac:".length);
     if (name.length === 0 || isPathLike(name)) {
@@ -25,7 +44,10 @@ function resolveExtendsRef(ref: string, callerCwd: string, declaringFile: string
         declaringFile,
       );
     }
-    return path.resolve(callerCwd, "examples", `${name}.yaml`);
+    return {
+      primary: path.resolve(installRoot(), "examples", `${name}.yaml`),
+      fallback: path.resolve(callerCwd, "examples", `${name}.yaml`),
+    };
   }
   if (isPathLike(ref)) {
     throw new FactoryLoadError(
@@ -33,7 +55,33 @@ function resolveExtendsRef(ref: string, callerCwd: string, declaringFile: string
       declaringFile,
     );
   }
-  return path.resolve(callerCwd, ".minifac", "factories", `${ref}.yaml`);
+  return { primary: path.resolve(callerCwd, ".minifac", "factories", `${ref}.yaml`) };
+}
+
+/**
+ * Resolve an `extends:` value to an absolute path on disk.
+ *
+ * Precedence for `minifac:<name>`:
+ *   1. `<install-root>/examples/<name>.yaml` (installed package)
+ *   2. `<callerCwd>/examples/<name>.yaml`    (source-tree dogfood)
+ *
+ * Bare `<name>` references resolve only against
+ * `<callerCwd>/.minifac/factories/<name>.yaml` — the install root is NOT
+ * consulted.
+ */
+async function resolveExtendsRef(
+  ref: string,
+  callerCwd: string,
+  declaringFile: string,
+): Promise<string> {
+  const { primary, fallback } = extendsCandidates(ref, callerCwd, declaringFile);
+  if (await fileExists(primary)) return primary;
+  if (fallback !== undefined && (await fileExists(fallback))) return fallback;
+  const tried = fallback === undefined ? primary : `${primary}, then ${fallback}`;
+  throw new FactoryLoadError(
+    `Could not resolve \`extends: ${ref}\` — tried ${tried}`,
+    declaringFile,
+  );
 }
 
 async function readAndParseLayer(absolutePath: string): Promise<FactoryLayer> {
@@ -101,20 +149,8 @@ async function walkExtendsChain(entryPath: string, callerCwd: string): Promise<P
       break;
     }
 
-    currentPath = resolveExtendsRef(layer.extends, callerCwd, currentPath);
-
-    // Existence check happens implicitly when we try to read in the next loop
-    // iteration. We pre-check here so the error message can name both the
-    // ref and the path tried, with the *declaring file* as `sourcePath`.
-    try {
-      await readFile(currentPath, "utf8");
-    } catch {
-      const ref = layer.extends;
-      throw new FactoryLoadError(
-        `Could not resolve \`extends: ${ref}\` — tried ${currentPath}`,
-        layers[layers.length - 1]?.sourcePath ?? currentPath,
-      );
-    }
+    const declaringFile = layers[layers.length - 1]?.sourcePath ?? currentPath;
+    currentPath = await resolveExtendsRef(layer.extends, callerCwd, declaringFile);
   }
 
   // Reverse to deepest-base-first.

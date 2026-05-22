@@ -715,13 +715,15 @@ mode: in-place
   });
 
   describe("factory composition", () => {
-    it("brief with `factory: sdd` resolves to the local custom when present", async () => {
+    it("brief with `factory: <name>` resolves to the local custom when present", async () => {
       const dir = await makeFixtureDir();
-      // Built-in `examples/sdd.yaml` with one prompt.
+      // Built-in-style `examples/myfac.yaml` with one prompt. (Use a name
+      // that is NOT bundled in the install root so the test fixture wins
+      // when the local `.minifac/factories/myfac.yaml` extends `minifac:myfac`.)
       await writeFixture(
         dir,
-        "examples/sdd.yaml",
-        `name: sdd
+        "examples/myfac.yaml",
+        `name: myfac
 brief: required
 nodes:
   a:
@@ -735,8 +737,8 @@ edges: []
       // Local custom factory overrides the prompt.
       await writeFixture(
         dir,
-        ".minifac/factories/sdd.yaml",
-        `extends: "minifac:sdd"
+        ".minifac/factories/myfac.yaml",
+        `extends: "minifac:myfac"
 nodes:
   a:
     executor: test
@@ -750,7 +752,7 @@ nodes:
         "inputs/my-change.md",
         `---
 change: my-change
-factory: sdd
+factory: myfac
 mode: in-place
 ---
 the body
@@ -781,12 +783,14 @@ the body
       expect(captured).toEqual(["from-local"]);
     });
 
-    it("brief with `factory: minifac:sdd` resolves to the built-in even when a local exists", async () => {
+    it("brief with `factory: minifac:<name>` resolves to the built-in even when a local exists", async () => {
       const dir = await makeFixtureDir();
+      // Use a not-bundled name so the source-tree examples/ fallback path
+      // is exercised (and the install-root won't accidentally shadow it).
       await writeFixture(
         dir,
-        "examples/sdd.yaml",
-        `name: sdd
+        "examples/myfac.yaml",
+        `name: myfac
 brief: required
 nodes:
   a:
@@ -799,8 +803,8 @@ edges: []
       );
       await writeFixture(
         dir,
-        ".minifac/factories/sdd.yaml",
-        `extends: "minifac:sdd"
+        ".minifac/factories/myfac.yaml",
+        `extends: "minifac:myfac"
 nodes:
   a:
     executor: test
@@ -814,7 +818,7 @@ nodes:
         "inputs/my-change.md",
         `---
 change: my-change
-factory: minifac:sdd
+factory: minifac:myfac
 mode: in-place
 ---
 the body
@@ -967,15 +971,21 @@ body
       }
     });
 
-    it("--factory minifac:sdd skips local lookup and resolves to examples/", async () => {
+    it("--factory minifac:<name> skips local lookup and resolves to examples/", async () => {
       const dir = await makeFixtureDir();
-      await writeFixture(dir, "examples/sdd.yaml", SDD_FACTORY);
+      // Use `myfac` rather than `sdd` so the source-tree examples/ fallback
+      // is the one exercised — the install-root has its own bundled sdd.
+      await writeFixture(
+        dir,
+        "examples/myfac.yaml",
+        SDD_FACTORY.replace("name: sdd", "name: myfac"),
+      );
       // A same-named local that would win for the bare form; the `minifac:`
       // prefix must skip this.
       await writeFixture(
         dir,
-        ".minifac/factories/sdd.yaml",
-        `name: sdd
+        ".minifac/factories/myfac.yaml",
+        `name: myfac
 brief: required
 nodes:
   a:
@@ -991,7 +1001,7 @@ edges: []
         "inputs/foo.md",
         `---
 change: foo
-factory: sdd
+factory: myfac
 mode: in-place
 ---
 body
@@ -1012,7 +1022,7 @@ body
       };
       const out = new BufferStream();
       const err = new BufferStream();
-      const code = await runCli(["run", "foo", "--factory", "minifac:sdd"], {
+      const code = await runCli(["run", "foo", "--factory", "minifac:myfac"], {
         stdout: out,
         stderr: err,
         runCwd: dir,
@@ -1024,8 +1034,8 @@ body
       const store = SqliteRunStore.open(path.join(home, "runs.db"));
       try {
         const runs = await store.listRuns({ limit: 10 });
-        expect(runs[0]?.factoryName).toBe("sdd");
-        expect(runs[0]?.factoryPath).toContain(path.join("examples", "sdd.yaml"));
+        expect(runs[0]?.factoryName).toBe("myfac");
+        expect(runs[0]?.factoryPath).toContain(path.join("examples", "myfac.yaml"));
       } finally {
         await store.close();
       }

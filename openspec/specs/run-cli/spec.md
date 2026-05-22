@@ -19,7 +19,7 @@ the CLI was invoked from (cwd):
 2. **Brief by name.** Else, if `inputs/<thing>.md` exists in cwd, treat
    it as a brief by name and load it via that path.
 3. **Factory by name.** Else, treat the run as a brief-less factory
-   invocation. Resolve `<thing>` as a factory name using the two-step
+   invocation. Resolve `<thing>` as a factory name using the
    precedence defined below; if neither candidate exists, fall
    through to step 4.
 4. **Else.** Write an error to stderr explaining that `<thing>` could
@@ -32,28 +32,37 @@ the `--factory <name>` flag value when supplied) SHALL accept two
 forms:
 
 - `minifac:<name>` — the `minifac:` prefix SHALL skip the local
-  lookup and resolve directly to `<cwd>/examples/<name>.yaml`. For
-  v0, "built-in" means "in `examples/` of the calling repo"; a
-  future packaging change MAY relocate built-ins without changing
-  this brief syntax.
+  lookup and resolve via the install-root-first / source-tree-
+  fallback two-step lookup:
+    1. `<install-root>/examples/<name>.yaml`, where `<install-root>`
+       is the directory containing the running runner's `package.json`.
+    2. `<cwd>/examples/<name>.yaml`.
+  The first existing file wins. When running from the minifac source
+  tree, the two paths collapse to the same file. The local
+  `.minifac/factories/<name>.yaml` SHALL NOT be consulted for
+  `minifac:<name>` references.
 - `<name>` (no prefix) — try `<cwd>/.minifac/factories/<name>.yaml`
   first; if that path does not exist, fall back to
-  `<cwd>/examples/<name>.yaml`. A `<name>` lookup succeeds at
-  whichever path exists; if neither exists, factory-by-name
-  resolution fails.
+  `<cwd>/examples/<name>.yaml`. A bare `<name>` lookup SHALL NOT
+  consult the install root. A `<name>` lookup succeeds at whichever
+  candidate exists; if none exists, factory-by-name resolution
+  fails.
 
 A brief whose `factory:` field uses the `minifac:` prefix SHALL
-resolve directly to the built-in even when an equally-named
+resolve via the install-root-first lookup even when an equally-named
 `.minifac/factories/<name>.yaml` exists. A brief whose `factory:`
-field is a bare `<name>` SHALL prefer the local file when present.
-The same precedence applies to the `--factory` flag value.
+field is a bare `<name>` SHALL prefer the local file when present
+and SHALL NOT consult the install root. The same precedence applies
+to the `--factory` flag value.
 
 When a brief is resolved (steps 1 or 2), the CLI SHALL further
 resolve the brief's frontmatter `factory:` field using the same
 factory-by-name resolution above. A brief whose `factory:` field
 does not resolve to any candidate path SHALL exit `1` with an error
-naming the missing factory (and, for the bare `<name>` form, naming
-both paths tried).
+naming the missing factory and, for the `minifac:<name>` form, both
+paths tried (install-root and source-tree); for the bare `<name>`
+form, both paths tried (local `.minifac/factories/` and source-tree
+`examples/`).
 
 **`--factory <name>` override.** When `--factory <name>` is
 supplied (steps 1 or 2 — i.e. a brief-driven invocation), the flag
@@ -62,8 +71,8 @@ invocation. The brief file SHALL NOT be modified. The flag value
 SHALL be resolved through the same factory-by-name resolution
 above and SHALL be subject to the same error contract: a flag
 value that does not resolve to any candidate path SHALL exit `1`
-with an error naming the unresolved value and (for the bare form)
-both paths tried. The override SHALL take effect *before* the
+with an error naming the unresolved value and both paths tried for
+that form. The override SHALL take effect *before* the
 factory's `brief:` mode is enforced and before the lockfile key is
 derived. When `--factory` is not supplied, behavior is unchanged
 from the brief's declared factory. The `--factory` flag on a
@@ -274,29 +283,40 @@ which factory produced which branch.
 - **THEN** the CLI loads `.minifac/factories/sdd.yaml` (the local
   custom factory), not `examples/sdd.yaml`
 
-#### Scenario: Brief's bare `factory:` falls back to built-in when no local exists
+#### Scenario: Brief's bare `factory:` falls back to source-tree built-in
 
 - **WHEN** the user invokes `minifac run inputs/foo.md`, the brief's
   frontmatter declares `factory: sdd`,
   `.minifac/factories/sdd.yaml` does not exist, and
-  `examples/sdd.yaml` exists
-- **THEN** the CLI loads `examples/sdd.yaml`
+  `<cwd>/examples/sdd.yaml` exists
+- **THEN** the CLI loads `<cwd>/examples/sdd.yaml`; the install
+  root is NOT consulted for bare references
 
-#### Scenario: Brief's `minifac:<name>` prefix skips local lookup
+#### Scenario: Brief's `minifac:<name>` resolves from install root first
 
 - **WHEN** the user invokes `minifac run inputs/foo.md`, the brief's
-  frontmatter declares `factory: minifac:sdd`, and both
-  `.minifac/factories/sdd.yaml` and `examples/sdd.yaml` exist
-- **THEN** the CLI loads `examples/sdd.yaml` (the built-in),
-  ignoring the local file
+  frontmatter declares `factory: minifac:sdd`,
+  `<install-root>/examples/sdd.yaml` exists, and both
+  `.minifac/factories/sdd.yaml` and `<cwd>/examples/sdd.yaml` exist
+- **THEN** the CLI loads `<install-root>/examples/sdd.yaml`; the
+  local file and the source-tree `examples/` are not consulted
+
+#### Scenario: Brief's `minifac:<name>` falls back to source-tree
+
+- **WHEN** the user invokes `minifac run inputs/foo.md`, the brief's
+  frontmatter declares `factory: minifac:sdd`,
+  `<install-root>/examples/sdd.yaml` does not exist, and
+  `<cwd>/examples/sdd.yaml` exists
+- **THEN** the CLI loads `<cwd>/examples/sdd.yaml`
 
 #### Scenario: Brief's `minifac:<name>` with no matching built-in fails
 
 - **WHEN** the user invokes `minifac run inputs/foo.md`, the brief's
-  frontmatter declares `factory: minifac:nonexistent`, and
-  `examples/nonexistent.yaml` does not exist
+  frontmatter declares `factory: minifac:nonexistent`, neither
+  `<install-root>/examples/nonexistent.yaml` nor
+  `<cwd>/examples/nonexistent.yaml` exists
 - **THEN** the CLI exits `1` with an error naming
-  `minifac:nonexistent` and the absolute path tried, even if a
+  `minifac:nonexistent` and both absolute paths tried, even if a
   `.minifac/factories/nonexistent.yaml` happens to exist
 
 #### Scenario: Brief-less factory by name resolves from local first
@@ -359,13 +379,15 @@ which factory produced which branch.
   `examples/sdd.yaml`), the persisted run row's `factoryName` is
   `bar`, and `inputs/foo.md` is unchanged on disk
 
-#### Scenario: --factory with `minifac:` prefix forces built-in
+#### Scenario: --factory with `minifac:` prefix forces built-in via install root
 
 - **WHEN** the user invokes `minifac run foo --factory minifac:sdd`,
-  both `.minifac/factories/sdd.yaml` and `examples/sdd.yaml` exist
-- **THEN** the CLI loads `examples/sdd.yaml`, ignoring the local
-  file; the run row's `factoryName` is `sdd` and `factoryPath`
-  resolves to the built-in
+  `<install-root>/examples/sdd.yaml` exists, and both
+  `.minifac/factories/sdd.yaml` and `<cwd>/examples/sdd.yaml` exist
+- **THEN** the CLI loads `<install-root>/examples/sdd.yaml`,
+  ignoring the local file and the source-tree `examples/`; the run
+  row's `factoryName` is `sdd` and `factoryPath` resolves to the
+  install-root file
 
 #### Scenario: --factory with unknown name is rejected
 
@@ -380,11 +402,12 @@ which factory produced which branch.
 #### Scenario: --factory with `minifac:<name>` and no built-in is rejected
 
 - **WHEN** the user invokes `minifac run foo
-  --factory minifac:nonexistent` and `examples/nonexistent.yaml`
-  does not exist
+  --factory minifac:nonexistent`, neither
+  `<install-root>/examples/nonexistent.yaml` nor
+  `<cwd>/examples/nonexistent.yaml` exists
 - **THEN** the CLI exits `1` with a stderr message naming
-  `minifac:nonexistent` and the single built-in path tried; the
-  local `.minifac/factories/nonexistent.yaml` (if any) is not
+  `minifac:nonexistent` and both absolute paths tried, in order;
+  the local `.minifac/factories/nonexistent.yaml` (if any) is not
   consulted
 
 #### Scenario: --factory on a brief-less invocation is a usage error
@@ -396,36 +419,6 @@ which factory produced which branch.
 - **THEN** the CLI exits `1` with a stderr message naming the
   conflict (`--factory` is only meaningful with a brief); no
   worktree is created, no lock is claimed
-
-#### Scenario: --factory absent leaves brief behavior unchanged
-
-- **WHEN** the user invokes `minifac run foo` with no `--factory`
-  flag and `inputs/foo.md` declares `factory: sdd`
-- **THEN** the CLI resolves the factory through the brief's
-  declared value (existing behavior); the persisted run row's
-  `factoryName` is `sdd`
-
-#### Scenario: Two concurrent runs of same brief through different factories proceed in parallel
-
-- **WHEN** the user invokes `minifac run foo --factory A` in one
-  shell and `minifac run foo --factory B` in another (both at
-  roughly the same time)
-- **THEN** both invocations claim distinct lockfiles
-  (`<repo-hash>-foo-A.lock` and `<repo-hash>-foo-B.lock`), both
-  create distinct worktrees on distinct branches per
-  `[[0019-Run-Scoped-Branches]]`, and both runs proceed
-  concurrently; both runs are persisted to `runs.db` with
-  `factoryName` reflecting their respective overrides
-
-#### Scenario: Two concurrent runs of same brief through same factory serialize
-
-- **WHEN** the user invokes `minifac run foo --factory A` in two
-  shells at the same time (or one with `--factory A` and one with
-  no flag whose brief declares `factory: A`)
-- **THEN** exactly one invocation claims the lockfile
-  `<repo-hash>-foo-A.lock`; the other exits `1` with the existing
-  "lock held by PID <p>" stderr message; no second worktree is
-  created
 
 ### Requirement: Event output format
 
@@ -1463,7 +1456,13 @@ SHALL accept the following options:
 - `--source <local | built-in | all>` — filter by source. Defaults
   to `all`. `local` lists only steps under
   `<cwd>/.minifac/steps/*.yaml`; `built-in` lists only steps under
-  `<cwd>/examples/steps/*.yaml`; `all` lists both.
+  the runner's bundled-built-in directory, namely
+  `<install-root>/examples/steps/*.yaml`, where `<install-root>` is
+  the directory containing the running runner's `package.json`. If
+  the install-root directory does not exist (e.g. running from an
+  unusual build layout), the subcommand SHALL fall back to
+  `<cwd>/examples/steps/*.yaml` to preserve source-tree
+  discoverability. `all` is the union of `local` and `built-in`.
 - `--json` — emit a JSON array instead of the default plain-text
   table. Each array element SHALL be an object with the fields
   `name`, `version`, `source` (`"local"` | `"built-in"`),
@@ -1495,23 +1494,32 @@ subcommand SHALL NOT apply the bare-name lookup precedence (local
 shadows built-in) when listing — the listing is descriptive, not
 prescriptive.
 
-#### Scenario: Lists built-in steps by default
+#### Scenario: Lists bundled built-in steps by default
 
-- **WHEN** the user invokes `minifac steps` in a directory whose
-  `<cwd>/examples/steps/` contains `openspec-propose.yaml`,
-  `openspec-apply.yaml`, `openspec-verify.yaml`, and
-  `openspec-archive.yaml`, and no `<cwd>/.minifac/steps/` directory
-  exists
+- **WHEN** the user invokes `minifac steps` from an
+  npm-installed minifac whose `<install-root>/examples/steps/`
+  contains `openspec-propose.yaml`, `openspec-apply.yaml`,
+  `openspec-verify.yaml`, and `openspec-archive.yaml`, and no
+  `<cwd>/.minifac/steps/` directory exists
 - **THEN** the CLI prints a four-row table (one row per step)
   containing each step's name, version, source (`built-in`), and
-  description; exits `0`
+  description; the `path` (under `--json`) names the install-root
+  absolute path; exits `0`
+
+#### Scenario: Lists source-tree built-in steps when install root has none
+
+- **WHEN** the user invokes `minifac steps` from a minifac source
+  tree where the runner's install-root `examples/steps/` happens
+  to be the same as `<cwd>/examples/steps/`
+- **THEN** the listing names that directory's step files with
+  source `built-in`; exits `0`
 
 #### Scenario: `--source local` filters to local only
 
 - **WHEN** the user invokes `minifac steps --source local` in a
   directory whose `<cwd>/.minifac/steps/` contains
-  `custom-verify.yaml` and whose `<cwd>/examples/steps/` contains
-  four built-in steps
+  `custom-verify.yaml` and whose install root contains four built-
+  in steps
 - **THEN** the CLI prints a one-row table for `custom-verify` with
   source `local`; the built-in steps are not listed; exits `0`
 
@@ -1519,15 +1527,16 @@ prescriptive.
 
 - **WHEN** the user invokes `minifac steps --source built-in` in a
   directory whose `<cwd>/.minifac/steps/` contains
-  `custom-verify.yaml` and whose `<cwd>/examples/steps/` contains
-  four built-in steps
+  `custom-verify.yaml` and whose install root contains four built-
+  in steps
 - **THEN** the CLI prints a four-row table for the four built-in
-  steps; the local step is not listed; exits `0`
+  steps from the install root; the local step is not listed;
+  exits `0`
 
 #### Scenario: `--json` emits a JSON array
 
-- **WHEN** the user invokes `minifac steps --json` in a directory
-  with two built-in steps and no local steps
+- **WHEN** the user invokes `minifac steps --json` with two
+  built-in steps available and no local steps
 - **THEN** stdout contains a JSON array (parseable by
   `JSON.parse`) of two objects, each carrying `name`, `version`,
   `source`, `path`, and `description` fields; exits `0`
@@ -1536,21 +1545,22 @@ prescriptive.
 
 - **WHEN** the user invokes `minifac steps` and both
   `<cwd>/.minifac/steps/openspec-verify.yaml` and
-  `<cwd>/examples/steps/openspec-verify.yaml` exist
+  `<install-root>/examples/steps/openspec-verify.yaml` exist
 - **THEN** the listing contains two `openspec-verify` rows, one
   with `source: local` and one with `source: built-in`
 
 #### Scenario: Empty directories produce an empty listing
 
 - **WHEN** the user invokes `minifac steps` in a directory with
-  no `.minifac/steps/` and no `examples/steps/` directories
+  no `.minifac/steps/` directory and from an install whose
+  built-in directory is also empty
 - **THEN** the CLI prints a one-line "no steps found" summary (or
   an empty JSON array under `--json`) and exits `0`
 
 #### Scenario: Malformed step file is listed with an error placeholder
 
 - **WHEN** the user invokes `minifac steps` and one of the step
-  files under `examples/steps/` has malformed YAML
+  files in scope has malformed YAML
 - **THEN** the listing contains a row for the offending file whose
   `name` column is the file path and whose `version`/`description`
   columns contain the loader error message; the CLI continues to

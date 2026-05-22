@@ -146,7 +146,7 @@ to re-run.
 
 | Flag | Default | Description |
 |---|---|---|
-| `--with-sdd` | off | Also write a starter `.minifac/factories/sdd.yaml` that extends the built-in `minifac:sdd` factory |
+| `--with-sdd` | off | Also write a starter `.minifac/factories/sdd.yaml` that extends the bundled `minifac:sdd` factory. The bundled factory and its `minifac:openspec-*` steps ship inside the installed package, so the starter is runnable end-to-end after `npm install` — no need to copy `examples/` from the source tree. |
 
 ### Exit codes
 

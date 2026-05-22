@@ -38,14 +38,22 @@ A step is a YAML file with:
 
 The `uses:` field on a node accepts three forms:
 
-- `minifac:<name>[@<version>]` — built-in only. Skips the local lookup
-  and resolves directly to `<callerCwd>/examples/steps/<name>.yaml`.
-- `<scope>/<name>[@<version>]` — namespaced. In v0 the `<scope>/`
-  prefix carries no runtime semantics beyond being preserved in error
-  messages; lookup follows the bare-name precedence below.
-- `<name>[@<version>]` — bare. Tries
+- `minifac:<name>[@<version>]` — built-in only. Resolves against the
+  installed package first, the source tree second:
+    1. `<install-root>/examples/steps/<name>.yaml` (the bundled
+       copy that ships in the npm tarball)
+    2. `<callerCwd>/examples/steps/<name>.yaml` (the source-tree
+       dogfood copy)
+  The local `.minifac/steps/<name>.yaml` is never consulted under the
+  `minifac:` prefix. See [[Reference]] for the broader direction.
+- `<scope>/<name>[@<version>]` — namespaced. Reserved for future
+  remote resolution. Parses successfully today but is rejected at
+  resolution time with an error pointing at [[Reference]].
+- `<name>[@<version>]` — bare. User-local-only. Tries
   `<callerCwd>/.minifac/steps/<name>.yaml` first; if absent, falls
-  back to `<callerCwd>/examples/steps/<name>.yaml`.
+  back to `<install-root>/examples/steps/<name>.yaml`, then
+  `<callerCwd>/examples/steps/<name>.yaml`. The install root is the
+  shipped stdlib; bare-name shadowing is local-first.
 
 The `@<version>` pin is parsed off the reference but ignored for path
 resolution in v0 — every reference resolves to the single bundled
@@ -154,9 +162,9 @@ A factory node's `uses:` field accepts three forms:
 
 | Form | Example | Resolution |
 |---|---|---|
-| `minifac:<name>[@<version>]` | `minifac:openspec-verify` | Built-in only. Resolves directly to `<callerCwd>/examples/steps/<name>.yaml`. Skips local lookup. |
-| `<scope>/<name>[@<version>]` | `myorg/lint-check` | Namespaced. The `<scope>/` prefix carries no runtime semantics in v0; lookup follows the bare-name precedence. |
-| `<name>[@<version>]` | `lint-check` | Bare. Tries `<callerCwd>/.minifac/steps/<name>.yaml` first; falls back to `<callerCwd>/examples/steps/<name>.yaml`. |
+| `minifac:<name>[@<version>]` | `minifac:openspec-verify` | Built-in only. Tries `<install-root>/examples/steps/<name>.yaml` first, then `<callerCwd>/examples/steps/<name>.yaml`. Never consults `.minifac/steps/`. |
+| `<scope>/<name>[@<version>]` | `myorg/lint-check` | Namespaced. Reserved for future remote resolution — parses today but throws at resolution time pointing at [[Reference]]. |
+| `<name>[@<version>]` | `lint-check` | Bare. User-local-first: `<callerCwd>/.minifac/steps/<name>.yaml`, then `<install-root>/examples/steps/<name>.yaml`, then `<callerCwd>/examples/steps/<name>.yaml`. |
 
 Name and scope components must each match `[a-z][a-z0-9-]*`. The `@<version>` pin is parsed and validated (non-empty, no whitespace) but ignored for path resolution in v0. File extensions, backslashes, whitespace, and empty pins are rejected.
 

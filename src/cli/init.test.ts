@@ -66,20 +66,8 @@ describe("minifac init", () => {
 
   it("--with-sdd writes a starter sdd.yaml that loads cleanly", async () => {
     const cwd = await mkdtemp(path.join(tmpdir(), "minifac-init-"));
-    // The starter `extends: minifac:sdd` needs an examples/sdd.yaml in cwd to
-    // resolve. Mirror what the real repo provides.
-    await mkdir(path.join(cwd, "examples"), { recursive: true });
-    await writeFile(
-      path.join(cwd, "examples", "sdd.yaml"),
-      `name: sdd-base
-nodes:
-  step:
-    executor: claude
-    terminal: true
-edges: []
-`,
-      "utf8",
-    );
+    // The starter `extends: minifac:sdd` resolves against the bundled
+    // install-root `examples/sdd.yaml` — no test-local fixture needed.
     const { io } = captureStreams();
     const code = await initAction({ cwd, withSdd: true, io });
     expect(code).toBe(0);
@@ -87,9 +75,10 @@ edges: []
     expect(await exists(sddPath)).toBe(true);
     const contents = await readFile(sddPath, "utf8");
     expect(contents).toMatch(/extends:\s*["']?minifac:sdd["']?/);
-    // Round-trip: file loads cleanly through loadFactory.
+    // Round-trip: file loads cleanly through loadFactory, picking up the
+    // bundled `name: sdd` from the install-root base layer.
     const loaded = await loadFactory(sddPath, cwd);
-    expect(loaded.factory.name).toBe("sdd-base");
+    expect(loaded.factory.name).toBe("sdd");
   });
 
   it("--with-sdd does not overwrite an existing sdd.yaml", async () => {

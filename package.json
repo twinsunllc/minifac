@@ -38,7 +38,7 @@
       "types": "./dist/index.d.ts"
     }
   },
-  "files": ["dist", "README.md", "LICENSE", "CHANGELOG.md"],
+  "files": ["dist", "examples", "README.md", "LICENSE", "CHANGELOG.md"],
   "scripts": {
     "build": "tsc -p tsconfig.json && node scripts/copy-web-assets.mjs",
     "start": "node dist/cli.js",
