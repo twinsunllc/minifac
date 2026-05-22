@@ -408,10 +408,7 @@ export async function autorunAction(input: AutorunActionInput): Promise<number> 
   const mergeFn = input.mergeRunFn ?? mergeRun;
   const markFn = input.markBriefDoneFn ?? markBriefDone;
 
-  const performAutoMerge = async (
-    change: string,
-    runId: string | undefined,
-  ): Promise<void> => {
+  const performAutoMerge = async (change: string, runId: string | undefined): Promise<void> => {
     if (!store) return;
     let row: StoredRun | null = null;
     try {

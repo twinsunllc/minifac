@@ -318,19 +318,17 @@ describe("autorun integration", () => {
     expect(code).toBe(0);
 
     // alpha completed and merged onto main → main HEAD has alpha-stamp.txt.
-    const mainLog = spawnSync(
-      "git",
-      ["log", "main", "--pretty=%s"],
-      { cwd: repo, encoding: "utf8" },
-    );
+    const mainLog = spawnSync("git", ["log", "main", "--pretty=%s"], {
+      cwd: repo,
+      encoding: "utf8",
+    });
     expect(mainLog.status).toBe(0);
     expect(mainLog.stdout).toMatch(/stamp \d+ commit/);
     // Main HEAD contains at least one of the stamp files.
-    const lsMain = spawnSync(
-      "git",
-      ["ls-tree", "--name-only", "main"],
-      { cwd: repo, encoding: "utf8" },
-    );
+    const lsMain = spawnSync("git", ["ls-tree", "--name-only", "main"], {
+      cwd: repo,
+      encoding: "utf8",
+    });
     expect(lsMain.status).toBe(0);
     expect(lsMain.stdout).toMatch(/stamp-\d+\.txt/);
 
@@ -359,11 +357,10 @@ describe("autorun integration", () => {
 
     // beta's branch was based off main (which already had alpha's commit),
     // so beta's worktree HEAD ancestry includes alpha's commit subject.
-    const mainLogFinal = spawnSync(
-      "git",
-      ["log", "main", "--pretty=%s"],
-      { cwd: repo, encoding: "utf8" },
-    );
+    const mainLogFinal = spawnSync("git", ["log", "main", "--pretty=%s"], {
+      cwd: repo,
+      encoding: "utf8",
+    });
     // main HEAD contains both alpha's and beta's stamp commits.
     const stampCommits = (mainLogFinal.stdout.match(/stamp \d+ commit/g) ?? []).length;
     expect(stampCommits).toBeGreaterThanOrEqual(2);
@@ -394,9 +391,7 @@ describe("autorun integration", () => {
 
     // alpha's factory succeeded but merge failed.
     const lines = out.lines().map((l) => JSON.parse(l));
-    const failed = lines.find(
-      (l) => l.event === "auto-merge-failed" && l.change === "alpha",
-    );
+    const failed = lines.find((l) => l.event === "auto-merge-failed" && l.change === "alpha");
     expect(failed).toBeDefined();
     expect(failed?.reason).toBe("dirty-working-tree");
     // alpha's brief stays put.

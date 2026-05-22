@@ -517,7 +517,12 @@ describe("autorunAction auto-merge step", () => {
       openRunStore: async () => store,
       mergeRunFn: async (row) => {
         merges.push({ row });
-        return { ok: true, headSha: "deadbeef", defaultBranch: "main", branchName: row.branchName ?? "" };
+        return {
+          ok: true,
+          headSha: "deadbeef",
+          defaultBranch: "main",
+          branchName: row.branchName ?? "",
+        };
       },
       markBriefDoneFn: async (input) => {
         marks.push(input);

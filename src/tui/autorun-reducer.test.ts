@@ -317,10 +317,7 @@ describe("autorunReducer", () => {
         nodeIds: ["a"],
       });
       s = autorunReducer(s, { kind: "set-run-state", change: "foo", runState });
-      s = autorunReducer(
-        s,
-        ev({ kind: "completed", ts: 1, change: "foo", status: "succeeded" }),
-      );
+      s = autorunReducer(s, ev({ kind: "completed", ts: 1, change: "foo", status: "succeeded" }));
       s = autorunReducer(
         s,
         ev({ kind: "auto-merge-failed", ts: 2, change: "foo", reason: "conflict" }),
@@ -358,10 +355,7 @@ describe("autorunReducer", () => {
       {
         let s = createInitialBriefListState();
         s = autorunReducer(s, ev({ kind: "started", ts: 0, change: "foo" }));
-        s = autorunReducer(
-          s,
-          ev({ kind: "completed", ts: 1, change: "foo", status: "failed" }),
-        );
+        s = autorunReducer(s, ev({ kind: "completed", ts: 1, change: "foo", status: "failed" }));
         s = autorunReducer(
           s,
           ev({ kind: "auto-merge-failed", ts: 2, change: "foo", reason: "conflict" }),
@@ -383,10 +377,7 @@ describe("autorunReducer", () => {
     it("second auto-merge-failed updates autoMergeFailReason; status stays", () => {
       let s = createInitialBriefListState();
       s = autorunReducer(s, ev({ kind: "started", ts: 0, change: "foo" }));
-      s = autorunReducer(
-        s,
-        ev({ kind: "completed", ts: 1, change: "foo", status: "succeeded" }),
-      );
+      s = autorunReducer(s, ev({ kind: "completed", ts: 1, change: "foo", status: "succeeded" }));
       s = autorunReducer(
         s,
         ev({ kind: "auto-merge-failed", ts: 2, change: "foo", reason: "conflict" }),
@@ -402,18 +393,12 @@ describe("autorunReducer", () => {
     it("skipped event against a succeeded-but-unmerged row leaves it unchanged", () => {
       let s = createInitialBriefListState();
       s = autorunReducer(s, ev({ kind: "started", ts: 0, change: "foo" }));
-      s = autorunReducer(
-        s,
-        ev({ kind: "completed", ts: 1, change: "foo", status: "succeeded" }),
-      );
+      s = autorunReducer(s, ev({ kind: "completed", ts: 1, change: "foo", status: "succeeded" }));
       s = autorunReducer(
         s,
         ev({ kind: "auto-merge-failed", ts: 2, change: "foo", reason: "conflict" }),
       );
-      s = autorunReducer(
-        s,
-        ev({ kind: "skipped", ts: 3, change: "foo", reason: "blocked" }),
-      );
+      s = autorunReducer(s, ev({ kind: "skipped", ts: 3, change: "foo", reason: "blocked" }));
       expect(s.briefs[0]?.status).toBe("succeeded-but-unmerged");
       expect(s.briefs[0]?.autoMergeFailReason).toBe("conflict");
     });
