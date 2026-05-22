@@ -49,6 +49,15 @@ The reducer SHALL be the unit-tested surface for autorun TUI
 behavior; ink components SHALL be thin renderers over the
 reducer's output.
 
+The reducer SHALL clear `skipReason` on any non-skip transition
+out of `skipped`: when a `BriefRowState` whose status is
+`skipped` receives a subsequent `started`, `completed`, or
+`dry-run-decision: schedule` event for the same change, the
+resulting row's `skipReason` SHALL be `undefined`. The reducer
+SHALL NOT carry the `skipReason` forward to a non-skipped row;
+the displayed suffix for a non-skipped row SHALL NOT include the
+old reason.
+
 #### Scenario: poll-start event records observed briefs
 
 - **WHEN** the reducer receives a `poll-start` event from a
@@ -96,6 +105,23 @@ reducer's output.
   receives a `started` event for the same change
 - **THEN** the returned state has the `foo` row with
   `status = "running"`; the `skipReason` is cleared
+
+#### Scenario: full skipped to started to completed sequence clears skip reason
+
+- **WHEN** the reducer receives, in order, a `skipped` event
+  for change `foo` (reason: `activity-succeeded`), then a
+  `started` event for change `foo`, then a `completed` event
+  for change `foo` with `status: "succeeded"`
+- **THEN** the final state has the `foo` row with
+  `status = "succeeded"`, `skipReason === undefined`, and
+  `runId` populated from the `started` event (or the
+  `completed` event if the `started` event omitted it); no
+  residual skip-reason data survives in any field of the row
+
+- **WHEN** the same sequence ends with `completed` carrying
+  `status: "failed"` instead of `succeeded`
+- **THEN** the final state has the `foo` row with
+  `status = "failed"` and `skipReason === undefined`
 
 #### Scenario: dry-run-decision routes to queued or skipped
 
@@ -224,26 +250,33 @@ The autorun TUI's zone contents SHALL be:
 - **Body zone** (middle): the **brief-list pane** on the left
   (fixed-ish width 24 columns, one row per brief with status
   glyph + change name + an optional small suffix for the most
-  recent run's status), and the **embedded run view** on the
-  right (the existing `<StatusPane>` + log pane from the
-  `run-tui` capability). The two are separated by a vertical
-  rule spanning the full body height. When no brief has been
-  selected yet (the empty state at startup), the right pane
-  SHALL render a one-line hint
-  ("Press ↑/↓ to select a brief, Enter to drill in") instead
-  of an empty run view. When the terminal surface is smaller
-  than the 80×24 threshold defined in the `run-tui` capability,
-  the body SHALL collapse to a single pane: only the
-  brief-list when `focus = "brief-list"`, only the embedded
-  log pane when `focus = "run-view"`.
+  recent run's status), separated from the right region by a
+  vertical rule spanning the full body height. The **right
+  region** SHALL render the embedded run view using the SAME
+  body composition the `run-tui` capability's `RunApp` uses
+  (per its "TUI layout" requirement): a fixed-width 24-column
+  status / nodes pane on the inside-left, a vertical rule, and
+  the log pane filling the remaining width. The overall body
+  therefore reads as three visible columns when drilled in:
+  brief-list (24) | nodes pane (24) | log pane (flex). When no
+  brief has been selected yet (the empty state at startup), the
+  right region SHALL render a one-line hint
+  ("Press ↑/↓ to select a brief, Enter to drill in") instead of
+  an empty run view. When the terminal surface is smaller than
+  the 80×24 threshold defined in the `run-tui` capability, the
+  body SHALL collapse to a single pane: only the brief-list when
+  `focus = "brief-list"`, only the embedded log pane when
+  `focus = "run-view"`.
 - **Hotkey bar zone** (bottom): the hotkey hints described in
   the "Autorun TUI hotkey contract" requirement below, varying
   by focus.
 
 The brief-list pane retains the fixed-ish 24-column width; the
 remaining body width is given to the embedded run view (which
-internally splits status pane + log pane per the `run-tui`
-capability's layout).
+internally splits a 24-column status pane + log pane per the
+`run-tui` capability's layout). The autorun TUI SHALL NOT stack
+the status pane on top of the log pane; the embedded body MUST
+be side-by-side, matching `RunApp`'s body shape verbatim.
 
 #### Scenario: Header shows watch dir and in-flight counter
 
@@ -260,15 +293,29 @@ capability's layout).
   left (empty) and a one-line hint on the right
   ("Press ↑/↓ to select a brief, Enter to drill in")
 
-#### Scenario: Drilled-in view renders the embedded run view on the right
+#### Scenario: Drilled-in view renders the embedded run view as three columns
 
 - **WHEN** the TUI is mounted with at least one brief whose
   embedded `RunState` slot is populated, `focus = "run-view"`,
   and that brief is the selection
-- **THEN** the body zone's right pane renders the existing
-  run-mode `<StatusPane>` + log pane against the embedded
-  `RunState`; the brief-list pane on the left still shows all
-  briefs with their status glyphs
+- **THEN** the body zone renders three visible vertical
+  regions: the brief-list pane (24 cols, leftmost) showing all
+  briefs with their status glyphs, the embedded run-mode status
+  / nodes pane (24 cols, middle) listing the run's nodes with
+  their status glyphs, and the embedded log pane (flex width,
+  rightmost) showing the run's events; vertical rules separate
+  the three regions
+
+#### Scenario: Drilled-in body matches RunApp's body shape
+
+- **WHEN** the same drilled-in frame is compared against the
+  body shape `RunApp` renders for the same `RunState` at the
+  same terminal size
+- **THEN** the autorun TUI's right region (the embedded run
+  view) is laid out side-by-side (status / nodes pane width 24,
+  vertical rule, log pane flexGrow), NOT stacked vertically;
+  the visual output for that region is the same as `RunApp`
+  would produce in standalone run mode
 
 #### Scenario: Sub-80×24 collapses to a single pane
 
@@ -389,9 +436,14 @@ The autorun TUI's drilled-in view SHALL reuse the `run-tui`
 capability's existing event reducer (`runReducer`), components
 (status pane, log pane, hotkey bar contents), event-rendering
 rules (per the `run-tui` capability's "Stream-json log
-rendering rules" requirement), and glyph table (per the
-`run-tui` capability's "TUI layout" requirement). The autorun
-TUI SHALL NOT re-implement any of those concerns.
+rendering rules" requirement), glyph table (per the `run-tui`
+capability's "TUI layout" requirement), AND body layout (per
+the `run-tui` capability's "TUI layout" requirement: 24-column
+status pane + vertical rule + log pane flexGrow). The autorun
+TUI SHALL NOT re-implement or restyle any of those concerns;
+the embedded view's body composition SHALL be visually
+indistinguishable from what `RunApp` renders for the same
+`RunState` at the same width.
 
 The autorun TUI SHALL feed `NodeEventEntry` events into the
 selected brief's embedded `RunState` slot via `runReducer`,
@@ -411,6 +463,18 @@ finished shows the final state, not an empty pane.
   `→ Bash({"command":"npm test"})` shape that
   `minifac run` would render for the same event (per the
   `run-tui` capability's stream-json rendering rules)
+
+#### Scenario: Embedded body shape matches run-mode exactly
+
+- **WHEN** the autorun TUI is drilled into a brief at a
+  normal terminal size (e.g. 100×30) and the embedded
+  `RunState` contains at least one node with at least one
+  emitted event
+- **THEN** the right region's body composition (status / nodes
+  pane on the left, vertical rule, log pane on the right) is
+  visually identical to the body `RunApp` would render for the
+  same `RunState` at the same width — same pane widths, same
+  rule placement, same content
 
 #### Scenario: Background brief updates continue while another brief is drilled in
 
