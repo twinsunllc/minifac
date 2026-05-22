@@ -264,10 +264,12 @@ spec.
 
 The factory schema SHALL accept an optional top-level `extends:` field whose value, when present, MUST be a single non-empty string identifying a base factory to extend. The string SHALL be one of:
 
-- `minifac:<built-in-name>` — a reference to a built-in factory. For
-  v0 this resolves to `<caller-cwd>/examples/<built-in-name>.yaml`.
+- `minifac:<built-in-name>` — a reference to a built-in factory.
+  Resolution uses the install-root-first / source-tree-fallback
+  precedence defined in the "`extends:` chain resolution rules"
+  requirement below.
 - `<local-name>` (no prefix) — a reference to another local custom
-  factory at `<caller-cwd>/.minifac/factories/<local-name>.yaml`.
+  factory at `<callerCwd>/.minifac/factories/<local-name>.yaml`.
   Local references MAY themselves declare an `extends:` field
   (recursive extension).
 
@@ -314,63 +316,90 @@ to reject any other unknown top-level key.
 
 When a factory declares `extends:`, the loader SHALL resolve the
 reference using the following rules, evaluated relative to the cwd
-the loader is given (the calling repo root):
+the loader is given (the calling repo root) and the runner's install
+root:
 
-- A `minifac:<name>` reference SHALL resolve to
-  `<cwd>/examples/<name>.yaml`. If that path does not exist, the
-  loader SHALL throw `FactoryLoadError` naming both the reference
-  and the path tried.
+- A `minifac:<name>` reference SHALL be resolved using an install-
+  root-first / source-tree-fallback two-step lookup:
+    1. `<install-root>/examples/<name>.yaml`, where `<install-root>`
+       is the directory containing the running runner's `package.json`.
+    2. `<callerCwd>/examples/<name>.yaml`.
+  The first existing file wins. When running from the minifac source
+  tree, the two paths collapse to the same file. If neither path
+  exists, the loader SHALL throw `FactoryLoadError` whose message
+  names the reference and both candidate absolute paths in order.
 - A `<name>` reference (no prefix) SHALL resolve to
-  `<cwd>/.minifac/factories/<name>.yaml`. If that path does not
-  exist, the loader SHALL throw `FactoryLoadError` naming both the
-  reference and the path tried.
+  `<callerCwd>/.minifac/factories/<name>.yaml`. If that path does
+  not exist, the loader SHALL throw `FactoryLoadError` naming both
+  the reference and the path tried. The install root SHALL NOT be
+  consulted for bare references.
 - A reference whose value contains a path separator or extension
   (e.g. `extends: ../factories/foo.yaml`) SHALL be rejected with a
   `FactoryLoadError` naming the offending value; only `minifac:<name>`
   and bare `<name>` are valid forms in v0.
 
 The loader SHALL detect cycles in the `extends:` chain. If the same
-absolute factory path is visited twice while walking
-`extends:`, the loader SHALL throw `FactoryLoadError` naming the
-cycle (the sequence of files involved) and the file whose `extends:`
-closed the loop.
+absolute factory path is visited twice while walking `extends:`, the
+loader SHALL throw `FactoryLoadError` naming the cycle (the sequence
+of files involved) and the file whose `extends:` closed the loop.
 
 The loader SHALL surface resolution errors with the same
-`FactoryLoadError` shape used elsewhere — including the
-`sourcePath` of the file where the failing `extends:` was declared,
-so the operator knows which file to edit.
+`FactoryLoadError` shape used elsewhere — including the `sourcePath`
+of the file where the failing `extends:` was declared, so the
+operator knows which file to edit.
 
-#### Scenario: `minifac:<name>` resolves to examples/<name>.yaml
+#### Scenario: `minifac:<name>` resolves to install-root examples
 
 - **WHEN** the loader reads `.minifac/factories/sdd.yaml` whose
-  `extends:` field is `minifac:sdd`, and `<cwd>/examples/sdd.yaml`
-  exists and is a valid factory
-- **THEN** the loader resolves the base to `<cwd>/examples/sdd.yaml`
-  and proceeds to merge layers without error
+  `extends:` field is `minifac:sdd`, `<install-root>/examples/sdd.yaml`
+  exists and is a valid factory, and the loader was given an arbitrary
+  `<callerCwd>`
+- **THEN** the loader resolves the base to
+  `<install-root>/examples/sdd.yaml` and proceeds to merge layers
+  without error; the source-tree fallback is not consulted
+
+#### Scenario: `minifac:<name>` falls back to source-tree examples
+
+- **WHEN** the loader reads `.minifac/factories/sdd.yaml` whose
+  `extends:` field is `minifac:sdd`,
+  `<install-root>/examples/sdd.yaml` does not exist, and
+  `<callerCwd>/examples/sdd.yaml` exists and is a valid factory
+- **THEN** the loader resolves the base to
+  `<callerCwd>/examples/sdd.yaml` and proceeds to merge layers
+  without error
 
 #### Scenario: Bare `<name>` resolves to .minifac/factories/<name>.yaml
 
 - **WHEN** the loader reads `.minifac/factories/sdd-fast.yaml` whose
   `extends:` field is `sdd`, and
-  `<cwd>/.minifac/factories/sdd.yaml` exists and is a valid factory
+  `<callerCwd>/.minifac/factories/sdd.yaml` exists and is a valid factory
 - **THEN** the loader resolves the base to
-  `<cwd>/.minifac/factories/sdd.yaml` and proceeds to merge layers
-  without error
+  `<callerCwd>/.minifac/factories/sdd.yaml` and proceeds to merge
+  layers without error
 
-#### Scenario: Missing base file is rejected at load time
+#### Scenario: Bare `<name>` does not consult the install root
+
+- **WHEN** the loader reads a factory whose `extends:` is `sdd`,
+  `<install-root>/examples/sdd.yaml` exists, and
+  `<callerCwd>/.minifac/factories/sdd.yaml` does not exist
+- **THEN** the loader throws `FactoryLoadError` naming the reference
+  and only the local path tried; the install root is not consulted
+
+#### Scenario: Missing `minifac:<name>` is rejected at load time with both paths
 
 - **WHEN** the loader reads `.minifac/factories/sdd.yaml` whose
-  `extends:` is `minifac:sdd` and `<cwd>/examples/sdd.yaml` does
-  not exist
+  `extends:` is `minifac:nonexistent`, neither
+  `<install-root>/examples/nonexistent.yaml` nor
+  `<callerCwd>/examples/nonexistent.yaml` exists
 - **THEN** the loader throws `FactoryLoadError` whose message names
-  both `minifac:sdd` and the absolute path it tried, and whose
-  `sourcePath` is `.minifac/factories/sdd.yaml`
+  the reference, the install-root path, and the source-tree fallback
+  path, in that order; `sourcePath` is the declaring factory file
 
 #### Scenario: Missing local base file is rejected at load time
 
 - **WHEN** the loader reads `.minifac/factories/sdd-fast.yaml`
   whose `extends:` is `sdd-base` and
-  `<cwd>/.minifac/factories/sdd-base.yaml` does not exist
+  `<callerCwd>/.minifac/factories/sdd-base.yaml` does not exist
 - **THEN** the loader throws `FactoryLoadError` whose message names
   both `sdd-base` and the absolute path it tried, and whose
   `sourcePath` is `.minifac/factories/sdd-fast.yaml`
