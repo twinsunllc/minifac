@@ -178,54 +178,90 @@ old reason.
 ### Requirement: Brief status glyphs
 
 The `autorun-tui` capability SHALL render each brief row's status
-as a single glyph in the brief-list pane. The glyphs SHALL be
-drawn from the same Unicode/ASCII glyph table the `run-tui`
-capability uses (per its "TUI layout" requirement) so that the
-visual vocabulary is consistent across run-mode and autorun-mode.
+as a single glyph in the brief-list pane. For the four statuses
+that have a direct analog in the `run-tui` capability's node
+status table (queued/pending, running, succeeded, failed), the
+brief-list pane SHALL render the SAME glyph and the SAME color
+the `run-tui` capability's status pane renders for the
+corresponding node status (per its "TUI layout" requirement),
+so that the visual vocabulary is identical between the two
+panes. The `skipped` brief status has no node analog and keeps
+its own brief-specific glyph and color.
 
-| Glyph | Meaning |
-|-------|---------|
-| `○` (dim) | queued — observed but not running |
-| `◔` (animated) | running — autorun has scheduled and not yet completed |
-| `●` (green) | succeeded — most recent terminal status was succeeded |
-| `●` (red) | failed — most recent terminal status was failed |
-| `↷` (dim) | skipped — most recent autorun decision was skip |
+The mapping SHALL be:
+
+| Brief status | Glyph / color | Source of truth |
+|--------------|---------------|-----------------|
+| `queued` | open circle (`○` Unicode / `.` ASCII), gray | run-tui status pane `pending` row |
+| `running` | shared `<Spinner>` braille frames (`⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏` Unicode / `\|/-\` ASCII), yellow | run-tui status pane `running` row |
+| `succeeded` | filled circle (`●` Unicode / `o` ASCII), green | run-tui status pane `succeeded` row |
+| `failed` | filled circle (`●` Unicode / `!` ASCII), red | run-tui status pane `failed` row |
+| `skipped` | `↷` Unicode / `~` ASCII, gray | brief-specific (no node analog) |
 
 When the runtime environment does not advertise a UTF-8 locale
 (per the `run-tui` capability's "TUI layout" requirement), the
-TUI SHALL substitute ASCII glyphs (`.` for queued, `*` for
-running, `o` for succeeded, `!` for failed, `~` for skipped).
+TUI SHALL substitute ASCII glyphs per the table above. The
+ASCII fallback policy SHALL be inherited from the `run-tui`
+capability's glyph table for the four shared states; the
+brief-specific `skipped` fallback (`~`) is the only autorun-
+owned ASCII glyph.
+
+The brief-list pane SHALL apply the status color to BOTH the
+glyph cell and the brief change-name cell on the row (matching
+the run-tui status pane's behavior of coloring both the glyph
+and the node id). A drift between glyph color and label color
+on either side SHALL be considered a regression.
 
 #### Scenario: Queued brief renders with the dim queued glyph
 
 - **WHEN** a brief's `status` in the reducer state is `queued`
 - **THEN** the brief-list pane's row for that brief shows the
-  queued glyph (`○` in Unicode, `.` in ASCII fallback)
+  queued glyph (`○` in Unicode, `.` in ASCII fallback), gray —
+  the same glyph and color the run-tui status pane uses for a
+  `pending` node row
 
 #### Scenario: Running brief renders with the animated running glyph
 
 - **WHEN** a brief's `status` is `running`
 - **THEN** the brief-list pane's row for that brief shows the
-  animated running glyph (the same Braille spinner used in
-  run-mode, or the ASCII fallback)
+  shared `<Spinner>` running through the same braille frames
+  (or the ASCII fallback) the run-tui status pane animates for
+  a `running` node row, yellow
 
 #### Scenario: Succeeded brief renders with green ●
 
 - **WHEN** a brief's `status` is `succeeded`
 - **THEN** the brief-list pane's row shows a green `●` (or
-  `o` in ASCII fallback)
+  `o` in ASCII fallback) — the same glyph and color the
+  run-tui status pane uses for a `succeeded` node row
 
 #### Scenario: Failed brief renders with red ●
 
 - **WHEN** a brief's `status` is `failed`
 - **THEN** the brief-list pane's row shows a red `●` (or
-  `!` in ASCII fallback)
+  `!` in ASCII fallback) — the same glyph and color the
+  run-tui status pane uses for a `failed` node row
 
 #### Scenario: Skipped brief renders with the skipped glyph
 
 - **WHEN** a brief's `status` is `skipped`
 - **THEN** the brief-list pane's row shows the skipped glyph
-  (`↷` in Unicode, `~` in ASCII fallback)
+  (`↷` in Unicode, `~` in ASCII fallback), gray (brief-
+  specific; no run-tui node analog)
+
+#### Scenario: Brief-list and run-tui status pane glyphs match across shared statuses
+
+- **WHEN** a brief-list row for `queued` (or `running`,
+  `succeeded`, `failed`) is rendered alongside a run-tui
+  status pane node row in the corresponding `pending` (or
+  `running`, `succeeded`, `failed`) status, both at the same
+  glyph set (UTF-8 or ASCII)
+- **THEN** the glyph string emitted for the row and the
+  applied color token SHALL be equal between the two panes.
+  An automated test SHALL assert this equality for all four
+  shared statuses; the test SHALL fail if either pane is
+  later tweaked without the other (e.g. a glyph-table edit
+  on one side that does not propagate to the other)
 
 ### Requirement: Autorun TUI layout
 
@@ -258,15 +294,16 @@ The autorun TUI's zone contents SHALL be:
   status / nodes pane on the inside-left, a vertical rule, and
   the log pane filling the remaining width. The overall body
   therefore reads as three visible columns when drilled in:
-  brief-list (24) | nodes pane (24) | log pane (flex). When no
-  brief has been selected yet (the empty state at startup), the
-  right region SHALL render a one-line hint
-  ("Press ↑/↓ to select a brief, Enter to drill in") instead of
-  an empty run view. When the terminal surface is smaller than
-  the 80×24 threshold defined in the `run-tui` capability, the
-  body SHALL collapse to a single pane: only the brief-list when
-  `focus = "brief-list"`, only the embedded log pane when
-  `focus = "run-view"`.
+  brief-list (24) | nodes pane (24) | log pane (flex), with
+  TWO vertical-rule glyphs in the body row separating the
+  three regions. When no brief has been selected yet (the
+  empty state at startup), the right region SHALL render a
+  one-line hint ("Press ↑/↓ to select a brief, Enter to drill
+  in") instead of an empty run view. When the terminal surface
+  is smaller than the 80×24 threshold defined in the `run-tui`
+  capability, the body SHALL collapse to a single pane: only
+  the brief-list when `focus = "brief-list"`, only the embedded
+  log pane when `focus = "run-view"`.
 - **Hotkey bar zone** (bottom): the hotkey hints described in
   the "Autorun TUI hotkey contract" requirement below, varying
   by focus.
@@ -277,6 +314,14 @@ internally splits a 24-column status pane + log pane per the
 `run-tui` capability's layout). The autorun TUI SHALL NOT stack
 the status pane on top of the log pane; the embedded body MUST
 be side-by-side, matching `RunApp`'s body shape verbatim.
+
+The body row in the drilled-in view SHALL contain exactly two
+vertical-rule glyphs — one between the brief-list pane and the
+nodes pane, and one between the nodes pane and the log pane.
+This invariant SHALL be asserted by an automated test that
+inspects the rendered frame independently of any committed
+snapshot, so that a snapshot regenerated from a buggy frame
+cannot pass review.
 
 #### Scenario: Header shows watch dir and in-flight counter
 
@@ -316,6 +361,19 @@ be side-by-side, matching `RunApp`'s body shape verbatim.
   vertical rule, log pane flexGrow), NOT stacked vertically;
   the visual output for that region is the same as `RunApp`
   would produce in standalone run mode
+
+#### Scenario: Drilled-in body contains exactly two vertical rules
+
+- **WHEN** the TUI is mounted at a terminal size of 100×30 with
+  `focus = "run-view"` and the selected brief has a populated
+  `RunState` slot
+- **THEN** the rendered body row contains exactly two
+  vertical-rule glyphs (the Unicode `│` from ink's `borderStyle:
+  "single"`, or the ASCII fallback equivalent under non-UTF-8
+  locales) — one between the brief-list pane and the nodes
+  pane, one between the nodes pane and the log pane. An
+  automated test SHALL assert this count independently of any
+  committed snapshot
 
 #### Scenario: Sub-80×24 collapses to a single pane
 
@@ -454,6 +512,19 @@ incoming `NodeEventEntry` events whether or not the brief is
 currently the selection — so switching to a brief after its run
 finished shows the final state, not an empty pane.
 
+The autorun TUI SHALL animate the per-node spinner glyph in
+the embedded run view while any node is in a running-ish
+status (`running` or `retrying`). The animation SHALL be
+driven by dispatching `runReducer({ kind: "tick" })` into the
+selected brief's `runState` slot from the autorun TUI's
+existing spinner tick loop — the same tick semantics
+`minifac run`'s TUI uses, sharing one clock for the process.
+The autorun TUI SHALL NOT invent a parallel spinner clock for
+the embedded view, and SHALL NOT mount any of the run-mode
+TUI's own tick effects (those belong to `RunApp` and are not
+reachable when the embedded view is composed via the shared
+`RunBody` component).
+
 #### Scenario: Stream-json rendering matches run-mode exactly
 
 - **WHEN** the autorun TUI is drilled into a brief whose
@@ -486,6 +557,28 @@ finished shows the final state, not an empty pane.
   in the brief-list pane reflects the new state on the next
   re-render; switching back to `bar` shows the updated run
   view, not an empty one
+
+#### Scenario: Embedded per-node spinner animates while a node runs
+
+- **WHEN** the autorun TUI is drilled into a brief whose
+  embedded `RunState` has a node in status `running` (or
+  `retrying`), and the autorun TUI's tick loop fires
+- **THEN** that node's spinner glyph in the embedded status
+  pane advances frame-by-frame, matching the animation
+  `minifac run`'s TUI produces for the same `RunState` at the
+  same tick cadence. The advance SHALL be produced by
+  dispatching `runReducer({ kind: "tick" })` into the brief's
+  `runState` slot; no other tick-emitter SHALL be required
+
+#### Scenario: Embedded spinner stops when no node is running
+
+- **WHEN** the autorun TUI is drilled into a brief whose
+  embedded `RunState` has no node in a running-ish status (all
+  nodes pending, succeeded, or failed)
+- **THEN** the autorun TUI's tick loop SHALL NOT dispatch
+  `runReducer({ kind: "tick" })` into that brief's `runState`
+  slot (the embedded glyph stays static), avoiding a
+  per-frame `setState` while idle
 
 ### Requirement: TUI does not change the autorun primitive
 

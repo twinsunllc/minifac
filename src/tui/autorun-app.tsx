@@ -235,7 +235,7 @@ export function AutorunApp({
           borderRight={false}
           marginX={1}
         />
-        <Box flexDirection="column" flexGrow={1}>
+        <Box flexGrow={1}>
           {state.focus === "run-view" && runState ? (
             <RunBody state={runState} glyphs={glyphs} bodyHeight={bodyHeight} compact={false} />
           ) : (
