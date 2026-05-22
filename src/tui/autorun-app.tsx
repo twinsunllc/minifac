@@ -1,13 +1,12 @@
 import { Box, Text, useInput, useStdout } from "ink";
 import type { ReactElement } from "react";
-import { MIN_TUI_ROWS, computeTuiRows } from "./app.js";
+import { MIN_TUI_ROWS, RunBody, computeTuiRows } from "./app.js";
 import type { AutorunUIEvent, BriefListState, BriefRowState } from "./autorun-reducer.js";
 import { BriefListPane } from "./brief-list-pane.js";
 import type { StatusGlyphs } from "./glyphs.js";
 import { HelpOverlay } from "./help-overlay.js";
 import { LogPane } from "./log-pane.js";
-import type { ReducerEvent, RunState, UIEvent } from "./reducer.js";
-import { StatusPane } from "./status-pane.js";
+import type { ReducerEvent, UIEvent } from "./reducer.js";
 
 export interface AutorunHandlers {
   /** Dispatch an autorun-level UI event into the brief-list reducer. */
@@ -194,15 +193,6 @@ export function AutorunHotkeyInput({
   return <></>;
 }
 
-function RunView({ runState, glyphs }: { runState: RunState; glyphs: StatusGlyphs }): ReactElement {
-  return (
-    <Box flexDirection="column" flexGrow={1}>
-      <StatusPane state={runState} glyphs={glyphs} />
-      <LogPane state={runState} />
-    </Box>
-  );
-}
-
 export function AutorunApp({
   state,
   glyphs,
@@ -247,7 +237,7 @@ export function AutorunApp({
         />
         <Box flexDirection="column" flexGrow={1}>
           {state.focus === "run-view" && runState ? (
-            <RunView runState={runState} glyphs={glyphs} />
+            <RunBody state={runState} glyphs={glyphs} bodyHeight={bodyHeight} compact={false} />
           ) : (
             <EmptyRunHint />
           )}
