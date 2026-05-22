@@ -63,4 +63,38 @@ describe("BriefListPane", () => {
     const { lastFrame } = render(<BriefListPane state={state} glyphs={UNICODE_GLYPHS} />);
     expect(lastFrame() ?? "").toContain("no briefs yet");
   });
+
+  it("renders a succeeded-but-unmerged row with the half-circle glyph and unmerged suffix (Unicode)", () => {
+    let s = createInitialBriefListState();
+    s = autorunReducer(s, { kind: "started", ts: 0, change: "stuck" });
+    s = autorunReducer(s, { kind: "completed", ts: 1, change: "stuck", status: "succeeded" });
+    s = autorunReducer(s, {
+      kind: "auto-merge-failed",
+      ts: 2,
+      change: "stuck",
+      reason: "conflict",
+    });
+    const { lastFrame } = render(<BriefListPane state={s} glyphs={UNICODE_GLYPHS} />);
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("stuck");
+    expect(frame).toContain(UNICODE_GLYPHS.succeededButUnmerged);
+    expect(frame).toMatch(/unmerged: conflict/);
+  });
+
+  it("renders a succeeded-but-unmerged row with the ASCII glyph and unmerged suffix", () => {
+    let s = createInitialBriefListState();
+    s = autorunReducer(s, { kind: "started", ts: 0, change: "stuck" });
+    s = autorunReducer(s, { kind: "completed", ts: 1, change: "stuck", status: "succeeded" });
+    s = autorunReducer(s, {
+      kind: "auto-merge-failed",
+      ts: 2,
+      change: "stuck",
+      reason: "non-fast-forward",
+    });
+    const { lastFrame } = render(<BriefListPane state={s} glyphs={ASCII_GLYPHS} />);
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("stuck");
+    expect(frame).toContain(ASCII_GLYPHS.succeededButUnmerged);
+    expect(frame).toMatch(/unmerged: non-fast-forward/);
+  });
 });

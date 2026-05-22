@@ -22,6 +22,8 @@ function colorFor(status: BriefStatus): string | undefined {
       return "red";
     case "skipped":
       return "gray";
+    case "succeeded-but-unmerged":
+      return "yellow";
   }
 }
 
@@ -37,11 +39,16 @@ function glyphFor(glyphs: StatusGlyphs, status: BriefStatus): string {
       return glyphs.failed;
     case "skipped":
       return glyphs.skipped;
+    case "succeeded-but-unmerged":
+      return glyphs.succeededButUnmerged;
   }
 }
 
 function suffixFor(row: BriefRowState): string {
   if (row.status === "skipped" && row.skipReason) return ` (${row.skipReason})`;
+  if (row.status === "succeeded-but-unmerged" && row.autoMergeFailReason) {
+    return ` (unmerged: ${row.autoMergeFailReason})`;
+  }
   if (row.runId) return ` ${row.runId.slice(0, 6)}`;
   return "";
 }

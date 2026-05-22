@@ -40,7 +40,7 @@
 
 ## 3. Autorun event surface + flags
 
-- [ ] 3.1 Extend the `AutorunEvent` union in
+- [x] 3.1 Extend the `AutorunEvent` union in
       `src/cli/autorun.ts` with the new variant:
       ```ts
       | (AutorunEventBase & {
@@ -57,16 +57,16 @@
           detail?: string;
         })
       ```
-- [ ] 3.2 Extend the `formatHuman` switch to format the new
+- [x] 3.2 Extend the `formatHuman` switch to format the new
       event as `<ts> auto-merge-failed <change>
       reason=<reason>[ runId=<id>][ detail=<detail>]`.
-- [ ] 3.3 Extend the JSON renderer (`event === "auto-merge-
+- [x] 3.3 Extend the JSON renderer (`event === "auto-merge-
       failed"` plus the flat fields) per the existing pattern.
-- [ ] 3.4 Extend `AutorunOptions` with `noAutoMerge: boolean`
+- [x] 3.4 Extend `AutorunOptions` with `noAutoMerge: boolean`
       and `ffOnly: boolean` (both default `false`). Thread them
       from `src/cli.ts`'s `autorun` command into
       `AutorunOptions`. Document in the help text.
-- [ ] 3.5 Add CLI-level argument parsing for `--no-auto-merge`
+- [x] 3.5 Add CLI-level argument parsing for `--no-auto-merge`
       and `--ff-only` in `src/cli.ts`'s autorun command. When
       both `--no-auto-merge` and `--ff-only` are supplied, emit
       the documented stderr warning line (`"--ff-only has no
@@ -75,7 +75,7 @@
 
 ## 4. Auto-merge step inside autorun completion handler
 
-- [ ] 4.1 In `src/cli/autorun.ts` (or a sibling module
+- [x] 4.1 In `src/cli/autorun.ts` (or a sibling module
       `src/cli/autorun-merge.ts` if isolation is cleaner), add
       the completion-handler logic:
       - When auto-merge is enabled (default) and the
@@ -96,18 +96,18 @@
         and the mark-done call (the runner's mark-done
         post-step ran already because `skipMarkDone` was
         false for that path).
-- [ ] 4.2 Wire the autorun wrapper to pass `skipMarkDone:
+- [x] 4.2 Wire the autorun wrapper to pass `skipMarkDone:
       !options.noAutoMerge` into `runFactory` / the run
       primitive so the runner's mark-done is suppressed exactly
       when the autorun wrapper plans to own it. (When
       `--no-auto-merge` is set, `skipMarkDone` is false, so the
       runner does the move as before.)
-- [ ] 4.3 Introduce an in-process mutex around the merge step
+- [x] 4.3 Introduce an in-process mutex around the merge step
       so concurrent run completions (under `--max-concurrent
       N>1`) serialize through it. The mutex SHALL be scoped to
       the autorun process and SHALL release before mark-done
       runs.
-- [ ] 4.4 Unit tests in `src/cli/autorun.test.ts` (or
+- [x] 4.4 Unit tests in `src/cli/autorun.test.ts` (or
       `src/cli/autorun-merge.test.ts`):
       - Success path: factory `succeeded` → `mergeRun` called
         → mark-done helper called → no `auto-merge-failed`
@@ -161,12 +161,12 @@
 
 ## 6. TUI reducer + glyph table
 
-- [ ] 6.1 In `src/tui/autorun-reducer.ts`, extend the
+- [x] 6.1 In `src/tui/autorun-reducer.ts`, extend the
       `BriefRowState['status']` union with
       `"succeeded-but-unmerged"` and add an optional
       `autoMergeFailReason` field carrying the event's `reason`
       enum value.
-- [ ] 6.2 Add the `auto-merge-failed` event to the reducer's
+- [x] 6.2 Add the `auto-merge-failed` event to the reducer's
       handler. The transition rules SHALL match the
       `autorun-tui` spec delta:
       - From `succeeded` → `succeeded-but-unmerged` (set
@@ -176,16 +176,16 @@
       - From any other status (`running`, `queued`,
         `failed`, `skipped`) → unchanged (protocol-violation
         path; reducer SHALL NOT crash).
-- [ ] 6.3 Update the brief-list pane's glyph table to add the
+- [x] 6.3 Update the brief-list pane's glyph table to add the
       `succeeded-but-unmerged` row: `◐` Unicode / `*` ASCII,
       yellow. Apply the dual-coloring rule (glyph + label) and
       append the ` (unmerged: <reason>)` suffix when the row
       has an `autoMergeFailReason`.
-- [ ] 6.4 Extend the `skipped` events-do-not-override rule to
+- [x] 6.4 Extend the `skipped` events-do-not-override rule to
       cover the new `succeeded-but-unmerged` status (i.e. a
       `skipped` event arriving for a `succeeded-but-unmerged`
       row leaves the row unchanged).
-- [ ] 6.5 Unit tests in `src/tui/autorun-reducer.test.ts`:
+- [x] 6.5 Unit tests in `src/tui/autorun-reducer.test.ts`:
       - Reducer transitions `succeeded` →
         `succeeded-but-unmerged` on `auto-merge-failed` with
         the right `change`; preserves `runId` and embedded
@@ -198,7 +198,7 @@
       - `skipped` event against a `succeeded-but-unmerged`
         row leaves it unchanged (extends the existing
         no-override rule).
-- [ ] 6.6 Snapshot / rendering test in the autorun TUI test
+- [x] 6.6 Snapshot / rendering test in the autorun TUI test
       suite asserting that a `succeeded-but-unmerged` row
       renders `◐` (Unicode) / `*` (ASCII) in yellow with the
       ` (unmerged: <reason>)` suffix.

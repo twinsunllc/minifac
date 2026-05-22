@@ -32,6 +32,10 @@ export interface RunBriefAutomatedArgs {
   /** Optional per-event sink. The autorun TUI threads this through so the
    *  embedded run view reflects live executor output. */
   onEvent?: (entry: import("../executor/types.js").EmittedEvent) => void;
+  /** When true, the runner SHALL NOT invoke `markBriefDone` on terminal
+   *  success. Autorun passes this when its auto-merge step is enabled, so
+   *  the wrapper owns the mark-done call (gated on a successful merge). */
+  skipMarkDone?: boolean;
   /** @internal Test seam. Default = real `claimLock`. Used by ordering
    *  tests to observe when the lockfile `release` is invoked relative to
    *  the run store's `finalizeRun` resolution. */
@@ -150,6 +154,11 @@ export async function runBriefAutomated(
 
   const registry = (args.buildRegistry ?? defaultRegistry)();
   try {
+    // Suppress the runner's mark-done post-step only when the caller has
+    // asked for it AND there's a branch to merge. For in-place briefs
+    // there is no merge step downstream that needs to gate mark-done, so
+    // we let the runner do the move as it always has.
+    const effectiveSkipMarkDone = args.skipMarkDone === true && !briefMode_inPlace;
     const result = await runFactory(loaded, {
       registry,
       brief,
@@ -159,6 +168,7 @@ export async function runBriefAutomated(
       runId,
       ...(briefMode_inPlace ? {} : { branchName }),
       ...(abortSignal ? { abortSignal } : {}),
+      ...(effectiveSkipMarkDone ? { skipMarkDone: true } : {}),
       onEvent: args.onEvent ?? (() => undefined),
     });
     if (result.status === "failed") {

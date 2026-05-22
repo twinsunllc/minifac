@@ -3,9 +3,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { Writable } from "node:stream";
 import { describe, expect, it } from "vitest";
+import type { StoredRun } from "../storage/run-store.js";
 import { SqliteRunStore } from "../storage/sqlite.js";
 import type { AutorunRunFactory, RunFactoryResult } from "./autorun-scheduler.js";
 import { autorunAction } from "./autorun.js";
+import type { MergeOutcome } from "./merge.js";
 
 class BufferStream extends Writable {
   chunks: string[] = [];
@@ -449,5 +451,376 @@ describe("autorunAction", () => {
     const completed = lines.find((l) => l.event === "completed");
     expect(completed.status).toBe("succeeded");
     expect(completed.change).toBe("foo");
+  });
+});
+
+describe("autorunAction auto-merge step", () => {
+  /** Seed a run row in the store so `store.getRun(runId)` returns one with
+   *  a non-null branchName (so performAutoMerge proceeds to mergeRun). */
+  async function seedRunRow(
+    store: SqliteRunStore,
+    runId: string,
+    change: string,
+    overrides: Partial<StoredRun> = {},
+  ): Promise<void> {
+    const startedAt = overrides.startedAt ?? Date.now();
+    await store.createRun({
+      id: runId,
+      factoryPath: overrides.factoryPath ?? "/p/f.yaml",
+      factoryName: overrides.factoryName ?? "f",
+      ...(overrides.briefPath !== undefined ? { briefPath: overrides.briefPath } : {}),
+      change,
+      ...(overrides.baseBranch !== undefined ? { baseBranch: overrides.baseBranch } : {}),
+      ...(overrides.worktreePath !== undefined ? { worktreePath: overrides.worktreePath } : {}),
+      ...(overrides.branchName !== undefined
+        ? { branchName: overrides.branchName }
+        : { branchName: `run/${change}-aaaaaa` }),
+      startedAt,
+    });
+    await store.finalizeRun(runId, {
+      status: overrides.status ?? "succeeded",
+      ...(overrides.reason !== undefined ? { reason: overrides.reason } : {}),
+      ...(overrides.proximateNodeId !== undefined
+        ? { proximateNodeId: overrides.proximateNodeId }
+        : {}),
+      endedAt: overrides.endedAt ?? startedAt + 1,
+    });
+  }
+
+  it("success path: mergeRun called, mark-done called, no auto-merge-failed event", async () => {
+    const repo = await makeRepo();
+    await writeBrief(repo, "active", "foo");
+    const store = await freshStore();
+    let nextRunId = 1;
+    const factory: AutorunRunFactory = (args) => {
+      const runId = `run-${nextRunId++}`;
+      const promise = (async () => {
+        // Pre-seed the run row with a branch name so performAutoMerge
+        // sees something to merge.
+        await seedRunRow(store, runId, args.brief.frontmatter.change, {
+          branchName: "run/foo-111111",
+          worktreePath: "/wt/foo",
+        });
+        return { status: "succeeded" as const, runId };
+      })();
+      return { promise };
+    };
+    const merges: Array<{ row: StoredRun }> = [];
+    const marks: Array<{ change: string; runCwd: string }> = [];
+    const out = new BufferStream();
+    const err = new BufferStream();
+    const code = await autorunAction({
+      options: { once: true, maxConcurrent: 1 },
+      cwd: repo,
+      io: { stdout: out, stderr: err },
+      runFactory: factory,
+      openRunStore: async () => store,
+      mergeRunFn: async (row) => {
+        merges.push({ row });
+        return { ok: true, headSha: "deadbeef", defaultBranch: "main", branchName: row.branchName ?? "" };
+      },
+      markBriefDoneFn: async (input) => {
+        marks.push(input);
+        return { moved: true };
+      },
+    });
+    expect(code).toBe(0);
+    expect(merges).toHaveLength(1);
+    expect(merges[0]?.row.change).toBe("foo");
+    expect(marks).toHaveLength(1);
+    expect(marks[0]?.change).toBe("foo");
+    expect(marks[0]?.runCwd).toBe("/wt/foo");
+    expect(out.text()).not.toMatch(/auto-merge-failed/);
+  });
+
+  it("conflict path: auto-merge-failed event emitted, no mark-done", async () => {
+    const repo = await makeRepo();
+    await writeBrief(repo, "active", "foo");
+    const store = await freshStore();
+    let nextRunId = 1;
+    const factory: AutorunRunFactory = (args) => {
+      const runId = `run-${nextRunId++}`;
+      const promise = (async () => {
+        await seedRunRow(store, runId, args.brief.frontmatter.change, {
+          branchName: "run/foo-111111",
+          worktreePath: "/wt/foo",
+        });
+        return { status: "succeeded" as const, runId };
+      })();
+      return { promise };
+    };
+    let markCalled = false;
+    const out = new BufferStream();
+    const err = new BufferStream();
+    const code = await autorunAction({
+      options: { once: true, maxConcurrent: 1, json: true },
+      cwd: repo,
+      io: { stdout: out, stderr: err },
+      runFactory: factory,
+      openRunStore: async () => store,
+      mergeRunFn: async () => ({
+        ok: false,
+        reason: "conflict",
+        message: "Merge produced conflicts: a.txt",
+      }),
+      markBriefDoneFn: async () => {
+        markCalled = true;
+        return { moved: true };
+      },
+    });
+    expect(code).toBe(0);
+    expect(markCalled).toBe(false);
+    const lines = out.lines().map((l) => JSON.parse(l));
+    const failed = lines.find((l) => l.event === "auto-merge-failed");
+    expect(failed).toBeDefined();
+    expect(failed?.change).toBe("foo");
+    expect(failed?.reason).toBe("conflict");
+    expect(failed?.detail).toMatch(/a\.txt/);
+  });
+
+  it("--ff-only forwarded to mergeRun; non-fast-forward surfaces", async () => {
+    const repo = await makeRepo();
+    await writeBrief(repo, "active", "foo");
+    const store = await freshStore();
+    let nextRunId = 1;
+    const factory: AutorunRunFactory = (args) => {
+      const runId = `run-${nextRunId++}`;
+      const promise = (async () => {
+        await seedRunRow(store, runId, args.brief.frontmatter.change, {
+          branchName: "run/foo-111111",
+          worktreePath: "/wt/foo",
+        });
+        return { status: "succeeded" as const, runId };
+      })();
+      return { promise };
+    };
+    let observedFfOnly: boolean | undefined;
+    const out = new BufferStream();
+    const err = new BufferStream();
+    const code = await autorunAction({
+      options: { once: true, maxConcurrent: 1, ffOnly: true, json: true },
+      cwd: repo,
+      io: { stdout: out, stderr: err },
+      runFactory: factory,
+      openRunStore: async () => store,
+      mergeRunFn: async (_row, opts) => {
+        observedFfOnly = opts.ffOnly;
+        return {
+          ok: false,
+          reason: "non-fast-forward",
+          message: "Fast-forward failed",
+        };
+      },
+    });
+    expect(code).toBe(0);
+    expect(observedFfOnly).toBe(true);
+    const lines = out.lines().map((l) => JSON.parse(l));
+    const failed = lines.find((l) => l.event === "auto-merge-failed");
+    expect(failed?.reason).toBe("non-fast-forward");
+  });
+
+  it("--no-auto-merge: no mergeRun, no autorun-owned mark-done, no failure event", async () => {
+    const repo = await makeRepo();
+    await writeBrief(repo, "active", "foo");
+    const store = await freshStore();
+    let nextRunId = 1;
+    const factory: AutorunRunFactory = (args) => {
+      const runId = `run-${nextRunId++}`;
+      const promise = (async () => {
+        await seedRunRow(store, runId, args.brief.frontmatter.change, {
+          branchName: "run/foo-111111",
+          worktreePath: "/wt/foo",
+        });
+        return { status: "succeeded" as const, runId };
+      })();
+      return { promise };
+    };
+    let mergeCalled = false;
+    let markCalled = false;
+    const out = new BufferStream();
+    const err = new BufferStream();
+    const code = await autorunAction({
+      options: { once: true, maxConcurrent: 1, noAutoMerge: true },
+      cwd: repo,
+      io: { stdout: out, stderr: err },
+      runFactory: factory,
+      openRunStore: async () => store,
+      mergeRunFn: async () => {
+        mergeCalled = true;
+        return { ok: true, headSha: "x", defaultBranch: "main", branchName: "b" };
+      },
+      markBriefDoneFn: async () => {
+        markCalled = true;
+        return { moved: true };
+      },
+    });
+    expect(code).toBe(0);
+    expect(mergeCalled).toBe(false);
+    expect(markCalled).toBe(false);
+    expect(out.text()).not.toMatch(/auto-merge-failed/);
+  });
+
+  it("factory-failed path: auto-merge step NOT invoked; no failure event", async () => {
+    const repo = await makeRepo();
+    await writeBrief(repo, "active", "foo");
+    const store = await freshStore();
+    let nextRunId = 1;
+    const factory: AutorunRunFactory = (args) => {
+      const runId = `run-${nextRunId++}`;
+      const promise = (async () => {
+        await seedRunRow(store, runId, args.brief.frontmatter.change, {
+          branchName: "run/foo-111111",
+          worktreePath: "/wt/foo",
+          status: "failed",
+          reason: "node_failed",
+        });
+        return { status: "failed" as const, runId, reason: "node_failed" };
+      })();
+      return { promise };
+    };
+    let mergeCalled = false;
+    const out = new BufferStream();
+    const err = new BufferStream();
+    const code = await autorunAction({
+      options: { once: true, maxConcurrent: 1 },
+      cwd: repo,
+      io: { stdout: out, stderr: err },
+      runFactory: factory,
+      openRunStore: async () => store,
+      mergeRunFn: async () => {
+        mergeCalled = true;
+        return { ok: true, headSha: "x", defaultBranch: "main", branchName: "b" };
+      },
+    });
+    expect(code).toBe(0);
+    expect(mergeCalled).toBe(false);
+    expect(out.text()).not.toMatch(/auto-merge-failed/);
+  });
+
+  it("null branchName + non-cwd worktree: emits auto-merge-failed reason=null-branch-name", async () => {
+    const repo = await makeRepo();
+    await writeBrief(repo, "active", "foo");
+    const store = await freshStore();
+    let nextRunId = 1;
+    const factory: AutorunRunFactory = (args) => {
+      const runId = `run-${nextRunId++}`;
+      const promise = (async () => {
+        // Legacy/pre-migration row: branchName=null AND worktreePath !== cwd.
+        await seedRunRow(store, runId, args.brief.frontmatter.change, {
+          branchName: null,
+          worktreePath: "/some/other/place",
+        });
+        return { status: "succeeded" as const, runId };
+      })();
+      return { promise };
+    };
+    let mergeCalled = false;
+    const out = new BufferStream();
+    const err = new BufferStream();
+    const code = await autorunAction({
+      options: { once: true, maxConcurrent: 1, json: true },
+      cwd: repo,
+      io: { stdout: out, stderr: err },
+      runFactory: factory,
+      openRunStore: async () => store,
+      mergeRunFn: async () => {
+        mergeCalled = true;
+        return { ok: true, headSha: "x", defaultBranch: "main", branchName: "b" };
+      },
+    });
+    expect(code).toBe(0);
+    expect(mergeCalled).toBe(false);
+    const lines = out.lines().map((l) => JSON.parse(l));
+    const failed = lines.find((l) => l.event === "auto-merge-failed");
+    expect(failed?.reason).toBe("null-branch-name");
+  });
+
+  it("concurrency: two completions serialize through the merge mutex", async () => {
+    const repo = await makeRepo();
+    await writeBrief(repo, "active", "foo");
+    await writeBrief(repo, "active", "bar");
+    const store = await freshStore();
+    let nextRunId = 1;
+    const factory: AutorunRunFactory = (args) => {
+      const runId = `run-${nextRunId++}`;
+      const promise = (async () => {
+        await seedRunRow(store, runId, args.brief.frontmatter.change, {
+          branchName: `run/${args.brief.frontmatter.change}-111111`,
+          worktreePath: `/wt/${args.brief.frontmatter.change}`,
+        });
+        return { status: "succeeded" as const, runId };
+      })();
+      return { promise };
+    };
+    let active = 0;
+    let observedConcurrent = 0;
+    const mergeCalls: string[] = [];
+    const out = new BufferStream();
+    const err = new BufferStream();
+    const code = await autorunAction({
+      options: { once: true, maxConcurrent: 2 },
+      cwd: repo,
+      io: { stdout: out, stderr: err },
+      runFactory: factory,
+      openRunStore: async () => store,
+      mergeRunFn: async (row) => {
+        active += 1;
+        observedConcurrent = Math.max(observedConcurrent, active);
+        // Yield twice to give the second completion a chance to race.
+        await new Promise((r) => setImmediate(r));
+        await new Promise((r) => setImmediate(r));
+        mergeCalls.push(row.change ?? "");
+        active -= 1;
+        const branchName = row.branchName ?? "";
+        return {
+          ok: true,
+          headSha: "x",
+          defaultBranch: "main",
+          branchName,
+        } satisfies MergeOutcome;
+      },
+      markBriefDoneFn: async () => ({ moved: true }),
+    });
+    expect(code).toBe(0);
+    expect(mergeCalls.sort()).toEqual(["bar", "foo"]);
+    expect(observedConcurrent).toBe(1);
+  });
+
+  it("--no-auto-merge with --ff-only is accepted (CLI emits warning; action proceeds)", async () => {
+    // The startup-time warning is emitted by the CLI layer (src/cli.ts),
+    // not the action. The action here just confirms that supplying both
+    // is not a usage error and the action proceeds normally.
+    const repo = await makeRepo();
+    await writeBrief(repo, "active", "foo");
+    const store = await freshStore();
+    let nextRunId = 1;
+    const factory: AutorunRunFactory = (args) => {
+      const runId = `run-${nextRunId++}`;
+      const promise = (async () => {
+        await seedRunRow(store, runId, args.brief.frontmatter.change, {
+          branchName: "run/foo-111111",
+          worktreePath: "/wt/foo",
+        });
+        return { status: "succeeded" as const, runId };
+      })();
+      return { promise };
+    };
+    let mergeCalled = false;
+    const out = new BufferStream();
+    const err = new BufferStream();
+    const code = await autorunAction({
+      options: { once: true, maxConcurrent: 1, noAutoMerge: true, ffOnly: true },
+      cwd: repo,
+      io: { stdout: out, stderr: err },
+      runFactory: factory,
+      openRunStore: async () => store,
+      mergeRunFn: async () => {
+        mergeCalled = true;
+        return { ok: true, headSha: "x", defaultBranch: "main", branchName: "b" };
+      },
+    });
+    expect(code).toBe(0);
+    expect(mergeCalled).toBe(false);
+    expect(out.text()).not.toMatch(/auto-merge-failed/);
   });
 });
