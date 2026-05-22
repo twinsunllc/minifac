@@ -1,5 +1,6 @@
-import { readdir } from "node:fs/promises";
+import { readdir, stat } from "node:fs/promises";
 import path from "node:path";
+import { installRoot } from "../packaging/install-root.js";
 import { StepLoadError } from "../step/loader-error.js";
 import { loadStep } from "../step/loader.js";
 
@@ -15,6 +16,12 @@ export interface StepsActionInput {
   json?: boolean;
   cwd: string;
   io: IO;
+  /**
+   * Test-only override for the directory scanned as `source: built-in`.
+   * Production callers should leave this unset and let the default
+   * install-root-first / source-tree-fallback lookup apply.
+   */
+  builtinDirOverride?: string;
 }
 
 interface StepRow {
@@ -37,6 +44,21 @@ async function listYamlFiles(dir: string): Promise<string[]> {
   } catch {
     return [];
   }
+}
+
+async function dirExists(p: string): Promise<boolean> {
+  try {
+    const s = await stat(p);
+    return s.isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+async function builtinStepsDir(cwd: string): Promise<string> {
+  const fromInstall = path.resolve(installRoot(), "examples", "steps");
+  if (await dirExists(fromInstall)) return fromInstall;
+  return path.resolve(cwd, "examples", "steps");
 }
 
 function termWidth(stdout: IO["stdout"]): number {
@@ -70,7 +92,8 @@ export async function stepsAction(input: StepsActionInput): Promise<number> {
     dirs.push({ dir: path.resolve(input.cwd, ".minifac", "steps"), source: "local" });
   }
   if (sourceFilter === "built-in" || sourceFilter === "all") {
-    dirs.push({ dir: path.resolve(input.cwd, "examples", "steps"), source: "built-in" });
+    const dir = input.builtinDirOverride ?? (await builtinStepsDir(input.cwd));
+    dirs.push({ dir, source: "built-in" });
   }
 
   const rows: StepRow[] = [];

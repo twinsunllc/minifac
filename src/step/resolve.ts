@@ -1,5 +1,6 @@
 import { stat } from "node:fs/promises";
 import path from "node:path";
+import { installRoot } from "../packaging/install-root.js";
 import { StepLoadError } from "./loader-error.js";
 
 const NAME_RE = /^[a-z][a-z0-9-]*$/;
@@ -137,23 +138,45 @@ async function fileExists(p: string): Promise<boolean> {
  * of the existing file. Throws `StepLoadError` with all candidate paths in
  * the message when nothing resolves.
  *
+ * Precedence for `minifac:<name>`:
+ *   1. `<install-root>/examples/steps/<name>.yaml` (installed package)
+ *   2. `<callerCwd>/examples/steps/<name>.yaml`   (source-tree dogfood)
+ *
+ * Precedence for bare `<name>`:
+ *   1. `<callerCwd>/.minifac/steps/<name>.yaml`
+ *   2. `<install-root>/examples/steps/<name>.yaml`
+ *   3. `<callerCwd>/examples/steps/<name>.yaml`
+ *
+ * The `<scope>/<name>` form parses but is rejected at resolution as
+ * reserved-for-future remote resolution (see Reference.md).
+ *
  * In v0 the `@version` pin is parsed but ignored for resolution.
  */
 export async function resolveStepRef(ref: string, callerCwd: string): Promise<string> {
   const parsed = parseStepRef(ref);
-  const builtin = path.resolve(callerCwd, "examples", "steps", `${parsed.name}.yaml`);
-  if (parsed.builtinForced) {
-    if (await fileExists(builtin)) return builtin;
+  if (parsed.scope !== undefined && !parsed.builtinForced) {
+    const versionSuffix = parsed.version ? `@${parsed.version}` : "";
     throw new StepLoadError(
-      `Could not resolve step reference \`${ref}\` — tried ${builtin}`,
+      `Step reference \`${parsed.scope}/${parsed.name}${versionSuffix}\` uses the scoped form (\`<scope>/<name>\`), which is reserved for future remote resolution and not yet supported. See docs/concepts/Reference.md for the planned semantics.`,
+      "(reference)",
+    );
+  }
+  const installBuiltin = path.resolve(installRoot(), "examples", "steps", `${parsed.name}.yaml`);
+  const localBuiltin = path.resolve(callerCwd, "examples", "steps", `${parsed.name}.yaml`);
+  if (parsed.builtinForced) {
+    if (await fileExists(installBuiltin)) return installBuiltin;
+    if (await fileExists(localBuiltin)) return localBuiltin;
+    throw new StepLoadError(
+      `Could not resolve step reference \`${ref}\` — tried ${installBuiltin}, then ${localBuiltin}`,
       "(reference)",
     );
   }
   const local = path.resolve(callerCwd, ".minifac", "steps", `${parsed.name}.yaml`);
   if (await fileExists(local)) return local;
-  if (await fileExists(builtin)) return builtin;
+  if (await fileExists(installBuiltin)) return installBuiltin;
+  if (await fileExists(localBuiltin)) return localBuiltin;
   throw new StepLoadError(
-    `Could not resolve step reference \`${ref}\` — tried ${local}, then ${builtin}`,
+    `Could not resolve step reference \`${ref}\` — tried ${local}, then ${installBuiltin}, then ${localBuiltin}`,
     "(reference)",
   );
 }

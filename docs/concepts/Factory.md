@@ -49,9 +49,21 @@ nodes:
     cwd: "{{ run.cwd }}"
 ```
 
-The loader resolves `minifac:openspec-verify` to
-`<callerCwd>/examples/steps/openspec-verify.yaml` (built-in form), type-
-checks the supplied inputs against the step's declared schema, and
+The loader resolves `minifac:openspec-verify` against the bundled
+package first, then the source-tree fallback:
+
+1. `<install-root>/examples/steps/openspec-verify.yaml` (the copy
+   shipped in the npm tarball — the canonical "stdlib" version)
+2. `<callerCwd>/examples/steps/openspec-verify.yaml` (the source-tree
+   dogfood copy, present when running from a checkout)
+
+The same install-root-first / source-tree-fallback precedence applies
+to `extends: minifac:<name>` and to factory-by-name resolution
+(`--factory minifac:<name>`, brief `factory: minifac:<name>`). Bare
+references (`<name>` without the `minifac:` prefix) stay user-local —
+they consult `.minifac/factories/<name>.yaml` and the local
+`examples/<name>.yaml`, but never the install root. The loader then
+type-checks the supplied inputs against the step's declared schema and
 inlines the step's body. `{{ brief.* }}` tokens inside an input value
 survive load untouched and resolve at dispatch — so the example above
 threads the brief's `change` through the step's `{{ inputs.change }}`.

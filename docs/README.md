@@ -48,8 +48,9 @@ accepted; superseded by new decisions rather than edited. See
 2. [[Roadmap]] — what we're building and what's next
 3. [[Factory]] and [[Brief]] — the two central concepts
 4. `decisions/0004-Factory-vs-Input-Separation.md` — the architectural framing
-5. [[CLI]] — full command reference once you're ready to run things
-6. Browse other concept notes as needed; backlinks in Obsidian help
+5. [[Reference]] — how `uses:`/`extends:`/`factory:` resolve (install root vs. local vs. future remote)
+6. [[CLI]] — full command reference once you're ready to run things
+7. Browse other concept notes as needed; backlinks in Obsidian help
 
 ## Updating
 

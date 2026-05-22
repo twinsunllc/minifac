@@ -2,6 +2,7 @@ import { stat } from "node:fs/promises";
 import path from "node:path";
 import { type Brief, BriefLoadError, loadBrief } from "../brief/loader.js";
 import { BriefCycleError, computeBriefState } from "../brief/state.js";
+import { installRoot } from "../packaging/install-root.js";
 import type { RunStore } from "../storage/run-store.js";
 
 export type ResolvedRun =
@@ -34,19 +35,24 @@ function isPathLike(arg: string): boolean {
  * Two forms are accepted:
  *
  *   - `minifac:<name>` — built-in factory; resolved against
- *     `<cwd>/examples/<name>.yaml` only. The local lookup is skipped.
+ *     `<install-root>/examples/<name>.yaml` first, then
+ *     `<cwd>/examples/<name>.yaml`. The local lookup is skipped.
  *   - `<name>` (no prefix) — try `<cwd>/.minifac/factories/<name>.yaml`
- *     first, then fall back to `<cwd>/examples/<name>.yaml`. The first
- *     existing file wins.
+ *     first, then fall back to `<cwd>/examples/<name>.yaml`. The install
+ *     root is NOT consulted for bare names.
  *
  * On miss, a `RunArgResolutionError` is thrown naming every path tried.
  */
 export async function resolveFactoryByName(ref: string, cwd: string): Promise<string> {
   if (ref.startsWith("minifac:")) {
     const name = ref.slice("minifac:".length);
-    const candidate = path.resolve(cwd, "examples", `${name}.yaml`);
-    if (await exists(candidate)) return candidate;
-    throw new RunArgResolutionError(`Could not resolve factory \`${ref}\` — tried ${candidate}`);
+    const installCandidate = path.resolve(installRoot(), "examples", `${name}.yaml`);
+    if (await exists(installCandidate)) return installCandidate;
+    const localCandidate = path.resolve(cwd, "examples", `${name}.yaml`);
+    if (await exists(localCandidate)) return localCandidate;
+    throw new RunArgResolutionError(
+      `Could not resolve factory \`${ref}\` — tried ${installCandidate}, then ${localCandidate}`,
+    );
   }
   const localCandidate = path.resolve(cwd, ".minifac", "factories", `${ref}.yaml`);
   if (await exists(localCandidate)) return localCandidate;

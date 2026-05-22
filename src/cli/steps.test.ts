@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { installRoot } from "../packaging/install-root.js";
 import { stepsAction } from "./steps.js";
 
 async function makeRepo(): Promise<string> {
@@ -59,6 +60,7 @@ describe("stepsAction", () => {
     const io = makeIO();
     const code = await stepsAction({
       cwd: repo,
+      builtinDirOverride: path.join(repo, "examples", "steps"),
       io: {
         stdout: io.stdout as unknown as NodeJS.WritableStream & { isTTY?: boolean },
         stderr: io.stderr as unknown as NodeJS.WritableStream,
@@ -78,6 +80,7 @@ describe("stepsAction", () => {
     const code = await stepsAction({
       source: "local",
       cwd: repo,
+      builtinDirOverride: path.join(repo, "examples", "steps"),
       io: {
         stdout: io.stdout as unknown as NodeJS.WritableStream & { isTTY?: boolean },
         stderr: io.stderr as unknown as NodeJS.WritableStream,
@@ -96,6 +99,7 @@ describe("stepsAction", () => {
     const code = await stepsAction({
       source: "built-in",
       cwd: repo,
+      builtinDirOverride: path.join(repo, "examples", "steps"),
       io: {
         stdout: io.stdout as unknown as NodeJS.WritableStream & { isTTY?: boolean },
         stderr: io.stderr as unknown as NodeJS.WritableStream,
@@ -113,6 +117,7 @@ describe("stepsAction", () => {
     const code = await stepsAction({
       json: true,
       cwd: repo,
+      builtinDirOverride: path.join(repo, "examples", "steps"),
       io: {
         stdout: io.stdout as unknown as NodeJS.WritableStream & { isTTY?: boolean },
         stderr: io.stderr as unknown as NodeJS.WritableStream,
@@ -133,6 +138,7 @@ describe("stepsAction", () => {
       source: "all",
       json: true,
       cwd: repo,
+      builtinDirOverride: path.join(repo, "examples", "steps"),
       io: {
         stdout: io.stdout as unknown as NodeJS.WritableStream & { isTTY?: boolean },
         stderr: io.stderr as unknown as NodeJS.WritableStream,
@@ -151,6 +157,7 @@ describe("stepsAction", () => {
     const io = makeIO();
     const code = await stepsAction({
       cwd: repo,
+      builtinDirOverride: path.join(repo, "examples", "steps"),
       io: {
         stdout: io.stdout as unknown as NodeJS.WritableStream & { isTTY?: boolean },
         stderr: io.stderr as unknown as NodeJS.WritableStream,
@@ -167,6 +174,7 @@ describe("stepsAction", () => {
     const code = await stepsAction({
       json: true,
       cwd: repo,
+      builtinDirOverride: path.join(repo, "examples", "steps"),
       io: {
         stdout: io.stdout as unknown as NodeJS.WritableStream & { isTTY?: boolean },
         stderr: io.stderr as unknown as NodeJS.WritableStream,
@@ -191,5 +199,54 @@ describe("stepsAction", () => {
     });
     expect(code).toBe(1);
     expect(io.stderr.buf).toMatch(/local.*built-in.*all/);
+  });
+
+  it("--source built-in scans the install root by default and reports its path", async () => {
+    const repo = await makeRepo();
+    const io = makeIO();
+    const code = await stepsAction({
+      source: "built-in",
+      json: true,
+      cwd: repo,
+      io: {
+        stdout: io.stdout as unknown as NodeJS.WritableStream & { isTTY?: boolean },
+        stderr: io.stderr as unknown as NodeJS.WritableStream,
+      },
+    });
+    expect(code).toBe(0);
+    const arr = JSON.parse(io.stdout.buf.trim());
+    expect(arr.length).toBeGreaterThan(0);
+    const expectedPrefix = path.join(installRoot(), "examples", "steps");
+    for (const row of arr) {
+      expect(row.source).toBe("built-in");
+      expect(row.path.startsWith(expectedPrefix)).toBe(true);
+    }
+    // The bundled `openspec-apply` step should be visible.
+    expect(arr.map((r: { name: string }) => r.name)).toContain("openspec-apply");
+  });
+
+  it("--source built-in falls back to <cwd>/examples/steps when install root is unavailable", async () => {
+    // Simulate the install-root-unavailable case by pointing the override
+    // at the cwd's examples/steps directory. The path reported in JSON
+    // should match the directory actually scanned.
+    const repo = await makeRepo();
+    await writeAt(repo, "examples/steps/alpha.yaml", STEP_A);
+    const io = makeIO();
+    const overrideDir = path.join(repo, "examples", "steps");
+    const code = await stepsAction({
+      source: "built-in",
+      json: true,
+      cwd: repo,
+      builtinDirOverride: overrideDir,
+      io: {
+        stdout: io.stdout as unknown as NodeJS.WritableStream & { isTTY?: boolean },
+        stderr: io.stderr as unknown as NodeJS.WritableStream,
+      },
+    });
+    expect(code).toBe(0);
+    const arr = JSON.parse(io.stdout.buf.trim());
+    expect(arr).toHaveLength(1);
+    expect(arr[0].name).toBe("alpha");
+    expect(arr[0].path.startsWith(overrideDir)).toBe(true);
   });
 });

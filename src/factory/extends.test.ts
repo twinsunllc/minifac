@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { installRoot } from "../packaging/install-root.js";
 import { FactoryLoadError, loadFactory } from "./loader.js";
 
 async function makeRepo(): Promise<string> {
@@ -296,6 +297,64 @@ nodes:
       `extends: ""\n${VALID_BASE}`,
     );
     await expect(loadFactory(derived, repo)).rejects.toThrowError(/extends/);
+  });
+
+  it("extends: minifac:<name> hits the install root when bundled", async () => {
+    // The install root ships examples/sdd.yaml; resolve through it without
+    // any source-tree fallback file present. The bundled factory's name
+    // is "sdd" — observing that name proves we loaded the install-root file.
+    const repo = await makeRepo();
+    const derived = await writeAt(
+      repo,
+      ".minifac/factories/derived.yaml",
+      "extends: minifac:sdd\n",
+    );
+    const loaded = await loadFactory(derived, repo);
+    expect(loaded.factory.name).toBe("sdd");
+    // And the bundled propose node is present, sourced from the install root.
+    expect(loaded.factory.nodes.propose).toBeDefined();
+    // `installRoot()` referenced to lock in the import for the test below;
+    // direct chain inspection is not exposed by loadFactory.
+    expect(installRoot()).toMatch(/minifac/);
+  });
+
+  it("extends: minifac:<name> falls back to source-tree examples when install root misses", async () => {
+    const repo = await makeRepo();
+    // `not-bundled` is not at install root; the callerCwd examples/ wins.
+    await writeAt(repo, "examples/not-bundled.yaml", VALID_BASE);
+    const derived = await writeAt(
+      repo,
+      ".minifac/factories/derived.yaml",
+      "extends: minifac:not-bundled\n",
+    );
+    const loaded = await loadFactory(derived, repo);
+    // VALID_BASE has `name: base` — confirms we loaded the fallback.
+    expect(loaded.factory.name).toBe("base");
+  });
+
+  it("extends: minifac:<name> missing in both names both paths in order", async () => {
+    const repo = await makeRepo();
+    const derived = await writeAt(
+      repo,
+      ".minifac/factories/derived.yaml",
+      "extends: minifac:nonexistent-base\n",
+    );
+    const installCandidate = path.join(installRoot(), "examples", "nonexistent-base.yaml");
+    const localCandidate = path.join(repo, "examples", "nonexistent-base.yaml");
+    await expect(loadFactory(derived, repo)).rejects.toThrowError(
+      new RegExp(`${installCandidate}.*${localCandidate}`, "s"),
+    );
+  });
+
+  it("bare extends: <name> does not consult the install root", async () => {
+    // Even though the install root ships `examples/sdd.yaml`, a bare
+    // `extends: sdd` MUST resolve only against the local
+    // .minifac/factories tree — install root is reserved for `minifac:`.
+    const repo = await makeRepo();
+    const derived = await writeAt(repo, ".minifac/factories/derived.yaml", "extends: sdd\n");
+    await expect(loadFactory(derived, repo)).rejects.toThrowError(
+      /\.minifac\/factories\/sdd\.yaml/,
+    );
   });
 
   it("derived layer override replaces the node wholesale (including outputs)", async () => {

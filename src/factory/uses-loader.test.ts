@@ -17,7 +17,7 @@ async function writeAt(dir: string, rel: string, contents: string): Promise<stri
   return full;
 }
 
-const PROPOSE_STEP = `name: openspec-propose
+const PROPOSE_STEP = `name: myfac-propose
 version: "1.0.0"
 executor: claude
 inputs:
@@ -27,7 +27,7 @@ with:
   prompt: "Propose {{ inputs.change }}"
 `;
 
-const VERIFY_STEP = `name: openspec-verify
+const VERIFY_STEP = `name: myfac-verify
 version: "1.0.0"
 executor: claude
 inputs:
@@ -40,14 +40,14 @@ with:
 describe("loadFactory with uses:", () => {
   it("loads a node with uses: and inputs:", async () => {
     const repo = await makeRepo();
-    await writeAt(repo, "examples/steps/openspec-propose.yaml", PROPOSE_STEP);
+    await writeAt(repo, "examples/steps/myfac-propose.yaml", PROPOSE_STEP);
     const fac = await writeAt(
       repo,
       "fac.yaml",
       `name: f
 nodes:
   propose:
-    uses: minifac:openspec-propose
+    uses: minifac:myfac-propose
     inputs:
       change: "foo"
     terminal: true
@@ -94,14 +94,14 @@ edges: []
 
   it("rejects node with both uses: and executor:", async () => {
     const repo = await makeRepo();
-    await writeAt(repo, "examples/steps/openspec-propose.yaml", PROPOSE_STEP);
+    await writeAt(repo, "examples/steps/myfac-propose.yaml", PROPOSE_STEP);
     const fac = await writeAt(
       repo,
       "fac.yaml",
       `name: f
 nodes:
   a:
-    uses: minifac:openspec-propose
+    uses: minifac:myfac-propose
     executor: claude
     terminal: true
 edges: []
@@ -112,14 +112,14 @@ edges: []
 
   it("rejects node with both uses: and with:", async () => {
     const repo = await makeRepo();
-    await writeAt(repo, "examples/steps/openspec-propose.yaml", PROPOSE_STEP);
+    await writeAt(repo, "examples/steps/myfac-propose.yaml", PROPOSE_STEP);
     const fac = await writeAt(
       repo,
       "fac.yaml",
       `name: f
 nodes:
   a:
-    uses: minifac:openspec-propose
+    uses: minifac:myfac-propose
     with: { permission_mode: "bypass_permissions" }
     terminal: true
 edges: []
@@ -194,14 +194,14 @@ edges: []
 
   it("preserves node-level terminal, cwd alongside uses:", async () => {
     const repo = await makeRepo();
-    await writeAt(repo, "examples/steps/openspec-propose.yaml", PROPOSE_STEP);
+    await writeAt(repo, "examples/steps/myfac-propose.yaml", PROPOSE_STEP);
     const fac = await writeAt(
       repo,
       "fac.yaml",
       `name: f
 nodes:
   a:
-    uses: minifac:openspec-propose
+    uses: minifac:myfac-propose
     inputs: { change: foo }
     terminal: true
     cwd: "{{ run.cwd }}"
@@ -215,14 +215,14 @@ edges: []
 
   it("rejects unknown node-level key alongside uses:", async () => {
     const repo = await makeRepo();
-    await writeAt(repo, "examples/steps/openspec-propose.yaml", PROPOSE_STEP);
+    await writeAt(repo, "examples/steps/myfac-propose.yaml", PROPOSE_STEP);
     const fac = await writeAt(
       repo,
       "fac.yaml",
       `name: f
 nodes:
   a:
-    uses: minifac:openspec-propose
+    uses: minifac:myfac-propose
     retry: 3
     terminal: true
 edges: []
@@ -233,14 +233,14 @@ edges: []
 
   it("resolved factory has no uses: or inputs: on any node", async () => {
     const repo = await makeRepo();
-    await writeAt(repo, "examples/steps/openspec-propose.yaml", PROPOSE_STEP);
+    await writeAt(repo, "examples/steps/myfac-propose.yaml", PROPOSE_STEP);
     const fac = await writeAt(
       repo,
       "fac.yaml",
       `name: f
 nodes:
   a:
-    uses: minifac:openspec-propose
+    uses: minifac:myfac-propose
     inputs: { change: foo }
     terminal: true
 edges: []
@@ -255,8 +255,8 @@ edges: []
 
   it("extends-based step layering: derived layer's uses: resolves the step at the derived layer", async () => {
     const repo = await makeRepo();
-    await writeAt(repo, "examples/steps/openspec-propose.yaml", PROPOSE_STEP);
-    await writeAt(repo, "examples/steps/openspec-verify.yaml", VERIFY_STEP);
+    await writeAt(repo, "examples/steps/myfac-propose.yaml", PROPOSE_STEP);
+    await writeAt(repo, "examples/steps/myfac-verify.yaml", VERIFY_STEP);
     // base declares verify inline
     await writeAt(
       repo,
@@ -282,7 +282,7 @@ edges:
       `extends: minifac:base
 nodes:
   verify:
-    uses: minifac:openspec-verify
+    uses: minifac:myfac-verify
     inputs: { change: "foo" }
     terminal: true
 `,
@@ -313,14 +313,14 @@ edges: []
     // Factory whose only terminal is the step-inlined node. Ensures
     // post-schema validation runs against the resolved factory.
     const repo = await makeRepo();
-    await writeAt(repo, "examples/steps/openspec-propose.yaml", PROPOSE_STEP);
+    await writeAt(repo, "examples/steps/myfac-propose.yaml", PROPOSE_STEP);
     const fac = await writeAt(
       repo,
       "fac.yaml",
       `name: f
 nodes:
   a:
-    uses: minifac:openspec-propose
+    uses: minifac:myfac-propose
     inputs: { change: foo }
     terminal: true
 edges: []

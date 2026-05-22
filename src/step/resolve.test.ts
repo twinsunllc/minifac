@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { installRoot } from "../packaging/install-root.js";
 import { StepLoadError } from "./loader-error.js";
 import { parseStepRef, resolveStepRef } from "./resolve.js";
 
@@ -149,6 +150,63 @@ describe("resolveStepRef", () => {
   it("rejects empty pin", async () => {
     const repo = await makeRepo();
     await expect(resolveStepRef("minifac:foo@", repo)).rejects.toThrowError(/version/);
+  });
+
+  it("minifac:<name> hits the install root when bundled", async () => {
+    // The install root ships examples/steps/openspec-apply.yaml; the test
+    // repo does not have a local copy, so the install-root path wins.
+    const repo = await makeRepo();
+    const result = await resolveStepRef("minifac:openspec-apply", repo);
+    expect(result).toBe(path.join(installRoot(), "examples", "steps", "openspec-apply.yaml"));
+    expect(result.startsWith(repo)).toBe(false);
+  });
+
+  it("minifac:<name> falls back to source-tree examples when install root misses", async () => {
+    const repo = await makeRepo();
+    // `foo` is not a bundled built-in, so the install root misses; the
+    // source-tree examples/steps/foo.yaml fallback wins.
+    const builtin = await writeAt(repo, "examples/steps/foo.yaml", STEP);
+    const result = await resolveStepRef("minifac:foo", repo);
+    expect(result).toBe(builtin);
+  });
+
+  it("minifac:<name> miss in both install root and source tree names both paths", async () => {
+    const repo = await makeRepo();
+    const installCandidate = path.join(
+      installRoot(),
+      "examples",
+      "steps",
+      "totally-not-a-real-step.yaml",
+    );
+    const localCandidate = path.join(repo, "examples", "steps", "totally-not-a-real-step.yaml");
+    await expect(resolveStepRef("minifac:totally-not-a-real-step", repo)).rejects.toThrowError(
+      new RegExp(`${installCandidate}.*${localCandidate}`, "s"),
+    );
+  });
+
+  it("minifac:<name> ignores a local <name> file under .minifac/steps/", async () => {
+    const repo = await makeRepo();
+    // A local .minifac/steps/foo.yaml exists, but `minifac:foo` must
+    // never resolve to it — only the install root or source-tree examples.
+    await writeAt(repo, ".minifac/steps/foo.yaml", STEP);
+    const builtin = await writeAt(repo, "examples/steps/foo.yaml", STEP);
+    const result = await resolveStepRef("minifac:foo", repo);
+    expect(result).toBe(builtin);
+  });
+
+  it("rejects <scope>/<name> at resolution with the reserved-for-future error", async () => {
+    const repo = await makeRepo();
+    await expect(resolveStepRef("myorg/foo", repo)).rejects.toThrowError(
+      /reserved for future remote resolution.*docs\/concepts\/Reference\.md/s,
+    );
+    await expect(resolveStepRef("myorg/foo", repo)).rejects.toThrowError(/myorg\/foo/);
+  });
+
+  it("rejects <scope>/<name>@<version>, preserving the pin in the message", async () => {
+    const repo = await makeRepo();
+    await expect(resolveStepRef("myorg/foo@1.0.0", repo)).rejects.toThrowError(
+      /myorg\/foo@1\.0\.0/,
+    );
   });
 
   it("@1 and @1.0.0 parse and resolve the same as unversioned", async () => {
