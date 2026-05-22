@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { createRequire } from "node:module";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Command } from "commander";
 
@@ -156,6 +157,10 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
     .option("--tui", "Force the interactive TUI even when stdout is not a TTY")
     .option("--force", "Override blocked-deps refusal (does not bypass cycle detection)")
     .option("--factory <name>", "Override the brief's declared factory for this invocation")
+    .option(
+      "--require-clean",
+      "Refuse to run if the brief (or any depends_on ancestor) is uncommitted",
+    )
     .action(
       async (
         arg: string,
@@ -165,6 +170,7 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
           tui?: boolean;
           force?: boolean;
           factory?: string;
+          requireClean?: boolean;
         },
       ) => {
         const cwd = io.runCwd ?? process.cwd();
@@ -262,6 +268,46 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
                 }
               }
             }
+          }
+
+          // Brief cleanliness gate — runs after deps gating (so cycles are
+          // already rejected) and before lockfile claim / worktree
+          // creation. Brief-less invocations skip the probe entirely;
+          // `--require-clean` on a brief-less invocation is silently
+          // ignored. See `run-cli` capability, "`minifac run` brief
+          // cleanliness gate".
+          if (brief) {
+            const { checkBriefAndAncestorsCleanliness } = await import(
+              "./brief/cleanliness.js"
+            );
+            const { loadBrief: loadBriefForCleanliness } = await import("./brief/loader.js");
+            const cleanResult = await checkBriefAndAncestorsCleanliness(brief, {
+              inputsDir: path.resolve(cwd, "inputs"),
+              repoRoot: cwd,
+              loadBrief: async (c: string) => {
+                if (c === brief.frontmatter.change) return brief;
+                return loadBriefForCleanliness(c, cwd);
+              },
+            });
+            if (cleanResult.status === "unclean") {
+              const offendingPath = `inputs/${cleanResult.offending}.md`;
+              if (opts.requireClean === true) {
+                io.stderr.write(
+                  `error: brief ${offendingPath} is uncommitted (${cleanResult.code}); commit it or drop --require-clean to proceed.\n`,
+                );
+                exitCode = 1;
+                return;
+              }
+              io.stderr.write(
+                `warning: brief ${offendingPath} is uncommitted (${cleanResult.code}); the run worktree will see the committed version, which may differ.\nproceed anyway in 3s... (Ctrl-C to abort)\n`,
+              );
+              const stdin = io.stdin ?? process.stdin;
+              if (stdin.isTTY) {
+                const { setTimeout: sleep } = await import("node:timers/promises");
+                await sleep(3000);
+              }
+            }
+            // disabled → silent, clean → silent: both fall through.
           }
 
           const briefMode_inPlace =

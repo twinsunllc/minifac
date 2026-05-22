@@ -82,12 +82,25 @@ Resolution order for `<thing>`:
 | `--tui` | off (auto) | Force the interactive [[Run-TUI]] even when stdout is not a TTY |
 | `--force` | off | Override a blocked-deps refusal. Does **not** bypass cycle detection |
 | `--factory <name>` | (brief's declared factory) | Override the factory for this invocation. Only valid when `<thing>` resolves to a brief — see [[0020-Factory-Override-At-Invocation]] |
+| `--require-clean` | off | Refuse to run if the brief (or any `depends_on` ancestor) is uncommitted. No-op for brief-less factory invocations |
 
 `--raw` and `--tui` are mutually exclusive. When neither is passed, the
 TUI is used when stdout is a TTY; raw output is used otherwise (e.g. in CI).
 
 `--in-place` is also implied when the brief's own frontmatter sets
 `mode: "in-place"`.
+
+#### Brief cleanliness
+
+By default, `minifac run` on an uncommitted brief writes a warning to
+stderr and (on a TTY) pauses for 3 seconds before proceeding, so the
+operator sees that the run worktree will be cut from the committed
+tip and may differ from the working-tree file they just saved. Pass
+`--require-clean` for CI / strict invocations: an uncommitted brief
+(or ancestor) becomes a hard error and exits non-zero with no lock,
+no worktree, no node execution. A non-git working directory disables
+the gate silently. See `docs/decisions/0033-Brief-Cleanliness-Gate.md`
+and [[Auto-Mode]] → "Cleanliness gate".
 
 ### Exit codes
 
@@ -574,6 +587,18 @@ of the same change (default `3`), autorun stops scheduling that change
 and emits `skipped reason=failure-cap`. The counter is purely
 in-memory — restart autorun to reset. Pass `--max-failures 0` to
 disable. See [[Auto-Mode]] for which failure reasons count.
+
+Cleanliness gate: autorun refuses to dispatch a brief whose
+`inputs/<change>.md` (or any `depends_on` ancestor's file) is in an
+unclean git state — untracked, modified, or staged. The skip event
+carries `reason=unclean` with a `detail` of the porcelain status code
+(root offender) or `<offending> (<code>)` (ancestor offender).
+Recovery: commit the brief, stash it, or invoke `minifac run`
+(which has its own warn-and-pause flow). There is no autorun flag to
+bypass this gate. A non-git working directory disables the gate; the
+scheduler emits exactly one startup `info` event noting the
+degradation. See [[Auto-Mode]] → "Cleanliness gate" and
+`docs/decisions/0033-Brief-Cleanliness-Gate.md`.
 
 ### Options
 

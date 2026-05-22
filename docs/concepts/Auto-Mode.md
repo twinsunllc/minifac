@@ -122,6 +122,46 @@ The cap check sits after the precondition reasons (`in-flight`,
 blocked or already in-flight surfaces that reason, not
 `failure-cap`. A capped brief never consumes a concurrency slot.
 
+## Cleanliness gate
+
+A brief's text lives in two places once autorun is involved: the
+operator's working tree (the file you just saved) and the run
+[[Worktree]] (a fresh git checkout the runner spawns from the
+committed tip). If the brief is uncommitted, those two diverge —
+apply nodes that substitute brief content see one thing, the operator
+sees another. The cleanliness gate exists so autorun never dispatches
+in that state.
+
+Before computing brief state, the scheduler probes
+`git status --porcelain` for the brief's file *and* for every brief
+its `depends_on` graph reaches. Three outcomes:
+
+- **Clean** — the file matches the index and the index matches HEAD.
+  Scheduling proceeds to the normal dispatch path.
+- **Unclean** — the file is untracked (`??`), modified (` M`), staged
+  (`A `), or any other state porcelain reports. Autorun skips with
+  reason `unclean` and a `detail` carrying the porcelain code (root
+  offender) or `<change> (<code>)` (ancestor offender). Recovery
+  gestures: commit the brief, stash it, or invoke
+  `minifac run <change>` (which has its own warn-and-pause flow).
+- **Disabled** — the autorun cwd is not inside a git working tree.
+  The gate degrades to a no-op; autorun emits exactly one startup
+  warning (`inputs/ is not inside a git working tree; brief
+  cleanliness gate disabled`) and never blocks dispatch on
+  cleanliness afterward.
+
+The gate runs *after* the `in-flight` and `filtered` short-circuits
+and *before* `computeBriefState`: an in-flight or filtered brief
+surfaces that reason instead, and the state machine never reads an
+in-flux brief. Cycles in `depends_on` still surface as `blocked` via
+the existing state-machine path — the gate defers to it instead of
+emitting a separate `unclean` event.
+
+There is no `--allow-unclean` flag. Operators who want to dispatch an
+in-flux brief use [[minifac run]] instead. See
+`docs/decisions/0033-Brief-Cleanliness-Gate.md` and the [[Brief]]
+concept doc for the rationale.
+
 ## Signal handling
 
 - **First SIGINT/SIGTERM**: stop scheduling new runs, wait for
@@ -164,6 +204,7 @@ One log line per scheduling event. Default human format:
 ```
 2026-05-21T18:00:01Z started foo runId=run_abcd1234
 2026-05-21T18:00:01Z skipped bar reason=blocked detail=baz (active)
+2026-05-21T18:00:01Z skipped qux reason=unclean detail=?? — brief is uncommitted (??); commit or stash before autorun picks it up
 2026-05-21T18:00:42Z completed foo status=succeeded runId=run_abcd1234
 ```
 

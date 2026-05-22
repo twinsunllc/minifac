@@ -167,6 +167,18 @@ function formatHuman(event: AutorunEvent): string {
           event.detail ?? "?"
         } — failure cap reached (${event.detail ?? "?"}); restart autorun to retry`;
       }
+      if (event.reason === "unclean") {
+        const detail = event.detail ?? "";
+        // Ancestor-offender detail is shaped "<offending> (<code>)";
+        // root-offender detail is just "<code>".
+        const ancestorMatch = /^(.+) \((..)\)$/.exec(detail);
+        if (ancestorMatch) {
+          const offending = ancestorMatch[1];
+          const code = ancestorMatch[2];
+          return `${ts} skipped ${event.change} reason=unclean detail=${detail} — ancestor brief ${offending} is uncommitted (${code}); commit or stash before autorun picks it up`;
+        }
+        return `${ts} skipped ${event.change} reason=unclean detail=${detail} — brief is uncommitted (${detail}); commit or stash before autorun picks it up`;
+      }
       return `${ts} skipped ${event.change} reason=${event.reason}${
         event.detail ? ` detail=${event.detail}` : ""
       }`;
@@ -543,6 +555,15 @@ export async function autorunAction(input: AutorunActionInput): Promise<number> 
     maxConcurrent: resolved.maxConcurrent,
     maxFailures: resolved.maxFailures,
     probeChangeLiveness,
+    onCleanlinessDisabled: () => {
+      const ev: AutorunEvent = {
+        kind: "info",
+        ts: now(),
+        message: "inputs/ is not inside a git working tree; brief cleanliness gate disabled",
+      };
+      emit(ev);
+      renderer?.onEvent(ev);
+    },
     callbacks: {
       onStarted(event) {
         const ev: AutorunEvent = {

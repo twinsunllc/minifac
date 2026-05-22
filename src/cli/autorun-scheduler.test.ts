@@ -878,3 +878,236 @@ describe("Scheduler failure-cap", () => {
     }
   });
 });
+
+describe("Scheduler cleanliness gate", () => {
+  function fakeRunner(
+    map: Record<string, { stdout?: string; stderr?: string; exitCode?: number | null }>,
+  ): import("../brief/cleanliness.js").GitStatusRunner {
+    return async (_repoRoot, briefPath) => {
+      const r = map[path.basename(briefPath)] ?? { stdout: "", exitCode: 0 };
+      return {
+        stdout: r.stdout ?? "",
+        stderr: r.stderr ?? "",
+        exitCode: r.exitCode ?? 0,
+      };
+    };
+  }
+
+  it("untracked brief skips with reason=unclean detail=??", async () => {
+    const repo = await makeRepo();
+    await writeBrief(repo, "active", "foo");
+    const store = await freshStore();
+    try {
+      const brief = await loadBrief("foo", repo);
+      const sched = new Scheduler({
+        runFactory: () => ({ promise: Promise.resolve({ status: "succeeded" as const }) }),
+        runStore: store,
+        inputsDir: path.join(repo, "inputs"),
+        repoRoot: repo,
+        maxConcurrent: 1,
+        maxFailures: 0,
+        cleanlinessRunner: fakeRunner({ "foo.md": { stdout: "?? inputs/foo.md\n" } }),
+      });
+      const d = await sched.decide(brief);
+      expect(d.action).toBe("skip");
+      if (d.action === "skip") {
+        expect(d.reason).toBe("unclean");
+        expect(d.detail).toBe("??");
+      }
+    } finally {
+      await store.close();
+    }
+  });
+
+  it("modified brief skips with reason=unclean detail=' M'", async () => {
+    const repo = await makeRepo();
+    await writeBrief(repo, "active", "foo");
+    const store = await freshStore();
+    try {
+      const brief = await loadBrief("foo", repo);
+      const sched = new Scheduler({
+        runFactory: () => ({ promise: Promise.resolve({ status: "succeeded" as const }) }),
+        runStore: store,
+        inputsDir: path.join(repo, "inputs"),
+        repoRoot: repo,
+        maxConcurrent: 1,
+        maxFailures: 0,
+        cleanlinessRunner: fakeRunner({ "foo.md": { stdout: " M inputs/foo.md\n" } }),
+      });
+      const d = await sched.decide(brief);
+      expect(d.action).toBe("skip");
+      if (d.action === "skip") {
+        expect(d.reason).toBe("unclean");
+        expect(d.detail).toBe(" M");
+      }
+    } finally {
+      await store.close();
+    }
+  });
+
+  it("unclean ancestor surfaces detail=<offending> (<code>)", async () => {
+    const repo = await makeRepo();
+    await writeBrief(repo, "active", "bar");
+    await writeBrief(repo, "active", "foo", ["bar"]);
+    const store = await freshStore();
+    try {
+      const brief = await loadBrief("foo", repo);
+      const sched = new Scheduler({
+        runFactory: () => ({ promise: Promise.resolve({ status: "succeeded" as const }) }),
+        runStore: store,
+        inputsDir: path.join(repo, "inputs"),
+        repoRoot: repo,
+        maxConcurrent: 1,
+        maxFailures: 0,
+        cleanlinessRunner: fakeRunner({
+          "foo.md": { stdout: "" },
+          "bar.md": { stdout: "?? inputs/bar.md\n" },
+        }),
+      });
+      const d = await sched.decide(brief);
+      expect(d.action).toBe("skip");
+      if (d.action === "skip") {
+        expect(d.reason).toBe("unclean");
+        expect(d.detail).toBe("bar (??)");
+      }
+    } finally {
+      await store.close();
+    }
+  });
+
+  it("clean brief falls through to state-based dispatch", async () => {
+    const repo = await makeRepo();
+    await writeBrief(repo, "active", "foo");
+    const store = await freshStore();
+    try {
+      const brief = await loadBrief("foo", repo);
+      const sched = new Scheduler({
+        runFactory: () => ({ promise: Promise.resolve({ status: "succeeded" as const }) }),
+        runStore: store,
+        inputsDir: path.join(repo, "inputs"),
+        repoRoot: repo,
+        maxConcurrent: 1,
+        maxFailures: 0,
+        cleanlinessRunner: fakeRunner({ "foo.md": { stdout: "" } }),
+      });
+      const d = await sched.decide(brief);
+      expect(d.action).toBe("schedule");
+    } finally {
+      await store.close();
+    }
+  });
+
+  it("disabled gate falls through and emits one-time warning", async () => {
+    const repo = await makeRepo();
+    await writeBrief(repo, "active", "foo");
+    await writeBrief(repo, "active", "bar");
+    const store = await freshStore();
+    try {
+      const briefFoo = await loadBrief("foo", repo);
+      const briefBar = await loadBrief("bar", repo);
+      let warned = 0;
+      const sched = new Scheduler({
+        runFactory: () => ({ promise: Promise.resolve({ status: "succeeded" as const }) }),
+        runStore: store,
+        inputsDir: path.join(repo, "inputs"),
+        repoRoot: repo,
+        maxConcurrent: 2,
+        maxFailures: 0,
+        cleanlinessRunner: async () => ({
+          stdout: "",
+          stderr: "fatal: not a git repository\n",
+          exitCode: 128,
+        }),
+        onCleanlinessDisabled: () => {
+          warned += 1;
+        },
+      });
+      const d1 = await sched.decide(briefFoo);
+      expect(d1.action).toBe("schedule");
+      const d2 = await sched.decide(briefBar);
+      expect(d2.action).toBe("schedule");
+      expect(warned).toBe(1);
+    } finally {
+      await store.close();
+    }
+  });
+
+  it("in-flight precedence: unclean brief already in-flight surfaces as in-flight", async () => {
+    const repo = await makeRepo();
+    await writeBrief(repo, "active", "foo");
+    const store = await freshStore();
+    try {
+      const brief = await loadBrief("foo", repo);
+      const ctrl = makeControllableRunFactory();
+      const sched = new Scheduler({
+        runFactory: ctrl.factory,
+        runStore: store,
+        inputsDir: path.join(repo, "inputs"),
+        repoRoot: repo,
+        maxConcurrent: 2,
+        maxFailures: 0,
+        cleanlinessRunner: fakeRunner({ "foo.md": { stdout: "?? inputs/foo.md\n" } }),
+      });
+      sched.start(brief);
+      const d = await sched.decide(brief);
+      expect(d.action).toBe("skip");
+      if (d.action === "skip") expect(d.reason).toBe("in-flight");
+      ctrl.resolveLatest();
+      await sched.drain();
+    } finally {
+      await store.close();
+    }
+  });
+
+  it("filtered precedence: unclean brief that does not match filter surfaces as filtered", async () => {
+    const repo = await makeRepo();
+    await writeBrief(repo, "active", "chore-baz");
+    const store = await freshStore();
+    try {
+      const brief = await loadBrief("chore-baz", repo);
+      const sched = new Scheduler({
+        runFactory: () => ({ promise: Promise.resolve({ status: "succeeded" as const }) }),
+        runStore: store,
+        inputsDir: path.join(repo, "inputs"),
+        repoRoot: repo,
+        maxConcurrent: 1,
+        maxFailures: 0,
+        cleanlinessRunner: fakeRunner({ "chore-baz.md": { stdout: "?? inputs/chore-baz.md\n" } }),
+      });
+      const d = await sched.decide(brief, parseAutorunFilter("feat-*"));
+      expect(d.action).toBe("skip");
+      if (d.action === "skip") expect(d.reason).toBe("filtered");
+    } finally {
+      await store.close();
+    }
+  });
+
+  it("cycle in depends_on surfaces as blocked, not unclean", async () => {
+    const repo = await makeRepo();
+    await writeBrief(repo, "active", "a", ["b"]);
+    await writeBrief(repo, "active", "b", ["a"]);
+    const store = await freshStore();
+    try {
+      const brief = await loadBrief("a", repo);
+      const sched = new Scheduler({
+        runFactory: () => ({ promise: Promise.resolve({ status: "succeeded" as const }) }),
+        runStore: store,
+        inputsDir: path.join(repo, "inputs"),
+        repoRoot: repo,
+        maxConcurrent: 1,
+        maxFailures: 0,
+        // Both briefs are reported clean so the cycle has to come from the
+        // recursive walk, not from cleanliness.
+        cleanlinessRunner: fakeRunner({ "a.md": { stdout: "" }, "b.md": { stdout: "" } }),
+      });
+      const d = await sched.decide(brief);
+      expect(d.action).toBe("skip");
+      if (d.action === "skip") {
+        expect(d.reason).toBe("blocked");
+        expect(d.detail).toMatch(/^cycle:/);
+      }
+    } finally {
+      await store.close();
+    }
+  });
+});

@@ -12,10 +12,21 @@ export class GitError extends Error {
   }
 }
 
-interface GitResult {
+export interface GitResult {
   stdout: string;
   stderr: string;
   exitCode: number | null;
+}
+
+/**
+ * Spawn `git` with the given args in `cwd` and return the captured output.
+ * Never throws; non-zero exits and spawn errors surface in the returned
+ * struct so callers can branch on `exitCode`. Shared with
+ * `src/brief/cleanliness.ts` so the cleanliness probe reuses the same
+ * git-subprocess shape as the rest of the worktree code.
+ */
+export function runGit(cwd: string, args: readonly string[]): Promise<GitResult> {
+  return run(cwd, args);
 }
 
 function run(cwd: string, args: readonly string[]): Promise<GitResult> {

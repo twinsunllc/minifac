@@ -91,6 +91,16 @@ invocations use. It relies on the mark-done post-step to move
 processed briefs from `inputs/` to `inputs/done/`, which removes them
 from the next poll's candidate set without further coordination.
 
+Briefs are expected to be **committed** before autorun picks them
+up. The run worktree is cut from the committed tip, so an uncommitted
+brief would be invisible to the runner even though the operator just
+saved it. Autorun's [[Auto-Mode]] *cleanliness gate* enforces this:
+an untracked, modified, or staged brief (or one whose `depends_on`
+ancestor is in that state) is skipped with `reason=unclean` until
+the operator commits or stashes. Manual `minifac run` keeps the
+dogfood-before-commit loop with a warn-and-pause; see
+`docs/decisions/0033-Brief-Cleanliness-Gate.md`.
+
 Under autorun, "done" implies "merged onto the configured base
 branch", not just "factory finished". The autorun wrapper inserts a
 merge step between factory success and mark-done (see [[Run]] →

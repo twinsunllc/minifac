@@ -1,3 +1,8 @@
+import {
+  type AncestorCleanlinessResult,
+  type GitStatusRunner,
+  checkBriefAndAncestorsCleanliness,
+} from "../brief/cleanliness.js";
 import type { Brief } from "../brief/loader.js";
 import { BriefCycleError, computeBriefState } from "../brief/state.js";
 import type { RunStatus, RunStore } from "../storage/run-store.js";
@@ -12,7 +17,8 @@ export type SkipReason =
   | "in-flight"
   | "running-elsewhere"
   | "activity-succeeded"
-  | "done";
+  | "done"
+  | "unclean";
 
 /** Probe the per-change lockfile to classify a row that says `running` as
  *  either a real in-flight run (some live PID still holds the lock) or an
@@ -99,6 +105,13 @@ export interface SchedulerDeps {
   /** Override `Date.now()` for tests that need a deterministic
    *  `ended_at` value when reconciling an orphan. */
   now?: () => number;
+  /** Inject a git status runner for the cleanliness probe (tests). */
+  cleanlinessRunner?: GitStatusRunner;
+  /** Invoked exactly once per scheduler instance, the first time the
+   *  cleanliness probe reports the working tree is not a git repo.
+   *  Per `auto-mode` capability, "Disabled gate emits one-time startup
+   *  warning". */
+  onCleanlinessDisabled?: () => void;
 }
 
 interface InFlightEntry {
@@ -118,6 +131,13 @@ export class Scheduler {
   private readonly failureCounts = new Map<string, number>();
   private readonly maxFailures: number;
   private killedAny = false;
+  /** Tracks whether the cleanliness probe's "disabled" warning has
+   *  already fired. The warning fires once per scheduler instance. */
+  private disabledWarned = false;
+  /** Latch: once the cleanliness probe reports `disabled`, subsequent
+   *  decides skip the probe entirely. Re-spawning git on every decide
+   *  is wasteful when we already know the working tree isn't a repo. */
+  private cleanlinessDisabled = false;
 
   constructor(deps: SchedulerDeps) {
     this.deps = deps;
@@ -144,6 +164,51 @@ export class Scheduler {
     }
     if (filter && !filter.match(change)) {
       return { action: "skip", reason: "filtered", brief };
+    }
+
+    // Cleanliness gate — runs BEFORE `computeBriefState` so the scheduler
+    // never reads brief state from an in-flux file. See `auto-mode`
+    // capability, "Autorun brief cleanliness gate". Cycles are NOT
+    // surfaced as `unclean` here; they fall through to the existing
+    // state-machine path which converts BriefCycleError to `blocked`.
+    // Skip the probe entirely once we've latched the disabled state —
+    // spawning git per-decide is wasteful in a non-repo cwd.
+    let cleanliness: AncestorCleanlinessResult | undefined;
+    if (this.cleanlinessDisabled) {
+      cleanliness = { status: "disabled" };
+    } else {
+      try {
+        cleanliness = await checkBriefAndAncestorsCleanliness(brief, {
+          inputsDir: this.deps.inputsDir,
+          repoRoot: this.deps.repoRoot,
+          loadBrief: async (c: string) => {
+            if (c === change) return brief;
+            const { loadBrief } = await import("../brief/loader.js");
+            return loadBrief(c, this.deps.repoRoot);
+          },
+          ...(this.deps.cleanlinessRunner ? { runner: this.deps.cleanlinessRunner } : {}),
+        });
+      } catch (err) {
+        if (!(err instanceof BriefCycleError)) throw err;
+        // Cycle → fall through to computeBriefState which raises the same
+        // error and yields `blocked` via the path below.
+      }
+    }
+    if (cleanliness) {
+      if (cleanliness.status === "disabled") {
+        this.cleanlinessDisabled = true;
+        if (!this.disabledWarned) {
+          this.disabledWarned = true;
+          this.deps.onCleanlinessDisabled?.();
+        }
+        // Fall through to the existing dispatch path.
+      } else if (cleanliness.status === "unclean") {
+        const detail =
+          cleanliness.offending === change
+            ? cleanliness.code
+            : `${cleanliness.offending} (${cleanliness.code})`;
+        return { action: "skip", reason: "unclean", brief, detail };
+      }
     }
 
     let state: Awaited<ReturnType<typeof computeBriefState>>;

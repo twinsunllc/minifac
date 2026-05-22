@@ -677,6 +677,174 @@ mode: in-place
     });
   });
 
+  describe("brief cleanliness gate (--require-clean and warn-pause)", () => {
+    const FAKE_STDIN_NON_TTY = { isTTY: false } as unknown as NodeJS.ReadableStream & {
+      isTTY?: boolean;
+    };
+    const FAKE_STDIN_TTY = { isTTY: true } as unknown as NodeJS.ReadableStream & {
+      isTTY?: boolean;
+    };
+
+    async function setupRepoWithBrief(): Promise<{ repo: string; briefPath: string }> {
+      const repo = await makeGitRepoFixture();
+      await writeFixture(repo, "examples/sdd.yaml", REQUIRED_FACTORY);
+      const briefPath = await writeFixture(
+        repo,
+        "inputs/foo.md",
+        `---\nchange: foo\nfactory: sdd\nmode: in-place\n---\nbody\n`,
+      );
+      return { repo, briefPath };
+    }
+
+    it("--require-clean exits 1 on an untracked brief", async () => {
+      const { repo } = await setupRepoWithBrief();
+      const out = new BufferStream();
+      const err = new BufferStream();
+      const code = await runCli(["run", "--in-place", "foo", "--require-clean"], {
+        stdout: out,
+        stderr: err,
+        stdin: FAKE_STDIN_NON_TTY,
+        runCwd: repo,
+        buildRegistry: fakeRegistry({}),
+      });
+      expect(code).toBe(1);
+      expect(err.text()).toMatch(
+        /error: brief inputs\/foo\.md is uncommitted \(\?\?\); commit it or drop --require-clean to proceed\./,
+      );
+      // Lockfile should not have been claimed (no in-progress lockfile under MINIFAC_HOME/locks).
+      expect(err.text()).not.toMatch(/\[run\] /);
+    });
+
+    it("no flag + unclean + non-TTY warns and proceeds immediately", async () => {
+      const { repo } = await setupRepoWithBrief();
+      const out = new BufferStream();
+      const err = new BufferStream();
+      const t0 = Date.now();
+      const code = await runCli(["run", "--in-place", "foo"], {
+        stdout: out,
+        stderr: err,
+        stdin: FAKE_STDIN_NON_TTY,
+        runCwd: repo,
+        buildRegistry: fakeRegistry({ a: [{ kind: "status", status: "succeeded" }] }),
+      });
+      const elapsed = Date.now() - t0;
+      expect(code).toBe(0);
+      expect(err.text()).toMatch(/warning: brief inputs\/foo\.md is uncommitted \(\?\?\)/);
+      expect(err.text()).toMatch(/proceed anyway in 3s/);
+      // Non-TTY ⇒ no pause: must be much faster than 3000ms.
+      expect(elapsed).toBeLessThan(2500);
+    });
+
+    it("no flag + unclean + TTY warns and pauses ~3s", async () => {
+      const { repo } = await setupRepoWithBrief();
+      const out = new BufferStream();
+      const err = new BufferStream();
+      const t0 = Date.now();
+      const code = await runCli(["run", "--in-place", "foo"], {
+        stdout: out,
+        stderr: err,
+        stdin: FAKE_STDIN_TTY,
+        runCwd: repo,
+        buildRegistry: fakeRegistry({ a: [{ kind: "status", status: "succeeded" }] }),
+      });
+      const elapsed = Date.now() - t0;
+      expect(code).toBe(0);
+      expect(err.text()).toMatch(/warning: brief inputs\/foo\.md is uncommitted \(\?\?\)/);
+      expect(elapsed).toBeGreaterThanOrEqual(2900);
+    }, 15000);
+
+    it("clean brief is unaffected (no warning, no pause)", async () => {
+      const { repo, briefPath } = await setupRepoWithBrief();
+      // Commit the brief so it is clean.
+      sh(repo, ["git", "add", briefPath]);
+      sh(repo, ["git", "commit", "-q", "-m", "add brief"]);
+      const out = new BufferStream();
+      const err = new BufferStream();
+      const t0 = Date.now();
+      const code = await runCli(["run", "--in-place", "foo"], {
+        stdout: out,
+        stderr: err,
+        stdin: FAKE_STDIN_TTY,
+        runCwd: repo,
+        buildRegistry: fakeRegistry({ a: [{ kind: "status", status: "succeeded" }] }),
+      });
+      const elapsed = Date.now() - t0;
+      expect(code).toBe(0);
+      expect(err.text()).not.toMatch(/uncommitted/);
+      // No pause for a clean brief, even with TTY stdin.
+      expect(elapsed).toBeLessThan(2500);
+    });
+
+    it("disabled gate (non-git cwd) is silent", async () => {
+      // makeFixtureDir is not a git repo, so the cleanliness probe returns disabled.
+      const dir = await makeFixtureDir();
+      await writeFixture(dir, "examples/sdd.yaml", REQUIRED_FACTORY);
+      await writeFixture(
+        dir,
+        "inputs/foo.md",
+        `---\nchange: foo\nfactory: sdd\nmode: in-place\n---\nbody\n`,
+      );
+      const out = new BufferStream();
+      const err = new BufferStream();
+      const code = await runCli(["run", "--in-place", "foo"], {
+        stdout: out,
+        stderr: err,
+        stdin: FAKE_STDIN_TTY,
+        runCwd: dir,
+        buildRegistry: fakeRegistry({ a: [{ kind: "status", status: "succeeded" }] }),
+      });
+      expect(code).toBe(0);
+      expect(err.text()).not.toMatch(/uncommitted/);
+    });
+
+    it("--require-clean on a brief-less factory invocation is a no-op", async () => {
+      const dir = await makeFixtureDir();
+      await writeFixture(dir, "examples/hello.yaml", NONE_FACTORY);
+      const out = new BufferStream();
+      const err = new BufferStream();
+      const code = await runCli(["run", "--in-place", "hello", "--require-clean"], {
+        stdout: out,
+        stderr: err,
+        stdin: FAKE_STDIN_NON_TTY,
+        runCwd: dir,
+        buildRegistry: fakeRegistry({ a: [{ kind: "status", status: "succeeded" }] }),
+      });
+      expect(code).toBe(0);
+      expect(err.text()).not.toMatch(/uncommitted/);
+    });
+
+    it("--require-clean on an unclean ancestor exits 1 naming the ancestor", async () => {
+      const repo = await makeGitRepoFixture();
+      await writeFixture(repo, "examples/sdd.yaml", REQUIRED_FACTORY);
+      // foo depends on bar; commit foo only, leaving bar untracked.
+      await writeFixture(
+        repo,
+        "inputs/foo.md",
+        `---\nchange: foo\nfactory: sdd\nmode: in-place\ndepends_on:\n  - bar\n---\n`,
+      );
+      await writeFixture(
+        repo,
+        "inputs/bar.md",
+        `---\nchange: bar\nfactory: sdd\nmode: in-place\n---\n`,
+      );
+      sh(repo, ["git", "add", path.join("inputs", "foo.md")]);
+      sh(repo, ["git", "commit", "-q", "-m", "foo depends on bar"]);
+      const out = new BufferStream();
+      const err = new BufferStream();
+      // --force needed because foo's deps gate would otherwise refuse
+      // before the cleanliness check fires (bar is active, not done).
+      const code = await runCli(["run", "--in-place", "foo", "--require-clean", "--force"], {
+        stdout: out,
+        stderr: err,
+        stdin: FAKE_STDIN_NON_TTY,
+        runCwd: repo,
+        buildRegistry: fakeRegistry({}),
+      });
+      expect(code).toBe(1);
+      expect(err.text()).toMatch(/inputs\/bar\.md is uncommitted/);
+    });
+  });
+
   describe("prune subcommand", () => {
     it("no flags prints a summary and exits 0", async () => {
       const dir = await makeFixtureDir();
