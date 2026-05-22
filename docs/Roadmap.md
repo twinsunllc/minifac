@@ -42,6 +42,28 @@ enforces this beyond explicit `depends_on` fields.
   findings in the dev `vite`/`esbuild` chain. Mostly mechanical;
   watch for the new default `threads` pool affecting
   isolation-sensitive tests.
+- [ ] **`node-outputs`** — [[0027-Node-Outputs]]. Per-node
+  `outputs:` declaration in factory schema, with three types
+  (`value`, `file`, `directory`); storage at
+  `~/.minifac/outputs/<run-id>/<node-id>/<iteration>/` outside
+  the worktree; post-execution validation with
+  `missing_required_output` failure reason; template
+  substitution via `{{ priorResults.<id>.outputs.<key> }}`;
+  CLI surfaces for inspection and pruning. v1 uses filesystem
+  JSON transport for `value` outputs. Unblocks fan-in shapes
+  like the proposed `code-review.yaml` example.
+- [ ] **`node-outputs-nudge`** — [[0028-Node-Outputs-Nudge]].
+  Single-turn recovery loop when required outputs missing
+  after a `succeeded` sentinel. Default budget 1, opt-out
+  with `output_nudge_budget: 0`. Sentinel-failed nodes never
+  nudged. `depends_on: [node-outputs]`.
+- [ ] **`node-outputs-mcp`** — [[0029-Node-Outputs-MCP]].
+  Replace filesystem-JSON transport for `value` outputs with
+  an inline MCP server exposing typed tools per declared
+  output. File / directory outputs stay filesystem.
+  Cross-executor story preserved via a `supportsMcp`
+  capability flag with filesystem fallback.
+  `depends_on: [node-outputs]`.
 - [ ] **`callback-status-signaling`** — [[0017-Callback-Status-Signaling]].
   Opt-in HTTP endpoint per node for bidirectional comms. Unblocks
   mid-run human-in-the-loop and the future [[Studio]] chat surface.
