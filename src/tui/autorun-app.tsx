@@ -110,7 +110,7 @@ function EmptyRunHint(): ReactElement {
   );
 }
 
-function AutorunHotkeyInput({
+export function AutorunHotkeyInput({
   state,
   handlers,
   inFlight,
