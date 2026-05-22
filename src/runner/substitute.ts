@@ -4,7 +4,11 @@ const TOKEN_REGEX = /\{\{\s*(brief|run|inputs)\.([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}/
 
 export interface Substitutions {
   brief?: Brief;
-  run?: { cwd: string };
+  /** Run-scope token namespace. Fields are individually optional — set the
+   * ones the caller actually has in scope. Tokens whose corresponding
+   * field is absent pass through verbatim (matching the `brief.*`
+   * convention). */
+  run?: { cwd?: string; base_branch?: string };
   /** Per-node inputs map produced at step inlining time. Absent on inline
    * nodes (never inlined from a step). When absent, `{{ inputs.* }}`
    * tokens pass through verbatim. */
@@ -59,7 +63,12 @@ function substituteOnce(input: string, subs: Substitutions): string {
     if (ns === "run") {
       const run = subs.run;
       if (!run) return match;
-      if (field === "cwd") return run.cwd;
+      if (field === "cwd") {
+        return run.cwd ?? match;
+      }
+      if (field === "base_branch") {
+        return run.base_branch ?? match;
+      }
       return match;
     }
     if (ns === "inputs") {

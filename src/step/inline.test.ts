@@ -43,7 +43,7 @@ with:
       callerCwd: repo,
     });
     expect(out.executor).toBe("claude");
-    expect(out.with).toEqual({ prompt: "Hello {{ inputs.who }}" });
+    expect(out.with).toEqual({ prompt: "Hello world" });
     expect((out as { uses?: unknown }).uses).toBeUndefined();
     expect((out as { inputs?: unknown }).inputs).toBeUndefined();
     expect(getInlinedInputs(out)).toEqual({ who: "world" });
@@ -248,7 +248,7 @@ with: { prompt: hi }
     ).rejects.toThrowError(/weather/);
   });
 
-  it("preserves brief/run tokens verbatim in input values", async () => {
+  it("substitutes inputs at inline time, leaving brief/run tokens for dispatch", async () => {
     const repo = await makeRepo();
     await writeStep(
       repo,
@@ -270,7 +270,7 @@ with:
     });
     const ins = getInlinedInputs(out);
     expect(ins?.change).toBe("{{ brief.change }}");
-    expect((out.with as Record<string, unknown>).prompt).toBe("Change: {{ inputs.change }}");
+    expect((out.with as Record<string, unknown>).prompt).toBe("Change: {{ brief.change }}");
   });
 
   it("surfaces missing step file as FactoryLoadError", async () => {

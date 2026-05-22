@@ -26,10 +26,11 @@ describe("examples/sdd.yaml resolved snapshot", () => {
     expect(factory.name).toBe("sdd");
     expect(factory.brief).toBe("required");
 
-    const ids = ["propose", "apply", "verify", "archive"] as const;
-    expect(Object.keys(factory.nodes).sort()).toEqual([...ids].sort());
+    const claudeIds = ["propose", "apply", "verify", "archive"] as const;
+    const allIds = [...claudeIds, "check-merge"] as const;
+    expect(Object.keys(factory.nodes).sort()).toEqual([...allIds].sort());
 
-    for (const id of ids) {
+    for (const id of claudeIds) {
       const node = factory.nodes[id];
       expect(node).toBeDefined();
       expect(node?.executor).toBe("claude");
@@ -40,7 +41,17 @@ describe("examples/sdd.yaml resolved snapshot", () => {
       expect(typeof (node?.with as { prompt: unknown }).prompt).toBe("string");
     }
 
-    expect(factory.nodes.archive?.terminal).toBe(true);
+    const checkMerge = factory.nodes["check-merge"];
+    expect(checkMerge).toBeDefined();
+    expect(checkMerge?.executor).toBe("check-merge");
+    expect(checkMerge?.cwd).toBe("{{ run.cwd }}");
+    expect(checkMerge?.terminal).toBe(true);
+    expect(checkMerge?.with).toEqual({
+      base: "{{ run.base_branch }}",
+      mode: "any-merge",
+    });
+
+    expect(factory.nodes.archive?.terminal).toBe(false);
     for (const id of ["propose", "apply", "verify"] as const) {
       expect(factory.nodes[id]?.terminal).toBe(false);
     }
@@ -74,24 +85,27 @@ describe("examples/sdd.yaml resolved snapshot", () => {
         "apply->verify:on_success",
         "verify->archive:on_success",
         "verify->apply:on_failure@3",
+        "archive->check-merge:on_success",
       ].sort(),
     );
 
     // Spot-check prompt body landmarks (whitespace-normalized).
+    // `{{ inputs.* }}` tokens are folded in at inline time; `{{ brief.* }}`
+    // tokens survive for the runner to resolve at dispatch.
     expect(norm(factory.nodes.propose?.with?.prompt as string)).toContain(
-      "Run `openspec new change {{ inputs.change }}`",
+      "Run `openspec new change {{ brief.change }}`",
     );
     expect(norm(factory.nodes.apply?.with?.prompt as string)).toContain(
-      "Read `openspec/changes/{{ inputs.change }}/tasks.md`",
+      "Read `openspec/changes/{{ brief.change }}/tasks.md`",
     );
     expect(norm(factory.nodes.verify?.with?.prompt as string)).toContain(
-      "openspec validate {{ inputs.change }}",
+      "openspec validate {{ brief.change }}",
     );
     expect(norm(factory.nodes.archive?.with?.prompt as string)).toContain(
-      "Run `openspec archive {{ inputs.change }} --yes`",
+      "Run `openspec archive {{ brief.change }} --yes`",
     );
     expect(norm(factory.nodes.archive?.with?.prompt as string)).toContain(
-      "Archive: {{ inputs.change }}",
+      "Archive: {{ brief.change }}",
     );
   });
 });

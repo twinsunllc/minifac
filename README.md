@@ -107,6 +107,9 @@ nodes:
     uses: minifac:openspec-archive
     inputs: { change: "{{ brief.change }}" }
     cwd: "{{ run.cwd }}"
+  check-merge:
+    uses: minifac:check-merge
+    cwd: "{{ run.cwd }}"
     terminal: true
 
 edges:
@@ -114,6 +117,7 @@ edges:
   - { from: apply,   to: verify }
   - { from: verify,  to: archive }
   - { from: verify,  to: apply, when: on_failure, max_traversals: 3 }
+  - { from: archive, to: check-merge }
 ```
 
 You mostly won't write factories. The bundled `sdd` factory

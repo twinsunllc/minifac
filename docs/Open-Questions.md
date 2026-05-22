@@ -129,18 +129,23 @@ sentinel-fallback path; the callback covers the active surface.
 **Question:** How does a factory express "if the merge check
 fails, cycle back through `apply` with the conflict context so the
 model can resolve it"?
-**Trigger:** Auto-merge halt-mode (see [[autorun-auto-merge]] and
-[[check-merge-step]]) bites often enough in unattended sessions
-that the operator wants the factory to self-heal trivial conflicts
-without intervention.
+**Trigger:** Auto-merge halt-mode (see [[autorun-auto-merge]]) bites
+often enough in unattended sessions that the operator wants the
+factory to self-heal trivial conflicts without intervention.
+**Status:** The probe prerequisite is satisfied — `minifac:check-merge`
+ships as a built-in (see the `check-merge-step` capability spec)
+and exits non-zero on conflict, so factories MAY already wire an
+`on_failure` edge from a `check-merge` node back to `apply`. The
+remaining gate is **structured node-outputs**: a blind retry
+without conflict context (file list, hunks, base SHA) burns cycles
+guessing. The shipped SDD factory therefore declines to declare
+such an edge in v0; that decision flips when node-outputs
+([[0027-Node-Outputs]] et al.) is mature enough to carry
+conflict context between iterations.
 **Likely shape:** No new `when:` value (we rejected
 `on_merge_conflict` as overfit — adding a keyword per failure mode
-is a bad precedent). Instead, `minifac:check-merge` exits non-zero
-on conflict, the existing `on_failure` edge routes back to
-`apply` as a cycle, and the conflict context (file list, hunks,
-base SHA) flows through node outputs ([[0027-Node-Outputs]] et al.)
-so the retried `apply` knows what to fix. Blocked on node-outputs
-maturity — a blind retry without conflict context isn't useful.
+is a bad precedent). The conflict context flows through node
+outputs so the retried `apply` knows what to fix.
 
 ## Concurrency & queueing
 

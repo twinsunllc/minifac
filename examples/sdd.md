@@ -11,7 +11,7 @@ topology file that wires brief data into each step via `uses:` +
 choice.
 
 ```
-propose ──▶ apply ──▶ verify ──▶ archive (terminal)
+propose ──▶ apply ──▶ verify ──▶ archive ──▶ check-merge (terminal)
               ▲           │
               └── on_failure
                   (max_traversals: 3)
@@ -225,6 +225,9 @@ holds. The binding version lives in
 ### archive
 
 - **Inputs:** full prior run via `ctx.history`.
+
+  (No longer terminal — on success the factory routes to
+  `check-merge`.)
 - **Invokes (in strict order):**
   1. `openspec archive {{ brief.change }}`.
   2. If and only if step 1 exited 0, `git add -A` followed by
@@ -243,8 +246,8 @@ holds. The binding version lives in
 - **Does not invoke:** `git push`. The factory never pushes; that is
   a human decision.
 - **Success criterion:** both `openspec archive {{ brief.change }}`
-  and the subsequent `git commit` exit 0. This is the terminal
-  node — success ends the run.
+  and the subsequent `git commit` exit 0. Success routes to
+  `check-merge`.
 - **Failure criterion:** either step exits non-zero. The failure
   description should name which step (`openspec archive` or
   `git commit`) failed, and the relevant error. The failure path
@@ -253,6 +256,31 @@ holds. The binding version lives in
   rejection at this stage is a human concern — there is no
   `on_failure` edge from `archive` and adding one would be the
   wrong fix.
+
+### check-merge
+
+- **Inputs:** the run's resolved `cwd` (the worktree) and base
+  branch (`{{ run.base_branch }}`, supplied by the runner). No
+  prompt.
+- **Executor:** `check-merge` (the bundled built-in registered
+  alongside `claude`).
+- **Probes:** whether merging the worktree's `HEAD` onto its
+  configured base branch would conflict. The probe is read-only;
+  the worktree is byte-for-byte unchanged after it runs (see
+  the `check-merge-step` capability spec).
+- **Success criterion:** the merge would auto-resolve cleanly
+  under `mode: "any-merge"` (the default in the shipped step).
+  The run ends with status `succeeded` — the change is
+  archived AND mergeable.
+- **Failure criterion:** the merge would conflict, the base
+  branch is missing, or `with.base` resolved to the empty
+  string. The run ends with status `failed`; the brief stays
+  at `inputs/<change>.md` so the operator can resolve the
+  divergence and re-run. (Auto-merge follow-on is filed under
+  [[autorun-auto-merge]]; the cycle-on-conflict edge story is
+  filed in `docs/Open-Questions.md`.) `check-merge` is the
+  sole terminal node — there is no `on_failure` edge out of
+  it in v0.
 
 ## Status signaling
 
@@ -363,11 +391,12 @@ substitution inside any node `with.prompt`:
 | `{{ brief.base_branch }}` | brief frontmatter `base_branch:` (empty when absent) |
 | `{{ brief.model }}`       | brief frontmatter `model:` (empty when absent)       |
 
-The runner also resolves the `run.*` namespace. v0 ships one field:
+The runner also resolves the `run.*` namespace:
 
-| Token             | Source                                                 |
-|-------------------|--------------------------------------------------------|
-| `{{ run.cwd }}`   | the worktree path (or `process.cwd()` under `--in-place`) |
+| Token                    | Source                                                                          |
+|--------------------------|---------------------------------------------------------------------------------|
+| `{{ run.cwd }}`          | the worktree path (or `process.cwd()` under `--in-place`)                       |
+| `{{ run.base_branch }}`  | the branch the worktree was created from (empty string under `--in-place`)      |
 
 Substitution applies to both `with.prompt` AND `cwd`. Unknown
 identifiers under any known namespace pass through verbatim (no

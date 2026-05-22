@@ -73,9 +73,12 @@ Recognized namespaces:
   fields: `change`, `body`, `factory`, `base_branch`, `model`. Optional
   fields substitute the empty string when absent; unknown identifiers
   pass through verbatim.
-- `run.*` — sourced from the [[Run]]. Today the only resolved field is
-  `run.cwd`, which expands to the path of the [[Worktree]] minifac
-  created for this run (or `process.cwd()` under `--in-place`).
+- `run.*` — sourced from the [[Run]]. v0 fields:
+  - `run.cwd` — the path of the [[Worktree]] minifac created for this
+    run (or `process.cwd()` under `--in-place`).
+  - `run.base_branch` — the branch the worktree was created from
+    (empty string under `--in-place` or for brief-less runs). Useful
+    as the default for `minifac:check-merge`'s `base` input.
 - `inputs.*` — sourced from the per-node inputs map produced by step
   inlining. Only present on nodes that were inlined from a [[Step]] via
   `uses:`. Strings substitute verbatim; numbers/booleans via
@@ -87,6 +90,34 @@ Recognized namespaces:
 Tokens with no resolvable value in the current run pass through
 verbatim — the executor sees the literal string. Substitution applies
 to **both** `with.prompt` and `cwd`; other node fields are not touched.
+
+## Bundled built-in steps
+
+minifac ships a small library of built-in steps under
+`examples/steps/` that any factory can reference via
+`uses: minifac:<name>`:
+
+- `minifac:openspec-propose` / `minifac:openspec-apply` /
+  `minifac:openspec-verify` / `minifac:openspec-archive` — the
+  four model-driven phases of the [[SDD-Loop]].
+- `minifac:check-merge` — a read-only mergeability probe. Checks
+  whether `HEAD` would merge cleanly onto a base branch (defaults
+  to `{{ run.base_branch }}`) and emits a `succeeded` / `failed`
+  status without modifying the worktree. Drop it anywhere in a
+  graph — before `apply` for fast-fail, after `archive` to gate
+  "done", or anywhere a factory wants a cheap "still mergeable?"
+  signal.
+
+  ```yaml
+  nodes:
+    check-merge:
+      uses: minifac:check-merge
+      cwd: "{{ run.cwd }}"
+      terminal: true
+  ```
+
+  The step is read-only and re-entrant; running it multiple times
+  in a single graph has no side effects beyond the probe itself.
 
 ## Composition
 

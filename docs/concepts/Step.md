@@ -92,6 +92,17 @@ step's behavior.
 - `{{ run.* }}` — fields from the [[Run]] (e.g. `run.cwd` for the
   [[Worktree]] path).
 
+## Bundled built-ins
+
+The shipped step library lives under `examples/steps/`. Today:
+
+- `minifac:openspec-propose`, `minifac:openspec-apply`,
+  `minifac:openspec-verify`, `minifac:openspec-archive` — the
+  four [[SDD-Loop]] phases.
+- `minifac:check-merge` — read-only mergeability probe (see
+  [[Factory]] § Bundled built-in steps for usage and the
+  `check-merge-step` capability spec for the contract).
+
 ## Inline behavior is still allowed
 
 Factories can still inline a node's behavior fully without using

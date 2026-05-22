@@ -21,6 +21,12 @@ export interface RunOptions {
    * whose `cwd` field is absent or resolves to the empty string, and
    * resolves the `{{ run.cwd }}` template token. */
   runCwd?: string;
+  /** Optional base branch the run's worktree was created from. Resolves the
+   * `{{ run.base_branch }}` template token. When the field is absent the
+   * token passes through verbatim; when supplied as the empty string the
+   * token substitutes the empty string (so executors can detect the
+   * "in-place / no base branch" case via their own `with:` validation). */
+  runBaseBranch?: string;
   /** Optional persistence backend. When supplied the runner records the run
    * row, every event, per-node executions, and the terminal status through
    * the store; when absent the runner behaves exactly as it does without
@@ -48,10 +54,15 @@ interface QueueItem {
 
 export async function runFactory(loaded: LoadedFactory, options: RunOptions): Promise<RunResult> {
   const { factory, sourceDir, sourcePath } = loaded;
-  const { registry, onEvent, brief, runCwd, store } = options;
+  const { registry, onEvent, brief, runCwd, runBaseBranch, store } = options;
   const subs: Substitutions = {};
   if (brief) subs.brief = brief;
-  if (runCwd !== undefined && runCwd.length > 0) subs.run = { cwd: runCwd };
+  const runScope: { cwd?: string; base_branch?: string } = {};
+  if (runCwd !== undefined && runCwd.length > 0) runScope.cwd = runCwd;
+  if (runBaseBranch !== undefined) runScope.base_branch = runBaseBranch;
+  if (runScope.cwd !== undefined || runScope.base_branch !== undefined) {
+    subs.run = runScope;
+  }
 
   const runStart = Date.now();
   const runId = options.runId ?? randomUUID();
@@ -213,16 +224,20 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
     if (inputsMap !== undefined) nodeSubs.inputs = inputsMap;
 
     let resolvedNode: ResolvedNode = { ...node, id: nodeId };
-    if (
-      (nodeSubs.brief || nodeSubs.run || nodeSubs.inputs) &&
-      node.with &&
-      typeof node.with.prompt === "string"
-    ) {
-      const substituted = substitute(node.with.prompt, nodeSubs);
-      resolvedNode = {
-        ...resolvedNode,
-        with: { ...node.with, prompt: substituted },
-      };
+    if ((nodeSubs.brief || nodeSubs.run || nodeSubs.inputs) && node.with) {
+      const nextWith: Record<string, unknown> = { ...node.with };
+      let changed = false;
+      if (typeof node.with.prompt === "string") {
+        nextWith.prompt = substitute(node.with.prompt, nodeSubs);
+        changed = true;
+      }
+      if (typeof node.with.base === "string") {
+        nextWith.base = substitute(node.with.base, nodeSubs);
+        changed = true;
+      }
+      if (changed) {
+        resolvedNode = { ...resolvedNode, with: nextWith };
+      }
     }
     const snapshot: readonly NodeResult[] = Object.freeze(priorResults.slice());
 

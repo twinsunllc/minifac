@@ -1,0 +1,36 @@
+name: check-merge
+version: "1.0.0"
+description: |
+  Read-only mergeability probe. Checks whether merging the current
+  worktree's HEAD onto a base branch would auto-resolve cleanly. The
+  worktree is byte-for-byte unchanged after the probe. Under
+  `mode: "any-merge"` (default) a fast-forward or clean merge-commit
+  passes; under `mode: "fast-forward"` only a fast-forward passes
+  (a merge-commit-required scenario fails). Conflicts always fail.
+  The `base` input defaults to `{{ run.base_branch }}` so a factory
+  invoked via `minifac run <change>` probes against the worktree's
+  configured base without per-node config.
+
+inputs:
+  base:
+    type: string
+    required: false
+    default: "{{ run.base_branch }}"
+    description: |
+      The branch (or ref) to probe a merge against. When omitted,
+      defaults to `{{ run.base_branch }}` — the branch the run's
+      worktree was created from. Set explicitly when running outside
+      a worktree (e.g. `--in-place`).
+  mode:
+    type: string
+    required: false
+    default: "any-merge"
+    description: |
+      One of `any-merge` (default — fast-forward or clean merge-commit
+      passes) or `fast-forward` (only a fast-forward passes; a
+      merge-commit-required scenario fails).
+
+executor: check-merge
+with:
+  base: "{{ inputs.base }}"
+  mode: "{{ inputs.mode }}"
