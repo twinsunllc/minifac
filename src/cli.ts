@@ -23,6 +23,7 @@ import {
   showAction as runsShowAction,
 } from "./cli/runs.js";
 import { stepsAction } from "./cli/steps.js";
+import { CheckMergeExecutor } from "./executor/check-merge.js";
 import { ClaudeExecutor } from "./executor/claude.js";
 import { ExecutorRegistry } from "./executor/registry.js";
 import type { EmittedEvent } from "./executor/types.js";
@@ -35,7 +36,7 @@ import type { RunStore } from "./storage/run-store.js";
 import type { createInkAutorunRenderer } from "./tui/autorun-renderer.js";
 import { type InkRunRenderer, createInkRunRenderer } from "./tui/renderer.js";
 import { WorktreeConfigError, loadWorktreeConfig } from "./worktree/config.js";
-import { GitError, gitRevParseHead, gitWorktreeAdd } from "./worktree/git.js";
+import { GitError, gitDefaultBranch, gitRevParseHead, gitWorktreeAdd } from "./worktree/git.js";
 import { appendFailedRun } from "./worktree/journal.js";
 import { type LockHandle, LockHeldError, claimLock } from "./worktree/lock.js";
 import {
@@ -71,6 +72,7 @@ export interface CliIO {
 function defaultRegistry(): ExecutorRegistry {
   const reg = new ExecutorRegistry();
   reg.register(new ClaudeExecutor());
+  reg.register(new CheckMergeExecutor());
   return reg;
 }
 
@@ -312,6 +314,7 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
             throw err;
           }
 
+          let runBaseBranch = "";
           if (inPlace) {
             runCwd = cwd;
           } else {
@@ -319,6 +322,7 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
             let baseRev: string;
             if (brief?.frontmatter.base_branch && brief.frontmatter.base_branch.length > 0) {
               baseRev = brief.frontmatter.base_branch;
+              runBaseBranch = brief.frontmatter.base_branch;
             } else {
               try {
                 baseRev = await gitRevParseHead(cwd);
@@ -326,6 +330,10 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
                 io.stderr.write(`Could not resolve HEAD in ${cwd}: ${(err as Error).message}\n`);
                 exitCode = 1;
                 return;
+              }
+              const defaultBranch = await gitDefaultBranch(cwd).catch(() => undefined);
+              if (defaultBranch && defaultBranch.length > 0) {
+                runBaseBranch = defaultBranch;
               }
             }
             try {
@@ -389,6 +397,7 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
             registry,
             brief,
             runCwd,
+            runBaseBranch,
             store,
             runId,
             branchName: inPlace ? undefined : branchName,

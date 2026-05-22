@@ -1,13 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import type { Brief } from "../brief/loader.js";
+import { CheckMergeExecutor } from "../executor/check-merge.js";
 import { ClaudeExecutor } from "../executor/claude.js";
 import { ExecutorRegistry } from "../executor/registry.js";
 import { type LoadedFactory, loadFactory } from "../factory/loader.js";
 import { runFactory } from "../runner/run.js";
 import type { RunStore } from "../storage/run-store.js";
 import { loadWorktreeConfig } from "../worktree/config.js";
-import { gitRevParseHead, gitWorktreeAdd } from "../worktree/git.js";
+import { gitDefaultBranch, gitRevParseHead, gitWorktreeAdd } from "../worktree/git.js";
 import { appendFailedRun } from "../worktree/journal.js";
 import { type LockHandle, LockHeldError, claimLock } from "../worktree/lock.js";
 import {
@@ -47,6 +48,7 @@ export interface RunBriefAutomatedResult {
 function defaultRegistry(): ExecutorRegistry {
   const reg = new ExecutorRegistry();
   reg.register(new ClaudeExecutor());
+  reg.register(new CheckMergeExecutor());
   return reg;
 }
 
@@ -115,6 +117,7 @@ export async function runBriefAutomated(
   }
 
   let runCwd: string;
+  let runBaseBranch = "";
   if (briefMode_inPlace) {
     runCwd = cwd;
   } else {
@@ -122,12 +125,17 @@ export async function runBriefAutomated(
     let baseRev: string;
     if (brief.frontmatter.base_branch && brief.frontmatter.base_branch.length > 0) {
       baseRev = brief.frontmatter.base_branch;
+      runBaseBranch = brief.frontmatter.base_branch;
     } else {
       try {
         baseRev = await gitRevParseHead(cwd);
       } catch (err) {
         await lock.release().catch(() => undefined);
         return { status: "failed", runId, reason: `git rev-parse: ${(err as Error).message}` };
+      }
+      const defaultBranch = await gitDefaultBranch(cwd).catch(() => undefined);
+      if (defaultBranch && defaultBranch.length > 0) {
+        runBaseBranch = defaultBranch;
       }
     }
     try {
@@ -146,6 +154,7 @@ export async function runBriefAutomated(
       registry,
       brief,
       runCwd,
+      runBaseBranch,
       ...(store ? { store } : {}),
       runId,
       ...(briefMode_inPlace ? {} : { branchName }),

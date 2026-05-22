@@ -115,6 +115,38 @@ describe("substitute (Substitutions record)", () => {
   it("leaves unknown namespaces verbatim", () => {
     expect(substitute("{{ env.HOME }}", { run: { cwd: "/x" } })).toBe("{{ env.HOME }}");
   });
+
+  it("substitutes {{ run.base_branch }} in with.base equivalent string", () => {
+    expect(substitute("base={{ run.base_branch }}", { run: { base_branch: "main" } })).toBe(
+      "base=main",
+    );
+  });
+
+  it("substitutes {{ run.base_branch }} inside with.prompt", () => {
+    expect(
+      substitute("Probing against {{ run.base_branch }}.", { run: { base_branch: "develop" } }),
+    ).toBe("Probing against develop.");
+  });
+
+  it("substitutes empty string when runBaseBranch is empty string", () => {
+    expect(substitute("base=[{{ run.base_branch }}]", { run: { base_branch: "" } })).toBe(
+      "base=[]",
+    );
+  });
+
+  it("passes through verbatim when runBaseBranch is not in scope", () => {
+    expect(substitute("base={{ run.base_branch }}", {})).toBe("base={{ run.base_branch }}");
+    // run.cwd in scope but base_branch absent → base_branch token stays verbatim.
+    expect(substitute("base={{ run.base_branch }}", { run: { cwd: "/wt" } })).toBe(
+      "base={{ run.base_branch }}",
+    );
+  });
+
+  it("leaves unknown run.* field verbatim even with both fields in scope", () => {
+    expect(substitute("id={{ run.id }}", { run: { cwd: "/wt", base_branch: "main" } })).toBe(
+      "id={{ run.id }}",
+    );
+  });
 });
 
 describe("substitute inputs namespace", () => {

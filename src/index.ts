@@ -2,6 +2,7 @@ export { loadFactory, type LoadedFactory } from "./factory/loader.js";
 export type { Factory, FactoryNode, FactoryEdge } from "./factory/schema.js";
 export { ExecutorRegistry } from "./executor/registry.js";
 export { ClaudeExecutor } from "./executor/claude.js";
+export { CheckMergeExecutor } from "./executor/check-merge.js";
 export type {
   NodeEvent,
   NodeExecutor,

@@ -18,17 +18,18 @@ describe("examples/sdd.yaml", () => {
     expect(factory.brief).toBe("required");
   });
 
-  it("resolved prompts use {{ inputs.* }} tokens and carry brief data via inputs map", async () => {
+  it("resolved prompts have inputs folded in and carry brief tokens for dispatch-time substitution", async () => {
     const { factory } = await loadFactory(sddPath, repoRoot);
     const propose = factory.nodes.propose?.with?.prompt as string;
-    expect(propose).toContain("{{ inputs.change }}");
-    expect(propose).toContain("{{ inputs.brief_body }}");
+    expect(propose).toContain("{{ brief.change }}");
+    expect(propose).toContain("{{ brief.body }}");
     for (const id of ["apply", "verify", "archive"] as const) {
       const p = factory.nodes[id]?.with?.prompt as string;
       expect(typeof p, `${id} prompt should be a string`).toBe("string");
-      expect(p, `${id} prompt should reference inputs.change`).toContain("{{ inputs.change }}");
+      expect(p, `${id} prompt should reference brief.change`).toContain("{{ brief.change }}");
     }
-    // brief data is threaded through the per-node inputs map.
+    // The resolved inputs map still records the original brief tokens so
+    // the dispatch-time pass can re-substitute when needed.
     for (const id of ["propose", "apply", "verify", "archive"] as const) {
       const node = factory.nodes[id];
       expect(node, `node ${id} should be defined`).toBeDefined();
@@ -38,9 +39,10 @@ describe("examples/sdd.yaml", () => {
     expect(getInlinedInputs(factory.nodes.propose as object)?.brief_body).toBe("{{ brief.body }}");
   });
 
-  it("no resolved prompt contains <CHANGE_NAME>, /path/to/target/repo, or MINIFAC_STATUS", async () => {
+  it("no resolved claude prompt contains <CHANGE_NAME>, /path/to/target/repo, or MINIFAC_STATUS", async () => {
     const { factory } = await loadFactory(sddPath, repoRoot);
     for (const [id, node] of Object.entries(factory.nodes)) {
+      if (node.executor !== "claude") continue;
       const p = node.with?.prompt;
       if (typeof p === "string") {
         expect(p, `${id} prompt should not contain <CHANGE_NAME>`).not.toContain("<CHANGE_NAME>");
@@ -52,17 +54,18 @@ describe("examples/sdd.yaml", () => {
     }
   });
 
-  it("declares exactly the four documented nodes", async () => {
+  it("declares exactly the five documented nodes with the right executor mix", async () => {
     const { factory } = await loadFactory(sddPath, repoRoot);
     expect(new Set(Object.keys(factory.nodes))).toEqual(
-      new Set(["propose", "apply", "verify", "archive"]),
+      new Set(["propose", "apply", "verify", "archive", "check-merge"]),
     );
-    for (const node of Object.values(factory.nodes)) {
-      expect(node.executor).toBe("claude");
+    for (const id of ["propose", "apply", "verify", "archive"] as const) {
+      expect(factory.nodes[id]?.executor, `${id} executor`).toBe("claude");
     }
+    expect(factory.nodes["check-merge"]?.executor).toBe("check-merge");
   });
 
-  it("declares exactly the four documented edges with correct when values", async () => {
+  it("declares exactly the five documented edges with correct when values", async () => {
     const { factory } = await loadFactory(sddPath, repoRoot);
     const edgeKeys = factory.edges.map((e) => `${e.from}->${e.to}:${e.when}`).sort();
     expect(edgeKeys).toEqual(
@@ -71,17 +74,38 @@ describe("examples/sdd.yaml", () => {
         "apply->verify:on_success",
         "verify->archive:on_success",
         "verify->apply:on_failure",
+        "archive->check-merge:on_success",
       ].sort(),
     );
   });
 
-  it("makes archive the sole terminal node", async () => {
+  it("makes check-merge the sole terminal node; archive is no longer terminal", async () => {
     const { factory } = await loadFactory(sddPath, repoRoot);
-    expect(factory.nodes.archive?.terminal).toBe(true);
+    expect(factory.nodes["check-merge"]?.terminal).toBe(true);
     for (const [id, node] of Object.entries(factory.nodes)) {
-      if (id !== "archive") {
-        expect(node.terminal).toBe(false);
+      if (id !== "check-merge") {
+        expect(node.terminal, `${id} terminal`).toBe(false);
       }
+    }
+  });
+
+  it("check-merge resolves to the default with values", async () => {
+    const { factory } = await loadFactory(sddPath, repoRoot);
+    const node = factory.nodes["check-merge"];
+    expect(node).toBeDefined();
+    expect(node?.with?.base).toBe("{{ run.base_branch }}");
+    expect(node?.with?.mode).toBe("any-merge");
+    expect(node?.cwd).toBe("{{ run.cwd }}");
+    const w = node?.with ?? {};
+    expect(w).not.toHaveProperty("permission_mode");
+    expect(w).not.toHaveProperty("allowed_tools");
+    expect(w).not.toHaveProperty("add_dirs");
+  });
+
+  it("no edge exits check-merge (no on_failure routing in v0)", async () => {
+    const { factory } = await loadFactory(sddPath, repoRoot);
+    for (const edge of factory.edges) {
+      expect(edge.from, "no edge should exit check-merge").not.toBe("check-merge");
     }
   });
 
@@ -158,7 +182,7 @@ describe("examples/sdd.yaml", () => {
 
   it('declares cwd: "{{ run.cwd }}" on every resolved node', async () => {
     const { factory } = await loadFactory(sddPath, repoRoot);
-    for (const id of ["propose", "apply", "verify", "archive"] as const) {
+    for (const id of ["propose", "apply", "verify", "archive", "check-merge"] as const) {
       const node = factory.nodes[id];
       expect(node, `node ${id} should be defined`).toBeDefined();
       expect(node?.cwd).toBe("{{ run.cwd }}");

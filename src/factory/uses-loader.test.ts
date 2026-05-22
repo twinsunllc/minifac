@@ -59,7 +59,7 @@ edges: []
     expect(node?.executor).toBe("claude");
     expect(node?.with).toEqual({
       permission_mode: "bypass_permissions",
-      prompt: "Propose {{ inputs.change }}",
+      prompt: "Propose foo",
     });
     expect((node as { uses?: unknown }).uses).toBeUndefined();
     expect((node as { inputs?: unknown }).inputs).toBeUndefined();
@@ -289,9 +289,7 @@ nodes:
     );
     const { factory } = await loadFactory(derived, repo);
     expect(factory.nodes.verify?.executor).toBe("claude");
-    expect((factory.nodes.verify?.with as { prompt: string }).prompt).toBe(
-      "Verify {{ inputs.change }}",
-    );
+    expect((factory.nodes.verify?.with as { prompt: string }).prompt).toBe("Verify foo");
     expect((factory.nodes.propose?.with as { prompt: string }).prompt).toBe("inline-propose");
   });
 

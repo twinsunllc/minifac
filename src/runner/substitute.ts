@@ -12,7 +12,11 @@ export const PRIOR_RESULTS_READ_CAP = 64 * 1024;
 
 export interface Substitutions {
   brief?: Brief;
-  run?: { cwd?: string; outputsDir?: string };
+  /** Run-scope token namespace. Fields are individually optional — set the
+   * ones the caller actually has in scope. Tokens whose corresponding
+   * field is absent pass through verbatim (matching the `brief.*`
+   * convention). */
+  run?: { cwd?: string; outputsDir?: string; base_branch?: string };
   /** Per-node inputs map produced at step inlining time. Absent on inline
    * nodes (never inlined from a step). When absent, `{{ inputs.* }}`
    * tokens pass through verbatim. */
@@ -63,6 +67,9 @@ function substituteOnce(input: string, subs: Substitutions): string {
       }
       if (field === "outputs_dir") {
         return run.outputsDir ?? match;
+      }
+      if (field === "base_branch") {
+        return run.base_branch ?? match;
       }
       return match;
     }
