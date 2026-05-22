@@ -5,15 +5,13 @@ defined in YAML, executed by a small daemon with a live web viewer.
 
 ## Why this exists
 
-Agent workflow tools today mostly split into two camps. The
-**conversational orchestrators** (gas-city / Gas Town in tmux,
-multi-pane Claude Code setups, etc.) are great for live
-human-in-the-loop work but don't leave you a structured artifact
-to replay, diff, or audit after the fact. The **visual graph
-builders** (n8n and friends) give you durable workflows but
-target click-to-configure non-developers, not repo-rooted
-engineering work. minifac picks a third position with three
-rules:
+There's a lot of good work in agent orchestration today — visual
+workflow builders for non-developers, programmatic graph
+frameworks for code-defined pipelines, declarative multi-agent
+platforms spanning whole domains. minifac picks a narrow,
+focused position: **structured, repo-rooted agent workflows
+scoped to a single codebase**, with a small core, plain naming,
+and spec-driven development from day one. Three rules:
 
 1. **Small core.** A graph runner, a streaming executor, a viewer. Nothing else
    is "core."

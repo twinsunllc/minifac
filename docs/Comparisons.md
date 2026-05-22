@@ -53,42 +53,55 @@ of LLM nodes. LangGraph Studio is its visual debugger.
   authored as markdown. Different mental models for "what's the
   unit of work."
 
-## vs. gas-city / Gas Town (tmux + Claude Code orchestration)
+## vs. Gas City
 
-[Gas Town / gas-city](https://sourcegraph.com/blog/revenge-of-the-junior-developer)
-(Steve Yegge's work) orchestrates multiple Claude Code sessions
-in tmux panes — each pane is a conversation; the human switches
-between them. It's an elegant and influential design for
-human-in-the-loop multi-agent work, and minifac borrows the
-intuition that the human's eye is the load-bearing piece in
-non-trivial agent orchestration.
+[Gas City](https://steve-yegge.medium.com/welcome-to-gas-city-57f564bb3607)
+is an MIT-licensed SDK for multi-agent autonomous orchestration —
+Steve Yegge's vision, built by Julian Knutsen and Chris Sells. It
+ships declarative "packs" of agent teams that run on the MEOW
+stack: [Beads](https://github.com/steveyegge/beads) for work
+items, [Dolt](https://github.com/dolthub/dolt) for git-versioned
+state. v1.0.0 released recently with an active community.
 
-**Where minifac picks differently:**
+Both projects converge on a surprising amount: declarative
+configuration of agent work, repo-rooted versioned state, audit
+trails, and treating individual agent invocations as composable
+building blocks rather than long-running sessions. Gas City uses
+Dolt; `dolt-adapter` is on minifac's deferred list. The shared
+intuitions are real.
 
-- Gas-city is **conversational**; minifac is **structured**.
-  Each minifac node is a one-shot invocation with typed input
-  ([[Brief]] + prior results) and typed output ([[Sentinel]] /
-  callback). Better for replay / audit; gives up the
-  steer-mid-stream affordance unless you opt into callbacks.
-- Gas-city is **human-attended by default**; minifac is
-  **unattended by default**. Auto-mode is the build farm;
-  mid-run human-in-the-loop is an explicit opt-in via the
-  callback transport. Different default makes sense for
-  different tasks.
-- Gas-city: **per-session state in tmux**. Minifac: per-run
-  state in [[Runs-DB]] (SQLite), surviving daemon restarts and
-  queryable across runs.
-- Gas-city: **tmux** as the orchestration substrate — leans on
-  it for visual layout and process supervision. Minifac:
-  HTTP daemon + web viewer (or one-shot CLI), no terminal
-  multiplexer in the contract. Trade-off, not a critique:
-  tmux gives you instant local visual orchestration without a
-  daemon; minifac's daemon model gets you the web viewer and
-  remote inspection.
+**Where the projects diverge:**
 
-Rough analogy: gas-city is "team chat with AI collaborators";
-minifac is "CI/CD with AI participants." Different shapes of
-problem; honest about which is which.
+- **Scope.** Gas City targets agent automation across *any*
+  business process — replacing low-end SaaS, running ops, light
+  and dark factories that span domains. minifac is narrower:
+  repo-rooted, code-focused, developer-tool work driven by SDD
+  loops on a single codebase. Gas City's broader scope is the
+  ambitious move; minifac's narrower scope is the focused move.
+- **Concurrency model.** Gas City "packs" have multiple
+  identity-bearing agents that can message each other and reach
+  consensus. minifac nodes run sequentially or via explicit
+  cycles, but they don't have inter-node identity or messaging
+  — each invocation is one-shot, structured input in /
+  structured output out.
+- **Naming style.** Gas City uses rich metaphor (packs,
+  formulas, shepherds, polecats, dark / light factories) —
+  ecosystem personality at the cost of newcomer ramp.
+  minifac names things after what they do (factory, node,
+  brief, run, executor) — flatter, more greppable, less
+  colorful. Different audiences will prefer different
+  defaults; we've picked ours.
+- **Substrate.** Gas City: MEOW + Beads + Dolt. minifac:
+  one TypeScript package + SQLite + HTTP daemon. Gas City gives
+  you more out of the box; minifac gives you fewer moving
+  parts.
+
+If you're building multi-agent autonomous operations across
+multiple business domains, Gas City is the more developed
+platform and the bigger community. If you're orchestrating a
+spec-driven development loop on a single repo with explicit
+human gate points, minifac fits closer to that grain. The two
+tools are more adjacent than competitive.
 
 ## vs. ticket-queue agent runners (Jira-coupled or similar)
 
@@ -149,10 +162,9 @@ where minifac would be the new entrant with the fewest integrations.
 The interesting paradigm is *chat anchored to a structured run* —
 postmortem ("why did this fail"), mid-run steering ("hey, also do
 X"), inspection ("walk me through what happened on the verify
-retry"). That surface is genuinely under-served by existing tools
-(LangSmith has run inspection but no chat; Cursor has chat but no
-structured run model; gas-city has chat but no structure to anchor
-to).
+retry"). That surface is under-served by existing tools — most
+tools sit on one side or the other (run inspection without chat,
+or chat without a durable structured run model to anchor to).
 
 Studio's likely v1 surface:
 - Run inspector (replay [[Runs-DB]] runs visually)

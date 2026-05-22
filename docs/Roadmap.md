@@ -16,10 +16,11 @@ why anyone else would care.
 
 The differentiation pitch — captured in [[Comparisons]] — is
 **structured, repo-rooted agent workflows with mid-run conversation
-support**. Not a visual workflow builder (that's n8n's space). Not
-a conversational orchestrator (that's gas-city's). Something in
-between: factories define structure, briefs supply intent,
-[[Studio]] eventually provides inspection + chat.
+support, scoped to a single codebase**. Not a visual workflow
+builder (that's n8n's space). Not a programmatic graph framework
+(LangGraph). Not a cross-domain multi-agent platform (that's the
+Gas City scope). Factories define structure, briefs supply
+intent, [[Studio]] eventually provides inspection + chat.
 
 ## In-flight
 
