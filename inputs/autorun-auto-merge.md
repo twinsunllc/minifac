@@ -1,6 +1,8 @@
 ---
 change: autorun-auto-merge
 factory: sdd
+depends_on:
+  - check-merge-step
 ---
 
 ## Background
