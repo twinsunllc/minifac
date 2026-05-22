@@ -10,7 +10,7 @@ describe("installRoot", () => {
     const pkgPath = path.join(root, "package.json");
     const raw = await readFile(pkgPath, "utf8");
     const pkg = JSON.parse(raw);
-    expect(pkg.name).toBe("minifac");
+    expect(pkg.name).toBe("@twinsunllc/minifac");
   });
 
   it("returns the cached value on subsequent calls without recomputing", () => {
