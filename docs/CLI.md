@@ -569,12 +569,19 @@ second signal always kills immediately even without `--force`.
 An `fs.watch` listener provides sub-interval wake-ups when new files appear;
 polling continues at `--interval` as a fallback.
 
+Per-session failure cap: after `--max-failures` consecutive failures
+of the same change (default `3`), autorun stops scheduling that change
+and emits `skipped reason=failure-cap`. The counter is purely
+in-memory — restart autorun to reset. Pass `--max-failures 0` to
+disable. See [[Auto-Mode]] for which failure reasons count.
+
 ### Options
 
 | Flag | Default | Description |
 |---|---|---|
 | `--watch <dir>` | `<cwd>/inputs` | Directory to poll for brief files |
 | `--max-concurrent <n>` | `1` | Maximum number of parallel runs |
+| `--max-failures <n>` | `3` | Per-session failure cap per change (consecutive failures). `0` disables the cap (legacy indefinite-retry behavior). Restart autorun to reset the counter |
 | `--interval <ms>` | `10000` | Poll cadence in milliseconds |
 | `--once` | off | Run a single poll cycle, wait for all dispatched runs, then exit |
 | `--filter <expr>` | (all) | Glob (e.g. `feat-*`) or `/regex/` matched against the brief's change name |

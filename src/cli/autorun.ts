@@ -30,6 +30,7 @@ export interface AutorunIO {
 export interface AutorunOptions {
   watch?: string;
   maxConcurrent?: number;
+  maxFailures?: number;
   interval?: number;
   once?: boolean;
   filter?: string;
@@ -67,6 +68,7 @@ export interface AutorunActionInput {
 interface ResolvedOptions {
   watch: string;
   maxConcurrent: number;
+  maxFailures: number;
   interval: number;
   once: boolean;
   filter: AutorunFilter | undefined;
@@ -124,6 +126,11 @@ function formatHuman(event: AutorunEvent): string {
     case "started":
       return `${ts} started ${event.change}${event.runId ? ` runId=${event.runId}` : ""}`;
     case "skipped":
+      if (event.reason === "failure-cap") {
+        return `${ts} skipped ${event.change} reason=failure-cap detail=${
+          event.detail ?? "?"
+        } — failure cap reached (${event.detail ?? "?"}); restart autorun to retry`;
+      }
       return `${ts} skipped ${event.change} reason=${event.reason}${
         event.detail ? ` detail=${event.detail}` : ""
       }`;
@@ -214,10 +221,17 @@ function validateOptions(
   io: AutorunIO,
 ): { ok: true; resolved: ResolvedOptions } | { ok: false; code: number } {
   const maxConcurrent = options.maxConcurrent ?? 1;
+  const maxFailures = options.maxFailures ?? 3;
   const interval = options.interval ?? 10000;
   if (!Number.isInteger(maxConcurrent) || maxConcurrent <= 0) {
     io.stderr.write(
       `--max-concurrent must be a positive integer (got \`${options.maxConcurrent}\`)\n`,
+    );
+    return { ok: false, code: 1 };
+  }
+  if (!Number.isInteger(maxFailures) || maxFailures < 0) {
+    io.stderr.write(
+      `--max-failures must be a non-negative integer (got \`${options.maxFailures}\`)\n`,
     );
     return { ok: false, code: 1 };
   }
@@ -250,6 +264,7 @@ function validateOptions(
     resolved: {
       watch: watchDir,
       maxConcurrent,
+      maxFailures,
       interval,
       once: options.once === true,
       filter,
@@ -338,6 +353,7 @@ export async function autorunAction(input: AutorunActionInput): Promise<number> 
     options: {
       watch: resolved.watch,
       maxConcurrent: resolved.maxConcurrent,
+      maxFailures: resolved.maxFailures,
       interval: resolved.interval,
       dryRun: resolved.dryRun,
       once: resolved.once,
@@ -376,6 +392,7 @@ export async function autorunAction(input: AutorunActionInput): Promise<number> 
     inputsDir: resolved.watch,
     repoRoot: cwd,
     maxConcurrent: resolved.maxConcurrent,
+    maxFailures: resolved.maxFailures,
     probeChangeLiveness,
     callbacks: {
       onStarted(event) {
