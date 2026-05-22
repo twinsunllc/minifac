@@ -75,6 +75,7 @@ function makeCtx(overrides: Partial<RunContext> = {}): RunContext {
     nodeId: "n1",
     iteration: 1,
     cwd: "/tmp",
+    outputsDir: "/tmp/outputs",
     ...overrides,
   };
 }
@@ -106,6 +107,7 @@ describe("buildStreamJsonInput", () => {
           reason: null,
           startedAt: 0,
           endedAt: 12,
+          outputs: null,
         },
         {
           nodeId: "v",
@@ -114,12 +116,13 @@ describe("buildStreamJsonInput", () => {
           reason: "verify hit error",
           startedAt: 13,
           endedAt: 20,
+          outputs: null,
         },
       ],
       "prompt here",
     );
     expect(out).toMatchInlineSnapshot(`
-      "{"type":"user","message":{"role":"user","content":"[{\\"nodeId\\":\\"a\\",\\"iteration\\":1,\\"status\\":\\"succeeded\\",\\"reason\\":null,\\"startedAt\\":0,\\"endedAt\\":12},{\\"nodeId\\":\\"v\\",\\"iteration\\":1,\\"status\\":\\"failed\\",\\"reason\\":\\"verify hit error\\",\\"startedAt\\":13,\\"endedAt\\":20}]\\n\\n---\\n\\nprompt here"}}
+      "{"type":"user","message":{"role":"user","content":"[{\\"nodeId\\":\\"a\\",\\"iteration\\":1,\\"status\\":\\"succeeded\\",\\"reason\\":null,\\"startedAt\\":0,\\"endedAt\\":12,\\"outputs\\":null},{\\"nodeId\\":\\"v\\",\\"iteration\\":1,\\"status\\":\\"failed\\",\\"reason\\":\\"verify hit error\\",\\"startedAt\\":13,\\"endedAt\\":20,\\"outputs\\":null}]\\n\\n---\\n\\nprompt here"}}
       "
     `);
   });
@@ -246,6 +249,7 @@ describe("ClaudeExecutor", () => {
           reason: "earlier failure",
           startedAt: 0,
           endedAt: 1,
+          outputs: null,
         },
       ],
     });

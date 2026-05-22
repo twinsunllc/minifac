@@ -28,7 +28,11 @@ import type {
   CreateRunInput,
   FinalizeRunInput,
   GetEventsOptions,
+  GetNodeOutputsFilter,
   ListRunsFilter,
+  NodeOutputIndex,
+  NodeOutputRow,
+  NodeOutputType,
   RecordNodeEndInput,
   RunId,
   RunStatus,
@@ -175,6 +179,79 @@ export class SqliteRunStore implements RunStore {
           end.exitCode ?? null,
         );
     }
+  }
+
+  async recordNodeOutputs(
+    runId: RunId,
+    nodeId: string,
+    iteration: number,
+    outputs: NodeOutputIndex,
+  ): Promise<void> {
+    const keys = Object.keys(outputs);
+    if (keys.length === 0) return;
+    const stmt = this.db.prepare(
+      `INSERT OR REPLACE INTO node_outputs
+        (run_id, node_id, iteration, output_key, output_type, path, size, mtime)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    for (const key of keys) {
+      const entry = outputs[key];
+      if (!entry) continue;
+      stmt.run(
+        runId,
+        nodeId,
+        iteration,
+        key,
+        entry.type,
+        entry.path,
+        Math.trunc(entry.size),
+        Math.trunc(entry.mtime),
+      );
+    }
+  }
+
+  async getNodeOutputs(
+    runId: RunId,
+    filter?: GetNodeOutputsFilter,
+  ): Promise<NodeOutputRow[]> {
+    const clauses: string[] = ["run_id = ?"];
+    const args: unknown[] = [runId];
+    if (filter?.nodeId !== undefined) {
+      clauses.push("node_id = ?");
+      args.push(filter.nodeId);
+    }
+    if (filter?.iteration !== undefined) {
+      clauses.push("iteration = ?");
+      args.push(filter.iteration);
+    }
+    const sql = `SELECT run_id, node_id, iteration, output_key, output_type, path, size, mtime
+       FROM node_outputs
+       WHERE ${clauses.join(" AND ")}
+       ORDER BY node_id ASC, iteration ASC, output_key ASC`;
+    const rows = this.db.prepare(sql).all(...args) as Array<{
+      run_id: string;
+      node_id: string;
+      iteration: number;
+      output_key: string;
+      output_type: string;
+      path: string;
+      size: number;
+      mtime: number;
+    }>;
+    return rows.map((r) => ({
+      runId: r.run_id,
+      nodeId: r.node_id,
+      iteration: r.iteration,
+      outputKey: r.output_key,
+      outputType: r.output_type as NodeOutputType,
+      path: r.path,
+      size: r.size,
+      mtime: r.mtime,
+    }));
+  }
+
+  async deleteNodeOutputsForRun(runId: RunId): Promise<void> {
+    this.db.prepare("DELETE FROM node_outputs WHERE run_id = ?").run(runId);
   }
 
   async finalizeRun(runId: RunId, input: FinalizeRunInput): Promise<void> {

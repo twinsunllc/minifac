@@ -1,4 +1,4 @@
-import type { Factory, FactoryNode } from "../factory/schema.js";
+import type { Factory, FactoryNode, NodeOutputIndex } from "../factory/schema.js";
 
 export type NodeEvent =
   | { kind: "stdout"; line: string }
@@ -12,7 +12,8 @@ export type NodeEvent =
 /**
  * One entry per completed node execution. The runner accumulates these in
  * `priorResults` and threads them into each scheduled node's RunContext.
- * See `docs/decisions/0014-Structured-Prior-Results.md`.
+ * See `docs/decisions/0014-Structured-Prior-Results.md` and
+ * `docs/decisions/0027-Node-Outputs.md`.
  */
 export interface NodeResult {
   nodeId: string;
@@ -21,6 +22,7 @@ export interface NodeResult {
   reason: string | null;
   startedAt: number;
   endedAt: number;
+  outputs: NodeOutputIndex | null;
 }
 
 /**
@@ -42,6 +44,9 @@ export interface RunContext {
   nodeId: string;
   iteration: number;
   cwd: string;
+  /** Absolute path to the per-node-per-iteration outputs directory. The
+   * runner creates this directory (mkdirp) before invoking the executor. */
+  outputsDir: string;
 }
 
 export type ResolvedNode = FactoryNode & { id: string };

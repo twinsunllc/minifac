@@ -1,6 +1,15 @@
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { Brief } from "../brief/loader.js";
-import { substitute, substituteBriefTokens } from "./substitute.js";
+import type { NodeResult } from "../executor/types.js";
+import {
+  PRIOR_RESULTS_READ_CAP,
+  substitute,
+  substituteBriefTokens,
+  TemplateSubstitutionError,
+} from "./substitute.js";
 
 function brief(overrides: Partial<Brief> = {}): Brief {
   return {
@@ -170,5 +179,163 @@ describe("substitute inputs namespace", () => {
   it("tolerates whitespace around inputs.<field>", () => {
     expect(substitute("{{inputs.x}}", { inputs: { x: "v" } })).toBe("v");
     expect(substitute("{{   inputs.x   }}", { inputs: { x: "v" } })).toBe("v");
+  });
+});
+
+function nodeResult(
+  nodeId: string,
+  outputs: NodeResult["outputs"],
+  iteration: number = 1,
+): NodeResult {
+  return {
+    nodeId,
+    iteration,
+    status: "succeeded",
+    reason: null,
+    startedAt: 0,
+    endedAt: 1,
+    outputs,
+  };
+}
+
+describe("substitute run.outputs_dir", () => {
+  it("substitutes outputs_dir when present in run", () => {
+    expect(
+      substitute("Write to {{ run.outputs_dir }}/findings.json.", {
+        run: { outputsDir: "/abs/.minifac/outputs/abc/propose/1" },
+      }),
+    ).toBe("Write to /abs/.minifac/outputs/abc/propose/1/findings.json.");
+  });
+
+  it("leaves outputs_dir verbatim when not in scope", () => {
+    expect(substitute("cd {{ run.outputs_dir }}", {})).toBe("cd {{ run.outputs_dir }}");
+  });
+
+  it("cwd and outputs_dir in the same string both substitute", () => {
+    expect(
+      substitute("cwd={{ run.cwd }} out={{ run.outputs_dir }}", {
+        run: { cwd: "/wt", outputsDir: "/out" },
+      }),
+    ).toBe("cwd=/wt out=/out");
+  });
+});
+
+describe("substitute priorResults.<id>.outputs.<key>", () => {
+  it("substitutes the absolute path when output is present", () => {
+    const map = new Map<string, NodeResult>([
+      [
+        "propose",
+        nodeResult("propose", {
+          findings: { type: "value", path: "/p/findings.json", size: 10, mtime: 1 },
+        }),
+      ],
+    ]);
+    expect(
+      substitute("Read {{ priorResults.propose.outputs.findings }} for context.", {
+        priorResults: map,
+      }),
+    ).toBe("Read /p/findings.json for context.");
+  });
+
+  it("substitutes empty string when no prior result exists", () => {
+    expect(
+      substitute("{{ priorResults.nonexistent.outputs.findings }}", { priorResults: new Map() }),
+    ).toBe("");
+  });
+
+  it("substitutes empty string when key is not in output index", () => {
+    const map = new Map<string, NodeResult>([["propose", nodeResult("propose", {})]]);
+    expect(
+      substitute("{{ priorResults.propose.outputs.findings }}", { priorResults: map }),
+    ).toBe("");
+  });
+
+  it("substitutes empty string when outputs is null on the prior result", () => {
+    const map = new Map<string, NodeResult>([["propose", nodeResult("propose", null)]]);
+    expect(
+      substitute("{{ priorResults.propose.outputs.findings }}", { priorResults: map }),
+    ).toBe("");
+  });
+
+  it(":read suffix inlines small file contents", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "subs-read-"));
+    const filePath = path.join(dir, "findings.json");
+    const contents = '{"items":["a","b"]}';
+    await writeFile(filePath, contents, "utf8");
+    const map = new Map<string, NodeResult>([
+      [
+        "propose",
+        nodeResult("propose", {
+          findings: { type: "value", path: filePath, size: contents.length, mtime: 1 },
+        }),
+      ],
+    ]);
+    expect(
+      substitute("Findings:\n{{ priorResults.propose.outputs.findings:read }}\nEnd.", {
+        priorResults: map,
+      }),
+    ).toBe(`Findings:\n${contents}\nEnd.`);
+  });
+
+  it(":read suffix on oversize file throws", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "subs-read-big-"));
+    const filePath = path.join(dir, "big.json");
+    const big = "x".repeat(PRIOR_RESULTS_READ_CAP + 100);
+    await writeFile(filePath, big, "utf8");
+    const map = new Map<string, NodeResult>([
+      [
+        "propose",
+        nodeResult("propose", {
+          findings: { type: "value", path: filePath, size: big.length, mtime: 1 },
+        }),
+      ],
+    ]);
+    expect(() =>
+      substitute("{{ priorResults.propose.outputs.findings:read }}", {
+        priorResults: map,
+      }),
+    ).toThrowError(TemplateSubstitutionError);
+  });
+
+  it(":read on a directory output throws", () => {
+    const map = new Map<string, NodeResult>([
+      [
+        "verify",
+        nodeResult("verify", {
+          logs: { type: "directory", path: "/some/dir", size: 100, mtime: 1 },
+        }),
+      ],
+    ]);
+    expect(() =>
+      substitute("{{ priorResults.verify.outputs.logs:read }}", { priorResults: map }),
+    ).toThrowError(/directory/);
+  });
+
+  it("node id may contain hyphens", () => {
+    const map = new Map<string, NodeResult>([
+      [
+        "my-node",
+        nodeResult("my-node", {
+          x: { type: "value", path: "/x.json", size: 1, mtime: 1 },
+        }),
+      ],
+    ]);
+    expect(substitute("{{ priorResults.my-node.outputs.x }}", { priorResults: map })).toBe(
+      "/x.json",
+    );
+  });
+
+  it("tolerates whitespace around the token", () => {
+    const map = new Map<string, NodeResult>([
+      [
+        "n",
+        nodeResult("n", {
+          k: { type: "value", path: "/k.json", size: 1, mtime: 1 },
+        }),
+      ],
+    ]);
+    expect(
+      substitute("{{   priorResults.n.outputs.k   }}", { priorResults: map }),
+    ).toBe("/k.json");
   });
 });

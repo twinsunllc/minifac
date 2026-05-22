@@ -1,43 +1,42 @@
+import { readFileSync, statSync } from "node:fs";
 import type { Brief } from "../brief/loader.js";
+import type { NodeOutputIndex } from "../factory/schema.js";
+import type { NodeResult } from "../executor/types.js";
 
 const TOKEN_REGEX = /\{\{\s*(brief|run|inputs)\.([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}/g;
 
+const PRIOR_RESULTS_TOKEN_REGEX =
+  /\{\{\s*priorResults\.([a-zA-Z_][a-zA-Z0-9_-]*)\.outputs\.([a-zA-Z_][a-zA-Z0-9_]*)(:read)?\s*\}\}/g;
+
+export const PRIOR_RESULTS_READ_CAP = 64 * 1024;
+
 export interface Substitutions {
   brief?: Brief;
-  run?: { cwd: string };
+  run?: { cwd?: string; outputsDir?: string };
   /** Per-node inputs map produced at step inlining time. Absent on inline
    * nodes (never inlined from a step). When absent, `{{ inputs.* }}`
    * tokens pass through verbatim. */
   inputs?: Record<string, unknown>;
+  /** Latest-iteration NodeResult per node id, used to resolve
+   * `{{ priorResults.<id>.outputs.<key>[:read] }}` tokens. */
+  priorResults?: ReadonlyMap<string, NodeResult>;
 }
 
 /**
- * Substitute `{{ <ns>.<field> }}` tokens (ns ∈ {brief, run, inputs}) in
- * `input` using values from `subs`. Unknown ns or unknown fields under
- * a known ns pass through verbatim.
- *
- * `inputs` stringification rules:
- *  - string → verbatim
- *  - number/boolean → `String(value)`
- *  - array/object → `JSON.stringify(value)`
- *  - null/undefined → empty string
- *  - absent (when the field isn't in the inputs map at all) → empty string
- *    if `subs.inputs` is in scope; verbatim if no inputs map is in scope
- *    (inline node).
+ * Substitute `{{ <ns>.<field> }}` tokens (ns ∈ {brief, run, inputs}) and
+ * `{{ priorResults.<id>.outputs.<key>[:read] }}` tokens in `input` using
+ * values from `subs`. Unknown ns or unknown fields under a known ns pass
+ * through verbatim.
  */
 export function substitute(input: string, subs: Substitutions): string {
-  // Two passes so a templated input value (e.g. `inputs.change ===
-  // "{{ brief.change }}"`) gets resolved end-to-end: first pass swaps
-  // `{{ inputs.change }}` for the brief token, second pass resolves the
-  // brief token to its value. The second pass is a no-op when the first
-  // pass introduced no new tokens.
   const first = substituteOnce(input, subs);
   if (first === input) return first;
   return substituteOnce(first, subs);
 }
 
 function substituteOnce(input: string, subs: Substitutions): string {
-  return input.replace(TOKEN_REGEX, (match, ns: string, field: string) => {
+  let out = substitutePriorResults(input, subs);
+  out = out.replace(TOKEN_REGEX, (match, ns: string, field: string) => {
     if (ns === "brief") {
       const brief = subs.brief;
       if (!brief) return match;
@@ -59,7 +58,12 @@ function substituteOnce(input: string, subs: Substitutions): string {
     if (ns === "run") {
       const run = subs.run;
       if (!run) return match;
-      if (field === "cwd") return run.cwd;
+      if (field === "cwd") {
+        return run.cwd ?? match;
+      }
+      if (field === "outputs_dir") {
+        return run.outputsDir ?? match;
+      }
       return match;
     }
     if (ns === "inputs") {
@@ -69,6 +73,58 @@ function substituteOnce(input: string, subs: Substitutions): string {
     }
     return match;
   });
+  return out;
+}
+
+function substitutePriorResults(input: string, subs: Substitutions): string {
+  if (!PRIOR_RESULTS_TOKEN_REGEX.test(input)) return input;
+  // Reset lastIndex on the global regex before re-using.
+  PRIOR_RESULTS_TOKEN_REGEX.lastIndex = 0;
+  return input.replace(
+    PRIOR_RESULTS_TOKEN_REGEX,
+    (_match, nodeId: string, outputKey: string, readSuffix: string | undefined) => {
+      const isRead = readSuffix === ":read";
+      const map = subs.priorResults;
+      const result = map?.get(nodeId);
+      const outputs: NodeOutputIndex | null | undefined = result?.outputs ?? null;
+      const entry = outputs ? outputs[outputKey] : undefined;
+      if (!entry) {
+        // Not found → empty string (consistent with optional brief/inputs).
+        return "";
+      }
+      if (!isRead) {
+        return entry.path;
+      }
+      // :read suffix — directory outputs are not valid.
+      if (entry.type === "directory") {
+        throw new TemplateSubstitutionError(
+          `:read is not valid for directory outputs (node "${nodeId}", output "${outputKey}")`,
+        );
+      }
+      // Check size cap before reading.
+      let size = entry.size;
+      try {
+        const s = statSync(entry.path);
+        size = s.size;
+      } catch (err) {
+        throw new TemplateSubstitutionError(
+          `failed to read output for :read substitution (node "${nodeId}", output "${outputKey}", path "${entry.path}"): ${(err as Error).message}`,
+        );
+      }
+      if (size > PRIOR_RESULTS_READ_CAP) {
+        throw new TemplateSubstitutionError(
+          `output too large for :read substitution (node "${nodeId}", output "${outputKey}", size ${size} bytes, cap ${PRIOR_RESULTS_READ_CAP} bytes)`,
+        );
+      }
+      try {
+        return readFileSync(entry.path, "utf8");
+      } catch (err) {
+        throw new TemplateSubstitutionError(
+          `failed to read output for :read substitution (node "${nodeId}", output "${outputKey}", path "${entry.path}"): ${(err as Error).message}`,
+        );
+      }
+    },
+  );
 }
 
 function stringifyInputValue(value: unknown): string {
@@ -85,4 +141,11 @@ function stringifyInputValue(value: unknown): string {
  */
 export function substituteBriefTokens(prompt: string, brief: Brief): string {
   return substitute(prompt, { brief });
+}
+
+export class TemplateSubstitutionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "TemplateSubstitutionError";
+  }
 }
