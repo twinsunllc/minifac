@@ -34,7 +34,8 @@ interface RowSignature {
 // The label is colored separately from the glyph, but with the same color,
 // so each colored chunk is a `\x1b[<n>m...\x1b[39m` span. We extract the
 // glyph (first colored chunk) and the label (chunk containing the row id).
-const SGR_RE = /\x1b\[(\d+)m([^\x1b]*)/g;
+const ESC = String.fromCharCode(27);
+const SGR_RE = new RegExp(`${ESC}\\[(\\d+)m([^${ESC}]*)`, "g");
 
 function extractRowSignature(frame: string, label: string): RowSignature {
   const rowLine = frame.split("\n").find((l) => l.includes(label));
@@ -136,11 +137,13 @@ describe("BriefListPane ↔ StatusPane glyph + color parity", () => {
   for (const { briefStatus, nodeStatus } of SHARED_STATUSES) {
     it(`matches glyph and color for ${briefStatus}/${nodeStatus}`, () => {
       const briefFrame =
-        render(<BriefListPane state={briefStateFor(briefStatus)} glyphs={UNICODE_GLYPHS} />)
-          .lastFrame() ?? "";
+        render(
+          <BriefListPane state={briefStateFor(briefStatus)} glyphs={UNICODE_GLYPHS} />,
+        ).lastFrame() ?? "";
       const runFrame =
-        render(<StatusPane state={runStateFor(nodeStatus)} glyphs={UNICODE_GLYPHS} />)
-          .lastFrame() ?? "";
+        render(
+          <StatusPane state={runStateFor(nodeStatus)} glyphs={UNICODE_GLYPHS} />,
+        ).lastFrame() ?? "";
 
       const briefSig = extractRowSignature(briefFrame, "row");
       const runSig = extractRowSignature(runFrame, "row");

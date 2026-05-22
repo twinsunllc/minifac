@@ -26,7 +26,6 @@ function shOrThrow(cwd: string, args: string[]): void {
 
 class FakeExecutor implements NodeExecutor {
   readonly type = "fake";
-  // biome-ignore lint/correctness/useYield: minimal succeed-immediately stream
   async *run(_node: ResolvedNode, _ctx: RunContext): AsyncIterable<NodeEvent> {
     yield { kind: "status", status: "succeeded" };
   }
