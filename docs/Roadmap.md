@@ -14,13 +14,11 @@ big milestone. Concretely that means: a license, an install path,
 user-facing docs, and (most importantly) a story that justifies
 why anyone else would care.
 
-The differentiation pitch — captured in [[Comparisons]] — is
-**structured, repo-rooted agent workflows with mid-run conversation
-support, scoped to a single codebase**. Not a visual workflow
-builder (that's n8n's space). Not a programmatic graph framework
-(LangGraph). Not a cross-domain multi-agent platform (that's the
-Gas City scope). Factories define structure, briefs supply
-intent, [[Studio]] eventually provides inspection + chat.
+The pitch is **structured, repo-rooted agent workflows scoped to
+a single codebase**, with a small core, plain naming, and
+spec-driven development from day one. Factories define structure,
+briefs supply intent, [[Studio]] eventually provides inspection
++ chat.
 
 ## In-flight
 
@@ -71,8 +69,9 @@ fix ([[cli-symlink-main-guard]]) and possibly the examples library.
       for the install path. Brief queued; tiny dogfood.
 - [ ] **Polished user-facing README** — current README is
       honest internal docs; needs a top section that's
-      first-30-seconds compelling. See [[Comparisons]] for the
-      "why over X" material to distill.
+      first-30-seconds compelling. Describe what minifac *is*
+      and who it's for; resist the urge to enumerate
+      competitors (best-in-class OSS READMEs don't).
 - [ ] **Install path** — `npm publish` for the engine; document
       `npx minifac` as the canonical invocation. Blocked on
       cli-symlink-main-guard.
@@ -81,8 +80,11 @@ fix ([[cli-symlink-main-guard]]) and possibly the examples library.
       `dependency-bump.yaml`, `code-review.yaml`). Unblocked
       now that reusable-steps has landed; probably worth its
       own brief.
-- [ ] **A short "why minifac" pitch document** —
-      `docs/Why-Minifac.md`, distilled from [[Comparisons]].
+- [ ] *(maybe skip)* A "why minifac" pitch document. The
+      README's intro should carry this work. If after the
+      README rewrite there's still material that doesn't fit,
+      a separate pitch doc can be carved out — but the README
+      is the primary surface.
 
 ## Already landed (newest first)
 
@@ -151,10 +153,24 @@ See [[Open-Questions]] for the named triggers.
 
 ### Studio (deliberately separate project)
 
-[[Studio]] is the visual + chat surface — not a minifac engine
-feature. Will be developed in a separate repo (`minifac-studio/`)
-consuming the daemon's HTTP API. The decision and rationale live
-in [[Comparisons]] under "Studio direction" and "Studio packaging."
+[[Studio]] is the eventual visual + chat surface for minifac —
+not a minifac engine feature. Will be developed in a separate
+repo (`minifac-studio/`) consuming the daemon's HTTP API.
+
+**Direction: lean into chat-with-a-run, skip the visual builder.**
+A visual factory designer alone is a crowded space minifac would
+enter with the fewest integrations. The interesting paradigm is
+*chat anchored to a structured run* — postmortem ("why did this
+fail?"), mid-run steering ("hey, also do X"), inspection ("walk
+me through what happened on the verify retry"). YAML stays the
+source of truth for authoring; visual surfaces are for inspection
+and conversation.
+
+**Packaging: separate repo, not a workspace.** The engine ↔
+Studio boundary is the daemon's HTTP API. Shared TS types travel
+via a published types package, not a monorepo. Stance gets
+revisited if cross-cutting engine+Studio changes become frequent
+enough to feel painful.
 
 Studio's plausible v1 features (when we get there):
 - Run inspector (visual replay of runs.db)

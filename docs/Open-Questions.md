@@ -139,9 +139,8 @@ triggers, or file-watch triggers for unattended factory runs?
 **Question:** Should [[Studio]] include a visual factory authoring
 mode (React Flow, drag-nodes-and-edges), or stay
 inspection-and-chat only?
-**v0 stance / strong leaning:** Inspection and chat only. The
-visual builder is n8n's space; doing it badly is worse than not
-doing it. See [[Comparisons]] "Studio direction." Revisit once
+**v0 stance / strong leaning:** Inspection and chat only. See
+[[Roadmap]] § Studio for the direction. Revisit once
 chat-with-run is real and we have evidence about what users
 actually want.
 
@@ -152,7 +151,7 @@ eventually want a monorepo with shared internals?
 **Trigger:** Cross-cutting changes between engine and studio become
 frequent and atomic-ship matters (probably >1/month).
 **v0 stance:** Separate repos, HTTP API is the contract. See
-[[Comparisons]] "Studio packaging."
+[[Roadmap]] § Studio for the packaging rationale.
 
 ### Chat-with-running-node UX
 **Question:** What does the actual chat affordance look like when
