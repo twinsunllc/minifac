@@ -1,4 +1,4 @@
-import { readdir, readFile, stat } from "node:fs/promises";
+import { readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import type {
   FactoryNode,
@@ -56,11 +56,7 @@ export async function validateDeclaredOutputs(
   return { index, missing, detail };
 }
 
-async function checkOne(
-  key: string,
-  def: OutputDef,
-  outputsDir: string,
-): Promise<OutputCheck> {
+async function checkOne(key: string, def: OutputDef, outputsDir: string): Promise<OutputCheck> {
   if (def.type === "value") {
     return checkValue(key, def, outputsDir);
   }

@@ -210,10 +210,7 @@ export class SqliteRunStore implements RunStore {
     }
   }
 
-  async getNodeOutputs(
-    runId: RunId,
-    filter?: GetNodeOutputsFilter,
-  ): Promise<NodeOutputRow[]> {
+  async getNodeOutputs(runId: RunId, filter?: GetNodeOutputsFilter): Promise<NodeOutputRow[]> {
     const clauses: string[] = ["run_id = ?"];
     const args: unknown[] = [runId];
     if (filter?.nodeId !== undefined) {

@@ -7,11 +7,11 @@ import type { EmittedEvent, NodeResult, ResolvedNode, RunContext } from "../exec
 import type { LoadedFactory } from "../factory/loader.js";
 import type { NodeOutputIndex } from "../factory/schema.js";
 import type { RunStore, StoredEventKind } from "../storage/run-store.js";
+import { minifacHome } from "../worktree/config.js";
 import { markBriefDone } from "./mark-done.js";
 import { validateDeclaredOutputs } from "./outputs.js";
 import type { ExecutionLogEntry, RunResult } from "./result.js";
-import { type Substitutions, substitute, TemplateSubstitutionError } from "./substitute.js";
-import { minifacHome } from "../worktree/config.js";
+import { type Substitutions, TemplateSubstitutionError, substitute } from "./substitute.js";
 
 export interface RunOptions {
   registry: ExecutorRegistry;
@@ -360,7 +360,13 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
           },
         };
         onEvent?.(statusEvent);
-        await appendStoreEvent(nodeId, iteration, "status", statusEvent.event, statusEvent.emittedAt);
+        await appendStoreEvent(
+          nodeId,
+          iteration,
+          "status",
+          statusEvent.event,
+          statusEvent.emittedAt,
+        );
         // outputs on the prior-results snapshot is null when overridden.
         outputsForResult = null;
       } else {

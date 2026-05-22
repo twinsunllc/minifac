@@ -6,9 +6,9 @@ import type { Brief } from "../brief/loader.js";
 import type { NodeResult } from "../executor/types.js";
 import {
   PRIOR_RESULTS_READ_CAP,
+  TemplateSubstitutionError,
   substitute,
   substituteBriefTokens,
-  TemplateSubstitutionError,
 } from "./substitute.js";
 
 function brief(overrides: Partial<Brief> = {}): Brief {
@@ -182,11 +182,7 @@ describe("substitute inputs namespace", () => {
   });
 });
 
-function nodeResult(
-  nodeId: string,
-  outputs: NodeResult["outputs"],
-  iteration: number = 1,
-): NodeResult {
+function nodeResult(nodeId: string, outputs: NodeResult["outputs"], iteration = 1): NodeResult {
   return {
     nodeId,
     iteration,
@@ -245,16 +241,16 @@ describe("substitute priorResults.<id>.outputs.<key>", () => {
 
   it("substitutes empty string when key is not in output index", () => {
     const map = new Map<string, NodeResult>([["propose", nodeResult("propose", {})]]);
-    expect(
-      substitute("{{ priorResults.propose.outputs.findings }}", { priorResults: map }),
-    ).toBe("");
+    expect(substitute("{{ priorResults.propose.outputs.findings }}", { priorResults: map })).toBe(
+      "",
+    );
   });
 
   it("substitutes empty string when outputs is null on the prior result", () => {
     const map = new Map<string, NodeResult>([["propose", nodeResult("propose", null)]]);
-    expect(
-      substitute("{{ priorResults.propose.outputs.findings }}", { priorResults: map }),
-    ).toBe("");
+    expect(substitute("{{ priorResults.propose.outputs.findings }}", { priorResults: map })).toBe(
+      "",
+    );
   });
 
   it(":read suffix inlines small file contents", async () => {
@@ -334,8 +330,6 @@ describe("substitute priorResults.<id>.outputs.<key>", () => {
         }),
       ],
     ]);
-    expect(
-      substitute("{{   priorResults.n.outputs.k   }}", { priorResults: map }),
-    ).toBe("/k.json");
+    expect(substitute("{{   priorResults.n.outputs.k   }}", { priorResults: map })).toBe("/k.json");
   });
 });

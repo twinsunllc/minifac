@@ -3,12 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ExecutorRegistry } from "../executor/registry.js";
-import type {
-  NodeEvent,
-  NodeExecutor,
-  ResolvedNode,
-  RunContext,
-} from "../executor/types.js";
+import type { NodeEvent, NodeExecutor, ResolvedNode, RunContext } from "../executor/types.js";
 import type { LoadedFactory } from "../factory/loader.js";
 import type { Factory } from "../factory/schema.js";
 import { runFactory } from "./run.js";
@@ -49,7 +44,7 @@ describe("integration: writer → reader via priorResults outputs", () => {
   });
 
   afterEach(() => {
-    if (savedHome === undefined) delete process.env.MINIFAC_HOME;
+    if (savedHome === undefined) Reflect.deleteProperty(process.env, "MINIFAC_HOME");
     else process.env.MINIFAC_HOME = savedHome;
   });
 

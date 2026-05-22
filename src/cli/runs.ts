@@ -416,7 +416,10 @@ export async function catAction(input: CatActionInput): Promise<number> {
   }
   // Pick the latest iteration (max iteration) among matches when no explicit
   // iteration was given.
-  const chosen = matches.reduce((best, r) => (r.iteration > best.iteration ? r : best), matches[0] as NodeOutputRow);
+  const chosen = matches.reduce(
+    (best, r) => (r.iteration > best.iteration ? r : best),
+    matches[0] as NodeOutputRow,
+  );
   // Dispatch by type.
   if (parsed.filename !== undefined) {
     if (chosen.outputType !== "directory") {
@@ -428,7 +431,7 @@ export async function catAction(input: CatActionInput): Promise<number> {
     // Reject any `..` segment to prevent traversal.
     const segments = parsed.filename.split(/[\\/]/);
     if (segments.some((s) => s === "..")) {
-      input.io.stderr.write(`Path traversal segments (\`..\`) not allowed in filename.\n`);
+      input.io.stderr.write("Path traversal segments (`..`) not allowed in filename.\n");
       return 1;
     }
     const filePath = path.join(chosen.path, parsed.filename);

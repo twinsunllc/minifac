@@ -27,6 +27,7 @@ import { ClaudeExecutor } from "./executor/claude.js";
 import { ExecutorRegistry } from "./executor/registry.js";
 import type { EmittedEvent } from "./executor/types.js";
 import { FactoryLoadError, loadFactory } from "./factory/loader.js";
+import { pruneOutputs } from "./outputs/prune.js";
 import { runFactory } from "./runner/run.js";
 import { type DaemonHandle, startDaemon } from "./serve/server.js";
 import { openDefaultRunStore } from "./storage/open.js";
@@ -48,7 +49,6 @@ import {
   worktreeKeyForFactory,
 } from "./worktree/paths.js";
 import { type PruneOptions, parseOlderThan, pruneWorktrees } from "./worktree/prune.js";
-import { pruneOutputs } from "./outputs/prune.js";
 
 export interface CliIO {
   stdout: NodeJS.WritableStream & { isTTY?: boolean };
@@ -611,10 +611,7 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
       "Override the age cutoff. Format: <int><m|h|d>, e.g. 7d, 12h, 30m",
     )
     .option("--failed", "Also remove worktrees from failed runs")
-    .option(
-      "--outputs",
-      "Also prune per-run output directories under ${MINIFAC_HOME}/outputs/",
-    )
+    .option("--outputs", "Also prune per-run output directories under ${MINIFAC_HOME}/outputs/")
     .action(
       async (opts: {
         all?: boolean;
@@ -763,31 +760,29 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
     .option("--follow", "Tail an active run via short-interval polling")
     .option("--json", "Emit NDJSON, one event per line")
     .option("--outputs", "Append the tree of produced outputs after the event log")
-    .action(
-      async (id: string, opts: { follow?: boolean; json?: boolean; outputs?: boolean }) => {
-        const cwd = io.runCwd ?? process.cwd();
-        let store: RunStore | undefined;
-        try {
-          store = await (io.openRunStore ?? openDefaultRunStore)(cwd);
-        } catch (err) {
-          io.stderr.write(`Could not open run history store: ${(err as Error).message}\n`);
-          exitCode = 1;
-          return;
-        }
-        try {
-          exitCode = await runsShowAction({
-            idOrPrefix: id,
-            ...(opts.follow !== undefined ? { follow: opts.follow } : {}),
-            ...(opts.json !== undefined ? { json: opts.json } : {}),
-            ...(opts.outputs !== undefined ? { outputs: opts.outputs } : {}),
-            store,
-            io: { stdout: io.stdout, stderr: io.stderr },
-          });
-        } finally {
-          await store.close();
-        }
-      },
-    );
+    .action(async (id: string, opts: { follow?: boolean; json?: boolean; outputs?: boolean }) => {
+      const cwd = io.runCwd ?? process.cwd();
+      let store: RunStore | undefined;
+      try {
+        store = await (io.openRunStore ?? openDefaultRunStore)(cwd);
+      } catch (err) {
+        io.stderr.write(`Could not open run history store: ${(err as Error).message}\n`);
+        exitCode = 1;
+        return;
+      }
+      try {
+        exitCode = await runsShowAction({
+          idOrPrefix: id,
+          ...(opts.follow !== undefined ? { follow: opts.follow } : {}),
+          ...(opts.json !== undefined ? { json: opts.json } : {}),
+          ...(opts.outputs !== undefined ? { outputs: opts.outputs } : {}),
+          store,
+          io: { stdout: io.stdout, stderr: io.stderr },
+        });
+      } finally {
+        await store.close();
+      }
+    });
 
   runsCmd
     .command("cat <id> <selector>")

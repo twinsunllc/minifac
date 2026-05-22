@@ -1,7 +1,7 @@
 import { readFileSync, statSync } from "node:fs";
 import type { Brief } from "../brief/loader.js";
-import type { NodeOutputIndex } from "../factory/schema.js";
 import type { NodeResult } from "../executor/types.js";
+import type { NodeOutputIndex } from "../factory/schema.js";
 
 const TOKEN_REGEX = /\{\{\s*(brief|run|inputs)\.([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}/g;
 

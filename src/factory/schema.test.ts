@@ -61,9 +61,9 @@ describe("OutputDefSchema — discriminated types", () => {
   });
 
   it("rejects type: file with filename containing a slash", () => {
-    expect(() =>
-      OutputDefSchema.parse({ type: "file", filename: "sub/patch.diff" }),
-    ).toThrowError(/path separators/);
+    expect(() => OutputDefSchema.parse({ type: "file", filename: "sub/patch.diff" })).toThrowError(
+      /path separators/,
+    );
   });
 
   it("rejects type: file with empty filename", () => {
@@ -104,8 +104,6 @@ describe("NodeSchema with outputs", () => {
   });
 
   it("rejects unknown node-level keys (strict-on-extras preserved)", () => {
-    expect(() =>
-      NodeSchema.parse({ executor: "claude", retry: 3 }),
-    ).toThrowError(/retry/);
+    expect(() => NodeSchema.parse({ executor: "claude", retry: 3 })).toThrowError(/retry/);
   });
 });

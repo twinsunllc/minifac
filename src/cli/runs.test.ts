@@ -444,7 +444,7 @@ describe("minifac runs show <id> (showAction)", () => {
 });
 
 import { mkdir, writeFile } from "node:fs/promises";
-import { catAction, parseSelector, formatBytes } from "./runs.js";
+import { catAction, formatBytes, parseSelector } from "./runs.js";
 
 async function seedOutputs(
   store: SqliteRunStore,
@@ -554,7 +554,10 @@ describe("runs show --outputs", () => {
         store,
         io: { stdout: out, stderr: err },
       });
-      const lines = out.text().split("\n").filter((l) => l.length > 0);
+      const lines = out
+        .text()
+        .split("\n")
+        .filter((l) => l.length > 0);
       const last = JSON.parse(lines[lines.length - 1] as string);
       expect(last.type).toBe("outputs");
       expect(Array.isArray(last.rows)).toBe(true);

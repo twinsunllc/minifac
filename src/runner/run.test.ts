@@ -100,10 +100,7 @@ class FakeStore implements RunStore {
     if (Object.keys(outputs).length === 0) return;
     this.nodeOutputs.push({ runId, nodeId, iteration, outputs });
   }
-  async getNodeOutputs(
-    runId: string,
-    filter?: GetNodeOutputsFilter,
-  ): Promise<NodeOutputRow[]> {
+  async getNodeOutputs(runId: string, filter?: GetNodeOutputsFilter): Promise<NodeOutputRow[]> {
     const rows: NodeOutputRow[] = [];
     for (const e of this.nodeOutputs) {
       if (e.runId !== runId) continue;
@@ -1127,7 +1124,7 @@ describe("runFactory — outputs directory and validation", () => {
 
   afterEach(() => {
     if (savedHome === undefined) {
-      delete process.env.MINIFAC_HOME;
+      Reflect.deleteProperty(process.env, "MINIFAC_HOME");
     } else {
       process.env.MINIFAC_HOME = savedHome;
     }
@@ -1425,7 +1422,9 @@ describe("runFactory — outputs directory and validation", () => {
     expect(res.status).toBe("failed");
     // notes was indexed even though findings was missing.
     expect(store.nodeOutputs.length).toBe(1);
-    expect(Object.keys(store.nodeOutputs[0]!.outputs)).toEqual(["notes"]);
+    const recorded = store.nodeOutputs[0];
+    if (!recorded) throw new Error("expected one nodeOutputs entry");
+    expect(Object.keys(recorded.outputs)).toEqual(["notes"]);
   });
 
   it("NodeResult.outputs is null when no outputs declared", async () => {
@@ -1479,10 +1478,7 @@ describe("runFactory — outputs directory and validation", () => {
     const exec = new FakeExecutor("fake", {
       v: (ctx) => {
         vIter += 1;
-        writeFileSync(
-          path.join(ctx.outputsDir, "results.json"),
-          JSON.stringify({ iter: vIter }),
-        );
+        writeFileSync(path.join(ctx.outputsDir, "results.json"), JSON.stringify({ iter: vIter }));
         return [succeeded];
       },
       gate: () => {
@@ -1521,7 +1517,8 @@ describe("runFactory — outputs directory and validation", () => {
     const store = new FakeStore();
     await runFactory(wrap(factory), { registry: reg, runId: "rid", store });
     expect(store.nodeOutputs.length).toBe(1);
-    const entry = store.nodeOutputs[0]!;
+    const entry = store.nodeOutputs[0];
+    if (!entry) throw new Error("expected one nodeOutputs entry");
     expect(entry.nodeId).toBe("a");
     expect(entry.iteration).toBe(1);
     expect(entry.outputs.findings?.type).toBe("value");
