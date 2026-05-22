@@ -5,9 +5,15 @@ defined in YAML, executed by a small daemon with a live web viewer.
 
 ## Why this exists
 
-Scarif and gas-city-style systems have useful ideas — graph-shaped workflows,
-streaming agent output, per-repo customization — but they've grown bloated and
-metaphor-heavy. minifac is a deliberate restart with three rules:
+Agent workflow tools today mostly split into two camps. The
+**conversational orchestrators** (gas-city / Gas Town in tmux,
+multi-pane Claude Code setups, etc.) are great for live
+human-in-the-loop work but don't leave you a structured artifact
+to replay, diff, or audit after the fact. The **visual graph
+builders** (n8n and friends) give you durable workflows but
+target click-to-configure non-developers, not repo-rooted
+engineering work. minifac picks a third position with three
+rules:
 
 1. **Small core.** A graph runner, a streaming executor, a viewer. Nothing else
    is "core."

@@ -10,10 +10,13 @@ tags: [decision]
 
 ## Context
 
-minifac is a deliberate restart from prior tools (Scarif, gas-city)
-that grew bloated. The team identified specific patterns to *avoid*
-upfront, so that future contributors (human or AI) don't reintroduce
-them by reflex.
+minifac is a deliberate restart, designed to avoid the drift
+patterns that grow on agent-workflow tools as they scale — the
+metaphor creep, premature subsystem splits, and untyped plugin
+registries that turn small clear cores into hard-to-reason-about
+systems. We identified the specific patterns to *avoid* upfront,
+so future contributors (human or AI) don't reintroduce them by
+reflex.
 
 These are codified in `CLAUDE.md` at the repo root, where they're
 auto-injected into every Claude Code session. This decision note
@@ -38,10 +41,11 @@ harder to grep and reason about ("which file has the citizen logic?").
 
 One TypeScript package until it has earned the right to split.
 
-**Why:** Scarif grew to half a dozen packages before it had real
-multi-package needs. Each split adds release coordination, version
-management, and cross-package indirection. Defer until the cost of
-not-splitting actually bites.
+**Why:** Tools in this space have a recurring failure mode of
+fragmenting into half a dozen packages before there are real
+multi-package needs. Each split adds release coordination,
+version management, and cross-package indirection. Defer until
+the cost of not-splitting actually bites.
 
 ### 3. No untyped runner registries / plugin systems before a real
 second consumer

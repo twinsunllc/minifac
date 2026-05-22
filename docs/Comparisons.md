@@ -53,53 +53,71 @@ of LLM nodes. LangGraph Studio is its visual debugger.
   authored as markdown. Different mental models for "what's the
   unit of work."
 
-## vs. gas-city / gastown (tmux + Claude Code orchestration)
+## vs. gas-city / Gas Town (tmux + Claude Code orchestration)
 
-Gas-city orchestrates multiple Claude Code sessions in tmux panes
-— each pane is a conversation; the human switches between them.
+[Gas Town / gas-city](https://sourcegraph.com/blog/revenge-of-the-junior-developer)
+(Steve Yegge's work) orchestrates multiple Claude Code sessions
+in tmux panes — each pane is a conversation; the human switches
+between them. It's an elegant and influential design for
+human-in-the-loop multi-agent work, and minifac borrows the
+intuition that the human's eye is the load-bearing piece in
+non-trivial agent orchestration.
+
+**Where minifac picks differently:**
+
+- Gas-city is **conversational**; minifac is **structured**.
+  Each minifac node is a one-shot invocation with typed input
+  ([[Brief]] + prior results) and typed output ([[Sentinel]] /
+  callback). Better for replay / audit; gives up the
+  steer-mid-stream affordance unless you opt into callbacks.
+- Gas-city is **human-attended by default**; minifac is
+  **unattended by default**. Auto-mode is the build farm;
+  mid-run human-in-the-loop is an explicit opt-in via the
+  callback transport. Different default makes sense for
+  different tasks.
+- Gas-city: **per-session state in tmux**. Minifac: per-run
+  state in [[Runs-DB]] (SQLite), surviving daemon restarts and
+  queryable across runs.
+- Gas-city: **tmux** as the orchestration substrate — leans on
+  it for visual layout and process supervision. Minifac:
+  HTTP daemon + web viewer (or one-shot CLI), no terminal
+  multiplexer in the contract. Trade-off, not a critique:
+  tmux gives you instant local visual orchestration without a
+  daemon; minifac's daemon model gets you the web viewer and
+  remote inspection.
+
+Rough analogy: gas-city is "team chat with AI collaborators";
+minifac is "CI/CD with AI participants." Different shapes of
+problem; honest about which is which.
+
+## vs. ticket-queue agent runners (Jira-coupled or similar)
+
+Some agent workflow tools pair an external ticket system (Jira,
+Linear, GitHub Issues) with worker processes that pull from a
+queue. Tickets carry intent + state; workers run a factory
+against each one; humans interact via ticket comments.
 
 **Where minifac is different:**
 
-- Gas-city: conversational. Minifac: structured. Each minifac node
-  is a one-shot invocation with structured input ([[Brief]] +
-  prior results) and structured output ([[Sentinel]] / callback).
-- Gas-city: human-in-the-loop by default. Minifac:
-  unattended-by-default (auto-mode is the build farm; mid-run
-  human-in-the-loop is an opt-in capability).
-- Gas-city: per-session state in tmux. Minifac: per-run state in
-  [[Runs-DB]] — reproducible, queryable, surviving across
-  daemon restarts.
-- Gas-city: TMUX-as-substrate (leaky abstraction). Minifac: HTTP
-  daemon + viewer or one-shot CLI; no terminal multiplexing in the
-  contract.
-- Gas-city: metaphor-heavy naming (the thing minifac's anti-goals
-  explicitly reject).
-
-Rough analogy: gas-city is "team chat of AI contractors"; minifac
-is "CI/CD with AI participants." Different shapes of problem.
-
-## vs. Scarif (the prior internal tool this is replacing)
-
-Scarif paired Jira tickets with workers that pull from a queue.
-Tickets carry intent + state; workers run factories against them;
-human interaction is via Jira comments.
-
-**Where minifac is different:**
-
-- Tickets-in-Jira vs. briefs-in-git. Same shape (markdown
+- Tickets-in-Jira vs. **briefs-in-git**. Same shape (markdown
   description, optional metadata), but minifac's briefs are
-  reviewable in PRs and travel with the code.
-- Scarif's factory definitions accumulated in Scarif; per-repo
-  customization required Scarif knowledge. Minifac factories live
-  in `.minifac/factories/` per repo (composable via `extends:`,
-  per [[0008-File-Per-Factory-Composition]]).
-- Scarif grew bloated (multiple packages, metaphor-heavy naming,
-  Jira coupling). Minifac's anti-goals
-  ([[0013-Anti-Goals]]) explicitly resist that drift.
+  reviewable in PRs and travel with the code that depends on
+  them.
+- External factory definitions vs. **`.minifac/factories/` per
+  repo** (composable via `extends:`, per
+  [[0008-File-Per-Factory-Composition]]). No central catalog
+  to keep in sync; per-repo customization needs no knowledge of
+  a remote system.
+- Vendor coupling vs. **no required vendor**. minifac talks
+  HTTP to the executor and writes runs to local SQLite. No
+  Jira account, no central queue service. Ticket-queue tools
+  can be very good — they're just a different shape of
+  trade-off (centralization for visibility) than minifac picks
+  (locality for portability).
 
-The intent is to keep Scarif's good parts (factory-as-unit-of-work,
-queueable backlog, gated interaction) and drop the costs (vendor
-coupling, premature subsystems, metaphor noise).
+minifac's anti-goals ([[0013-Anti-Goals]]) explicitly resist the
+drift toward central-catalog + metaphor-heavy naming + multiple
+packages that tends to grow on tools in this space.
 
 ## vs. Claude Code itself
 

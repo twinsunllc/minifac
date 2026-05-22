@@ -44,8 +44,9 @@ defeats the purpose.
 - **No anthropomorphic metaphors** in code, file names, or docs. A node is a
   node, not a "worker," "agent persona," "citizen," etc. Things are named
   after what they do.
-- **No premature subsystems.** Scarif grew to a half-dozen packages. minifac
-  is one package until it has earned the right to split.
+- **No premature subsystems.** Tools in this space tend to fragment into
+  half a dozen packages before they have multi-package needs. minifac is
+  one package until it has earned the right to split.
 - **No untyped runner registries / plugin systems** before there's a second
   runner. Claude is the only runner until we add a real second one.
 - **No DAG-only assumptions.** The graph is directed but cycles are
@@ -79,19 +80,6 @@ should go through OpenSpec, not a casual refactor.
   the spec, validate it at load time.
 - Tests live next to the code (`foo.ts` + `foo.test.ts`) unless a directory
   earns its own `__tests__/`.
-
-## Reference material (borrow, don't copy wholesale)
-
-These projects on Jami's machine are fair game to mine for prompts, tool
-shapes, and patterns. Borrow what helps; do not import structure or
-nomenclature reflexively.
-
-- `~/projects/scarif/` — prior art for the graph/workflow runner. Prompts and
-  node-executor patterns are worth studying; the package layout, naming, and
-  scope creep are explicitly **not** the model.
-- `~/projects/twin-sun-claude-plugin/` — Twin Sun's AI rules and Claude Code
-  conventions. Lift rules that translate; leave anything coupled to a
-  specific Twin Sun workflow behind.
 
 ## When in doubt
 
