@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir } from "node:fs/promises";
+import { mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import type { Brief } from "../brief/loader.js";
 import type { ExecutorRegistry } from "../executor/registry.js";
@@ -9,6 +9,8 @@ import type { NodeOutputIndex } from "../factory/schema.js";
 import type { RunStore, StoredEventKind } from "../storage/run-store.js";
 import { minifacHome } from "../worktree/config.js";
 import { markBriefDone } from "./mark-done.js";
+import { writeMcpConfig } from "./mcp-config.js";
+import { type RunnerMcpServer, startRunnerMcpServer } from "./mcp-server.js";
 import { validateDeclaredOutputs } from "./outputs.js";
 import type { ExecutionLogEntry, RunResult } from "./result.js";
 import { type Substitutions, TemplateSubstitutionError, substitute } from "./substitute.js";
@@ -59,488 +61,601 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
   const log: ExecutionLogEntry[] = [];
   const outputsRoot = path.join(minifacHome(), "outputs", runId);
 
-  if (store) {
-    try {
-      await store.createRun({
-        id: runId,
-        factoryPath: sourcePath,
-        factoryName: factory.name,
-        briefPath: brief?.sourcePath ?? null,
-        change: brief?.frontmatter.change ?? null,
-        baseBranch: brief?.frontmatter.base_branch ?? null,
-        worktreePath: runCwd ?? null,
-        branchName: options.branchName ?? null,
-        startedAt: runStart,
-      });
-    } catch (err) {
-      reportStoreError(onEvent, runStart, err);
-    }
+  // The per-run MCP server's socket lives sibling to the run's outputs
+  // tree. The bind needs the parent directory present, and per-node outputs
+  // dirs are mkdirp'd ad-hoc when a node dispatches — so we mkdirp the root
+  // here unconditionally rather than wait for the first dispatch.
+  try {
+    await mkdir(outputsRoot, { recursive: true, mode: 0o755 });
+  } catch (err) {
+    reportStoreError(onEvent, runStart, err);
   }
 
-  const appendStoreEvent = async (
-    nodeId: string | null,
-    iteration: number,
-    kind: StoredEventKind,
-    payload: unknown,
-    emittedAt: number,
-  ): Promise<void> => {
-    if (!store) return;
-    try {
-      await store.appendEvent(runId, {
-        nodeId,
-        iteration,
-        kind,
-        payload,
-        emittedAt,
-      });
-    } catch (err) {
-      reportStoreError(onEvent, runStart, err);
-    }
-  };
+  // Per-dispatch transport tracking. Populated by the MCP server's
+  // `onOutput` callback when a tool call lands. Read by the validator's
+  // detail-string composer so `missing_outputs_detail` can name the MCP
+  // tool that was available but not called.
+  let perDispatchTransports: Map<string, "mcp" | "fs"> | null = null;
 
-  const iterations = new Map<string, number>();
-  const edgeTraversals = new Map<string, number>();
-  for (const id of Object.keys(factory.nodes)) iterations.set(id, 0);
-
-  let budgetHit = false;
-
-  const onSuccessInbound = new Set<string>();
-  for (const edge of factory.edges) {
-    if (edge.when === "on_success") onSuccessInbound.add(edge.to);
-  }
-  const startNodeIds = Object.keys(factory.nodes).filter((id) => !onSuccessInbound.has(id));
-
-  const queue: QueueItem[] = startNodeIds.map((id) => ({ nodeId: id }));
-
-  let result: RunResult | null = null;
-
-  const resolveCwd = (
-    nodeCwd: string | undefined,
-    nodeInputs: Record<string, unknown> | undefined,
-    outputsDir: string,
-  ): string => {
-    let effective = nodeCwd;
-    if (typeof effective === "string" && effective.length > 0) {
-      const localSubs: Substitutions = { ...baseSubs };
-      if (nodeInputs !== undefined) localSubs.inputs = nodeInputs;
-      localSubs.run = { ...(baseSubs.run ?? {}), outputsDir };
-      effective = substitute(effective, localSubs);
-    }
-    if (effective !== undefined && effective.length > 0) {
-      if (path.isAbsolute(effective)) return effective;
-      return path.resolve(sourceDir, effective);
-    }
-    if (runCwd !== undefined && runCwd.length > 0) return runCwd;
-    return sourceDir;
-  };
-
-  const edgeKey = (from: string, to: string, when: string): string => `${from}|${to}|${when}`;
-
-  while (queue.length > 0 && result === null) {
-    if (options.abortSignal?.aborted) {
-      result = {
-        status: "failed",
-        reason: "user_quit",
-        log,
-        durationMs: Date.now() - runStart,
-      };
-      break;
-    }
-    const next = queue.shift();
-    if (!next) break;
-    const { nodeId } = next;
-    const node = factory.nodes[nodeId];
-    if (!node) continue;
-
-    const usedIterations = iterations.get(nodeId) ?? 0;
-    if (node.max_iterations !== undefined && usedIterations >= node.max_iterations) {
-      budgetHit = true;
-      if (store) {
-        try {
-          await store.recordNodeEnd(runId, nodeId, usedIterations + 1, {
-            status: "skipped",
-            at: Date.now(),
-          });
-        } catch (err) {
-          reportStoreError(onEvent, runStart, err);
+  let mcpServer: RunnerMcpServer | null = null;
+  try {
+    mcpServer = await startRunnerMcpServer({
+      runId,
+      outputsRoot,
+      onOutput: (nodeId, key) => {
+        // Only mark when we're inside the dispatching node; tool calls
+        // landing during another node's window are defensive impossibilities
+        // because per-node tool registration is torn down at termination.
+        if (perDispatchTransports) {
+          perDispatchTransports.set(key, "mcp");
         }
-      }
-      continue;
-    }
-
-    const executorType = node.executor ?? "";
-    const executor = registry.get(executorType);
-    if (!executor) {
-      result = {
-        status: "failed",
-        reason: "unknown_executor",
-        proximateNodeId: nodeId,
-        log,
-        durationMs: Date.now() - runStart,
-      };
-      break;
-    }
-
-    const iteration = usedIterations + 1;
-    iterations.set(nodeId, iteration);
-
-    // Per-node-per-iteration outputs directory. Created mkdirp before
-    // dispatch so the executor (and `{{ run.outputs_dir }}` token) can
-    // rely on its existence.
-    const outputsDir = path.join(outputsRoot, nodeId, String(iteration));
-    try {
-      await mkdir(outputsDir, { recursive: true, mode: 0o755 });
-    } catch (err) {
-      reportStoreError(onEvent, runStart, err);
-    }
-
-    if (store) {
-      try {
-        await store.recordNodeStart(runId, nodeId, iteration, Date.now());
-      } catch (err) {
-        reportStoreError(onEvent, runStart, err);
-      }
-    }
-
-    const nodeInputs = (node as { __inputs?: unknown }).__inputs;
-    const inputsMap =
-      nodeInputs !== undefined &&
-      nodeInputs !== null &&
-      typeof nodeInputs === "object" &&
-      !Array.isArray(nodeInputs)
-        ? (nodeInputs as Record<string, unknown>)
-        : undefined;
-
-    // Build the per-node Substitutions, including outputsDir and the
-    // priorResults map (latest entry per nodeId wins).
-    const priorMap = new Map<string, NodeResult>();
-    for (const entry of priorResults) {
-      priorMap.set(entry.nodeId, entry);
-    }
-    const nodeSubs: Substitutions = { ...baseSubs };
-    nodeSubs.run = { ...(baseSubs.run ?? {}), outputsDir };
-    if (inputsMap !== undefined) nodeSubs.inputs = inputsMap;
-    nodeSubs.priorResults = priorMap;
-
-    let resolvedNode: ResolvedNode = { ...node, id: nodeId };
-    if ((nodeSubs.brief || nodeSubs.run || nodeSubs.inputs) && node.with) {
-      const nextWith: Record<string, unknown> = { ...node.with };
-      let changed = false;
-      let substitutionFailed = false;
-      try {
-        if (typeof node.with.prompt === "string") {
-          nextWith.prompt = substitute(node.with.prompt, nodeSubs);
-          changed = true;
-        }
-        if (typeof node.with.base === "string") {
-          nextWith.base = substitute(node.with.base, nodeSubs);
-          changed = true;
-        }
-      } catch (err) {
-        if (err instanceof TemplateSubstitutionError) {
-          // Surface the error and fail the run cleanly.
-          const entry: EmittedEvent = {
-            nodeId,
-            iteration,
-            emittedAt: Date.now() - runStart,
-            event: { kind: "stderr", line: `template substitution error: ${err.message}` },
-          };
-          onEvent?.(entry);
-          await appendStoreEvent(nodeId, iteration, "stderr", entry.event, entry.emittedAt);
-          if (store) {
-            try {
-              await store.recordNodeEnd(runId, nodeId, iteration, {
-                status: "failed",
-                at: Date.now(),
-              });
-            } catch (err2) {
-              reportStoreError(onEvent, runStart, err2);
-            }
-          }
-          result = {
-            status: "failed",
-            reason: "node_failed",
-            proximateNodeId: nodeId,
-            log,
-            durationMs: Date.now() - runStart,
-          };
-          substitutionFailed = true;
-        } else {
-          throw err;
-        }
-      }
-      if (substitutionFailed) break;
-      if (changed) {
-        resolvedNode = { ...resolvedNode, with: nextWith };
-      }
-    }
-    const snapshot: readonly NodeResult[] = Object.freeze(priorResults.slice());
-
-    const ctx: RunContext = {
-      factory,
-      priorResults: snapshot,
-      nodeId,
-      iteration,
-      cwd: resolveCwd(node.cwd, inputsMap, outputsDir),
-      outputsDir,
-    };
-
-    const startedAt = Date.now() - runStart;
-    let finalStatus: "succeeded" | "failed" | null = null;
-    let terminalMeta: unknown = undefined;
-
-    let aborted = false;
-    for await (const event of executor.run(resolvedNode, ctx)) {
-      if (options.abortSignal?.aborted) {
-        aborted = true;
-        break;
-      }
-      const emittedAt = Date.now() - runStart;
-      const entry: EmittedEvent = {
-        nodeId,
-        iteration,
-        emittedAt,
-        event,
-      };
-      onEvent?.(entry);
-      await appendStoreEvent(nodeId, iteration, event.kind, event, emittedAt);
-
-      if (event.kind === "status") {
-        if (event.status === "succeeded" || event.status === "failed") {
-          finalStatus = event.status;
-          terminalMeta = event.meta;
-        }
-      }
-    }
-    if (aborted) {
-      result = {
-        status: "failed",
-        reason: "user_quit",
-        proximateNodeId: nodeId,
-        log,
-        durationMs: Date.now() - runStart,
-      };
-      break;
-    }
-
-    const endedAt = Date.now() - runStart;
-
-    if (finalStatus === null) {
-      finalStatus = "failed";
-    }
-
-    log.push({ nodeId, iteration, status: finalStatus, startedAt, endedAt });
-
-    // Post-execution outputs validation. Runs only when the node:
-    //  - declared an `outputs:` block, AND
-    //  - terminated `succeeded`.
-    // Sentinel-failed and other-failed nodes skip validation; their
-    // `NodeResult.outputs` stays null.
-    let outputsForResult: NodeOutputIndex | null = null;
-    let resultReason: string | null = extractReason(finalStatus, terminalMeta);
-    let validatedIndex: NodeOutputIndex = {};
-    if (finalStatus === "succeeded" && node.outputs) {
-      const validation = await validateDeclaredOutputs(node, outputsDir);
-      validatedIndex = validation.index;
-      if (validation.missing.length > 0) {
-        finalStatus = "failed";
-        resultReason = "missing_required_output";
-        // Surface the override on stderr so operators see what happened.
-        const lines: string[] = [];
-        lines.push(
-          `missing_required_output: node "${nodeId}" succeeded but is missing required outputs: ${validation.missing.join(", ")} (dir: ${outputsDir})`,
-        );
-        for (const key of validation.missing) {
-          const d = validation.detail[key];
-          if (d) lines.push(`  - ${d}`);
-        }
-        for (const line of lines) {
-          const entry: EmittedEvent = {
-            nodeId,
-            iteration,
-            emittedAt: Date.now() - runStart,
-            event: { kind: "stderr", line },
-          };
-          onEvent?.(entry);
-          await appendStoreEvent(nodeId, iteration, "stderr", entry.event, entry.emittedAt);
-        }
-        // Re-emit a status event so consumers can observe the override.
-        const statusEvent: EmittedEvent = {
-          nodeId,
-          iteration,
-          emittedAt: Date.now() - runStart,
-          event: {
-            kind: "status",
-            status: "failed",
-            meta: {
-              reason: "missing_required_output",
-              missing_outputs: validation.missing,
-              missing_outputs_detail: validation.detail,
-              outputs_dir: outputsDir,
-              partial_index: validation.index,
-            },
-          },
-        };
-        onEvent?.(statusEvent);
-        await appendStoreEvent(
-          nodeId,
-          iteration,
-          "status",
-          statusEvent.event,
-          statusEvent.emittedAt,
-        );
-        // outputs on the prior-results snapshot is null when overridden.
-        outputsForResult = null;
-      } else {
-        outputsForResult = Object.keys(validation.index).length > 0 ? validation.index : null;
-      }
-    }
-
-    priorResults.push({
-      nodeId,
-      iteration,
-      status: finalStatus,
-      reason: resultReason,
-      startedAt,
-      endedAt,
-      outputs: outputsForResult,
+      },
     });
+  } catch (err) {
+    // Surface server-start failures on stderr and continue — the v1
+    // filesystem-JSON transport is still available as a fallback for
+    // every executor (`supportsMcp: false` semantics).
+    const entry: EmittedEvent = {
+      nodeId: "__mcp__",
+      iteration: 0,
+      emittedAt: Date.now() - runStart,
+      event: {
+        kind: "stderr",
+        line: `mcp server failed to start: ${(err as Error).message}; falling back to filesystem-JSON transport`,
+      },
+    };
+    onEvent?.(entry);
+  }
+  /** Absolute paths of every `.mcp.json` written during the run; cleaned up
+   * at run termination so the per-node outputs dirs are left containing
+   * only the model's outputs. */
+  const mcpConfigPaths: string[] = [];
 
-    // Persist any indexed outputs (including the partial index on override)
-    // BEFORE recordNodeEnd so the storage state is consistent.
-    if (store && Object.keys(validatedIndex).length > 0) {
+  const cleanupRunResources = async (): Promise<void> => {
+    if (mcpServer) {
       try {
-        await store.recordNodeOutputs(runId, nodeId, iteration, validatedIndex);
+        await mcpServer.close();
       } catch (err) {
         reportStoreError(onEvent, runStart, err);
       }
+      mcpServer = null;
     }
+    for (const p of mcpConfigPaths) {
+      try {
+        await rm(p, { force: true });
+      } catch {
+        /* already gone */
+      }
+    }
+    mcpConfigPaths.length = 0;
+  };
 
+  try {
     if (store) {
       try {
-        await store.recordNodeEnd(runId, nodeId, iteration, {
-          status: finalStatus,
-          at: Date.now(),
+        await store.createRun({
+          id: runId,
+          factoryPath: sourcePath,
+          factoryName: factory.name,
+          briefPath: brief?.sourcePath ?? null,
+          change: brief?.frontmatter.change ?? null,
+          baseBranch: brief?.frontmatter.base_branch ?? null,
+          worktreePath: runCwd ?? null,
+          branchName: options.branchName ?? null,
+          startedAt: runStart,
         });
       } catch (err) {
         reportStoreError(onEvent, runStart, err);
       }
     }
 
-    if (finalStatus === "succeeded" && node.terminal) {
-      result = {
-        status: "succeeded",
-        reason: "terminal_node_succeeded",
-        proximateNodeId: nodeId,
-        log,
-        durationMs: Date.now() - runStart,
-      };
-      break;
+    const appendStoreEvent = async (
+      nodeId: string | null,
+      iteration: number,
+      kind: StoredEventKind,
+      payload: unknown,
+      emittedAt: number,
+    ): Promise<void> => {
+      if (!store) return;
+      try {
+        await store.appendEvent(runId, {
+          nodeId,
+          iteration,
+          kind,
+          payload,
+          emittedAt,
+        });
+      } catch (err) {
+        reportStoreError(onEvent, runStart, err);
+      }
+    };
+
+    const iterations = new Map<string, number>();
+    const edgeTraversals = new Map<string, number>();
+    for (const id of Object.keys(factory.nodes)) iterations.set(id, 0);
+
+    let budgetHit = false;
+
+    const onSuccessInbound = new Set<string>();
+    for (const edge of factory.edges) {
+      if (edge.when === "on_success") onSuccessInbound.add(edge.to);
     }
+    const startNodeIds = Object.keys(factory.nodes).filter((id) => !onSuccessInbound.has(id));
 
-    const outbound = factory.edges.filter((e) => e.from === nodeId);
-    let traversedAny = false;
-    let skippedDueToBudget = false;
-    for (const edge of outbound) {
-      const matchesWhen =
-        (finalStatus === "succeeded" && edge.when === "on_success") ||
-        (finalStatus === "failed" && edge.when === "on_failure");
-      if (!matchesWhen) continue;
+    const queue: QueueItem[] = startNodeIds.map((id) => ({ nodeId: id }));
 
-      const key = edgeKey(edge.from, edge.to, edge.when);
-      const used = edgeTraversals.get(key) ?? 0;
-      if (edge.max_traversals !== undefined && used >= edge.max_traversals) {
-        skippedDueToBudget = true;
+    let result: RunResult | null = null;
+
+    const resolveCwd = (
+      nodeCwd: string | undefined,
+      nodeInputs: Record<string, unknown> | undefined,
+      outputsDir: string,
+    ): string => {
+      let effective = nodeCwd;
+      if (typeof effective === "string" && effective.length > 0) {
+        const localSubs: Substitutions = { ...baseSubs };
+        if (nodeInputs !== undefined) localSubs.inputs = nodeInputs;
+        localSubs.run = { ...(baseSubs.run ?? {}), outputsDir };
+        effective = substitute(effective, localSubs);
+      }
+      if (effective !== undefined && effective.length > 0) {
+        if (path.isAbsolute(effective)) return effective;
+        return path.resolve(sourceDir, effective);
+      }
+      if (runCwd !== undefined && runCwd.length > 0) return runCwd;
+      return sourceDir;
+    };
+
+    const edgeKey = (from: string, to: string, when: string): string => `${from}|${to}|${when}`;
+
+    while (queue.length > 0 && result === null) {
+      if (options.abortSignal?.aborted) {
+        result = {
+          status: "failed",
+          reason: "user_quit",
+          log,
+          durationMs: Date.now() - runStart,
+        };
+        break;
+      }
+      const next = queue.shift();
+      if (!next) break;
+      const { nodeId } = next;
+      const node = factory.nodes[nodeId];
+      if (!node) continue;
+
+      const usedIterations = iterations.get(nodeId) ?? 0;
+      if (node.max_iterations !== undefined && usedIterations >= node.max_iterations) {
         budgetHit = true;
+        if (store) {
+          try {
+            await store.recordNodeEnd(runId, nodeId, usedIterations + 1, {
+              status: "skipped",
+              at: Date.now(),
+            });
+          } catch (err) {
+            reportStoreError(onEvent, runStart, err);
+          }
+        }
         continue;
       }
 
-      const succ = factory.nodes[edge.to];
-      if (succ?.max_iterations !== undefined) {
-        const succUsed = iterations.get(edge.to) ?? 0;
-        if (succUsed >= succ.max_iterations) {
+      const executorType = node.executor ?? "";
+      const executor = registry.get(executorType);
+      if (!executor) {
+        result = {
+          status: "failed",
+          reason: "unknown_executor",
+          proximateNodeId: nodeId,
+          log,
+          durationMs: Date.now() - runStart,
+        };
+        break;
+      }
+
+      const iteration = usedIterations + 1;
+      iterations.set(nodeId, iteration);
+
+      // Per-node-per-iteration outputs directory. Created mkdirp before
+      // dispatch so the executor (and `{{ run.outputs_dir }}` token) can
+      // rely on its existence.
+      const outputsDir = path.join(outputsRoot, nodeId, String(iteration));
+      try {
+        await mkdir(outputsDir, { recursive: true, mode: 0o755 });
+      } catch (err) {
+        reportStoreError(onEvent, runStart, err);
+      }
+
+      if (store) {
+        try {
+          await store.recordNodeStart(runId, nodeId, iteration, Date.now());
+        } catch (err) {
+          reportStoreError(onEvent, runStart, err);
+        }
+      }
+
+      const nodeInputs = (node as { __inputs?: unknown }).__inputs;
+      const inputsMap =
+        nodeInputs !== undefined &&
+        nodeInputs !== null &&
+        typeof nodeInputs === "object" &&
+        !Array.isArray(nodeInputs)
+          ? (nodeInputs as Record<string, unknown>)
+          : undefined;
+
+      // Build the per-node Substitutions, including outputsDir and the
+      // priorResults map (latest entry per nodeId wins).
+      const priorMap = new Map<string, NodeResult>();
+      for (const entry of priorResults) {
+        priorMap.set(entry.nodeId, entry);
+      }
+      const nodeSubs: Substitutions = { ...baseSubs };
+      nodeSubs.run = { ...(baseSubs.run ?? {}), outputsDir };
+      if (inputsMap !== undefined) nodeSubs.inputs = inputsMap;
+      nodeSubs.priorResults = priorMap;
+
+      let resolvedNode: ResolvedNode = { ...node, id: nodeId };
+      if ((nodeSubs.brief || nodeSubs.run || nodeSubs.inputs) && node.with) {
+        const nextWith: Record<string, unknown> = { ...node.with };
+        let changed = false;
+        let substitutionFailed = false;
+        try {
+          if (typeof node.with.prompt === "string") {
+            nextWith.prompt = substitute(node.with.prompt, nodeSubs);
+            changed = true;
+          }
+          if (typeof node.with.base === "string") {
+            nextWith.base = substitute(node.with.base, nodeSubs);
+            changed = true;
+          }
+        } catch (err) {
+          if (err instanceof TemplateSubstitutionError) {
+            // Surface the error and fail the run cleanly.
+            const entry: EmittedEvent = {
+              nodeId,
+              iteration,
+              emittedAt: Date.now() - runStart,
+              event: { kind: "stderr", line: `template substitution error: ${err.message}` },
+            };
+            onEvent?.(entry);
+            await appendStoreEvent(nodeId, iteration, "stderr", entry.event, entry.emittedAt);
+            if (store) {
+              try {
+                await store.recordNodeEnd(runId, nodeId, iteration, {
+                  status: "failed",
+                  at: Date.now(),
+                });
+              } catch (err2) {
+                reportStoreError(onEvent, runStart, err2);
+              }
+            }
+            result = {
+              status: "failed",
+              reason: "node_failed",
+              proximateNodeId: nodeId,
+              log,
+              durationMs: Date.now() - runStart,
+            };
+            substitutionFailed = true;
+          } else {
+            throw err;
+          }
+        }
+        if (substitutionFailed) break;
+        if (changed) {
+          resolvedNode = { ...resolvedNode, with: nextWith };
+        }
+      }
+      const snapshot: readonly NodeResult[] = Object.freeze(priorResults.slice());
+
+      // MCP integration. Per ADR-0029 D6, the runner consults the executor's
+      // `supportsMcp` flag: when true we register per-node MCP tools, emit a
+      // per-dispatch `.mcp.json`, and thread its path through `ctx`. When
+      // false, none of that happens (the per-run server still runs — other
+      // nodes in the same run may use it).
+      const mcpInScope = executor.supportsMcp && mcpServer !== null;
+      perDispatchTransports = new Map();
+      let mcpConfigPath: string | undefined;
+      if (mcpInScope && mcpServer) {
+        if (node.outputs) {
+          mcpServer.registerNodeOutputs(nodeId, outputsDir, node.outputs);
+        }
+        try {
+          mcpConfigPath = await writeMcpConfig({
+            outputsDir,
+            socketPath: mcpServer.socketPath,
+          });
+          mcpConfigPaths.push(mcpConfigPath);
+        } catch (err) {
+          reportStoreError(onEvent, runStart, err);
+        }
+      }
+
+      const ctx: RunContext = {
+        factory,
+        priorResults: snapshot,
+        nodeId,
+        iteration,
+        cwd: resolveCwd(node.cwd, inputsMap, outputsDir),
+        outputsDir,
+        mcpConfigPath,
+      };
+
+      const startedAt = Date.now() - runStart;
+      let finalStatus: "succeeded" | "failed" | null = null;
+      let terminalMeta: unknown = undefined;
+
+      let aborted = false;
+      for await (const event of executor.run(resolvedNode, ctx)) {
+        if (options.abortSignal?.aborted) {
+          aborted = true;
+          break;
+        }
+        const emittedAt = Date.now() - runStart;
+        const entry: EmittedEvent = {
+          nodeId,
+          iteration,
+          emittedAt,
+          event,
+        };
+        onEvent?.(entry);
+        await appendStoreEvent(nodeId, iteration, event.kind, event, emittedAt);
+
+        if (event.kind === "status") {
+          if (event.status === "succeeded" || event.status === "failed") {
+            finalStatus = event.status;
+            terminalMeta = event.meta;
+          }
+        }
+      }
+      if (aborted) {
+        result = {
+          status: "failed",
+          reason: "user_quit",
+          proximateNodeId: nodeId,
+          log,
+          durationMs: Date.now() - runStart,
+        };
+        break;
+      }
+
+      const endedAt = Date.now() - runStart;
+
+      if (finalStatus === null) {
+        finalStatus = "failed";
+      }
+
+      log.push({ nodeId, iteration, status: finalStatus, startedAt, endedAt });
+
+      // De-register the dispatching node's MCP tools immediately after the
+      // executor's event stream drains, before validation. A late tool call
+      // arriving after this point returns an MCP "unknown tool" error (per
+      // ADR-0029's tear-down rules).
+      if (mcpInScope && mcpServer && node.outputs) {
+        mcpServer.clearNodeOutputs(nodeId);
+      }
+
+      // Post-execution outputs validation. Runs only when the node:
+      //  - declared an `outputs:` block, AND
+      //  - terminated `succeeded`.
+      // Sentinel-failed and other-failed nodes skip validation; their
+      // `NodeResult.outputs` stays null.
+      let outputsForResult: NodeOutputIndex | null = null;
+      let resultReason: string | null = extractReason(finalStatus, terminalMeta);
+      let validatedIndex: NodeOutputIndex = {};
+      if (finalStatus === "succeeded" && node.outputs) {
+        const validation = await validateDeclaredOutputs(node, outputsDir, {
+          mcpAvailable: mcpInScope,
+          mcpReported: perDispatchTransports,
+        });
+        validatedIndex = validation.index;
+        if (validation.missing.length > 0) {
+          finalStatus = "failed";
+          resultReason = "missing_required_output";
+          // Surface the override on stderr so operators see what happened.
+          const lines: string[] = [];
+          lines.push(
+            `missing_required_output: node "${nodeId}" succeeded but is missing required outputs: ${validation.missing.join(", ")} (dir: ${outputsDir})`,
+          );
+          for (const key of validation.missing) {
+            const d = validation.detail[key];
+            if (d) lines.push(`  - ${d}`);
+          }
+          for (const line of lines) {
+            const entry: EmittedEvent = {
+              nodeId,
+              iteration,
+              emittedAt: Date.now() - runStart,
+              event: { kind: "stderr", line },
+            };
+            onEvent?.(entry);
+            await appendStoreEvent(nodeId, iteration, "stderr", entry.event, entry.emittedAt);
+          }
+          // Re-emit a status event so consumers can observe the override.
+          const statusEvent: EmittedEvent = {
+            nodeId,
+            iteration,
+            emittedAt: Date.now() - runStart,
+            event: {
+              kind: "status",
+              status: "failed",
+              meta: {
+                reason: "missing_required_output",
+                missing_outputs: validation.missing,
+                missing_outputs_detail: validation.detail,
+                outputs_dir: outputsDir,
+                partial_index: validation.index,
+              },
+            },
+          };
+          onEvent?.(statusEvent);
+          await appendStoreEvent(
+            nodeId,
+            iteration,
+            "status",
+            statusEvent.event,
+            statusEvent.emittedAt,
+          );
+          // outputs on the prior-results snapshot is null when overridden.
+          outputsForResult = null;
+        } else {
+          outputsForResult = Object.keys(validation.index).length > 0 ? validation.index : null;
+        }
+      }
+
+      priorResults.push({
+        nodeId,
+        iteration,
+        status: finalStatus,
+        reason: resultReason,
+        startedAt,
+        endedAt,
+        outputs: outputsForResult,
+      });
+
+      // Persist any indexed outputs (including the partial index on override)
+      // BEFORE recordNodeEnd so the storage state is consistent.
+      if (store && Object.keys(validatedIndex).length > 0) {
+        try {
+          await store.recordNodeOutputs(runId, nodeId, iteration, validatedIndex);
+        } catch (err) {
+          reportStoreError(onEvent, runStart, err);
+        }
+      }
+
+      if (store) {
+        try {
+          await store.recordNodeEnd(runId, nodeId, iteration, {
+            status: finalStatus,
+            at: Date.now(),
+          });
+        } catch (err) {
+          reportStoreError(onEvent, runStart, err);
+        }
+      }
+
+      if (finalStatus === "succeeded" && node.terminal) {
+        result = {
+          status: "succeeded",
+          reason: "terminal_node_succeeded",
+          proximateNodeId: nodeId,
+          log,
+          durationMs: Date.now() - runStart,
+        };
+        break;
+      }
+
+      const outbound = factory.edges.filter((e) => e.from === nodeId);
+      let traversedAny = false;
+      let skippedDueToBudget = false;
+      for (const edge of outbound) {
+        const matchesWhen =
+          (finalStatus === "succeeded" && edge.when === "on_success") ||
+          (finalStatus === "failed" && edge.when === "on_failure");
+        if (!matchesWhen) continue;
+
+        const key = edgeKey(edge.from, edge.to, edge.when);
+        const used = edgeTraversals.get(key) ?? 0;
+        if (edge.max_traversals !== undefined && used >= edge.max_traversals) {
           skippedDueToBudget = true;
           budgetHit = true;
           continue;
         }
+
+        const succ = factory.nodes[edge.to];
+        if (succ?.max_iterations !== undefined) {
+          const succUsed = iterations.get(edge.to) ?? 0;
+          if (succUsed >= succ.max_iterations) {
+            skippedDueToBudget = true;
+            budgetHit = true;
+            continue;
+          }
+        }
+
+        edgeTraversals.set(key, used + 1);
+        queue.push({ nodeId: edge.to });
+        traversedAny = true;
       }
 
-      edgeTraversals.set(key, used + 1);
-      queue.push({ nodeId: edge.to });
-      traversedAny = true;
+      if (finalStatus === "failed" && !traversedAny) {
+        result = {
+          status: "failed",
+          reason: skippedDueToBudget ? "budget_exhausted" : "node_failed",
+          proximateNodeId: nodeId,
+          log,
+          durationMs: Date.now() - runStart,
+        };
+        break;
+      }
     }
 
-    if (finalStatus === "failed" && !traversedAny) {
+    if (result === null) {
       result = {
         status: "failed",
-        reason: skippedDueToBudget ? "budget_exhausted" : "node_failed",
-        proximateNodeId: nodeId,
+        reason: budgetHit ? "budget_exhausted" : "graph_drained",
         log,
         durationMs: Date.now() - runStart,
       };
-      break;
     }
-  }
 
-  if (result === null) {
-    result = {
-      status: "failed",
-      reason: budgetHit ? "budget_exhausted" : "graph_drained",
-      log,
-      durationMs: Date.now() - runStart,
-    };
-  }
-
-  if (result.status === "succeeded" && brief && runCwd !== undefined && runCwd.length > 0) {
-    const change = brief.frontmatter.change;
-    if (typeof change === "string" && change.length > 0) {
-      try {
-        const markRes = await markBriefDone({ change, runCwd });
-        if (markRes.warning) {
+    if (result.status === "succeeded" && brief && runCwd !== undefined && runCwd.length > 0) {
+      const change = brief.frontmatter.change;
+      if (typeof change === "string" && change.length > 0) {
+        try {
+          const markRes = await markBriefDone({ change, runCwd });
+          if (markRes.warning) {
+            const entry: EmittedEvent = {
+              nodeId: "__mark_done__",
+              iteration: 0,
+              emittedAt: Date.now() - runStart,
+              event: { kind: "stderr", line: markRes.warning },
+            };
+            onEvent?.(entry);
+          }
+        } catch (err) {
           const entry: EmittedEvent = {
             nodeId: "__mark_done__",
             iteration: 0,
             emittedAt: Date.now() - runStart,
-            event: { kind: "stderr", line: markRes.warning },
+            event: {
+              kind: "stderr",
+              line: `mark-done: unexpected error: ${(err as Error).message}`,
+            },
           };
           onEvent?.(entry);
         }
-      } catch (err) {
-        const entry: EmittedEvent = {
-          nodeId: "__mark_done__",
-          iteration: 0,
-          emittedAt: Date.now() - runStart,
-          event: {
-            kind: "stderr",
-            line: `mark-done: unexpected error: ${(err as Error).message}`,
-          },
-        };
-        onEvent?.(entry);
       }
     }
-  }
 
-  if (store) {
-    try {
-      // Invariant: `finalizeRun` MUST resolve before the caller releases the
-      // per-change lockfile. See `worktree-management` capability,
-      // "Runner finalizes runs.db status before releasing the per-change
-      // lockfile" — the orphan-probe in `auto-mode` relies on it. Callers
-      // (e.g. `runBriefAutomated`) hold the lock for the whole life of
-      // `runFactory` and unlink in `finally`, so awaiting here is what
-      // makes the ordering load-bearing.
-      await store.finalizeRun(runId, {
-        status: result.status,
-        reason: result.reason,
-        proximateNodeId: result.proximateNodeId ?? null,
-        endedAt: Date.now(),
-      });
-    } catch (err) {
-      reportStoreError(onEvent, runStart, err);
+    if (store) {
+      try {
+        // Invariant: `finalizeRun` MUST resolve before the caller releases the
+        // per-change lockfile. See `worktree-management` capability,
+        // "Runner finalizes runs.db status before releasing the per-change
+        // lockfile" — the orphan-probe in `auto-mode` relies on it. Callers
+        // (e.g. `runBriefAutomated`) hold the lock for the whole life of
+        // `runFactory` and unlink in `finally`, so awaiting here is what
+        // makes the ordering load-bearing.
+        await store.finalizeRun(runId, {
+          status: result.status,
+          reason: result.reason,
+          proximateNodeId: result.proximateNodeId ?? null,
+          endedAt: Date.now(),
+        });
+      } catch (err) {
+        reportStoreError(onEvent, runStart, err);
+      }
     }
-  }
 
-  return result;
+    return result;
+  } finally {
+    // Tear down the MCP server (closes connections, removes the socket
+    // file) and sweep every `.mcp.json` written during the run. The
+    // per-node outputs directories themselves are left for
+    // `prune --outputs`. Lives in a finally block so an exception thrown
+    // mid-run still releases the socket per ADR-0029's lifecycle scenario.
+    await cleanupRunResources();
+  }
 }
 
 function extractReason(status: "succeeded" | "failed", meta: unknown): string | null {

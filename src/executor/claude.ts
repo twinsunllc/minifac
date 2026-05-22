@@ -229,7 +229,7 @@ export function buildStreamJsonInput(priorResults: readonly NodeResult[], prompt
  * payload. Exported for snapshot testing — the argv shape is part of the
  * wire-format contract.
  */
-export function buildCliArgs(w: ClaudeWith): string[] {
+export function buildCliArgs(w: ClaudeWith, mcpConfigPath?: string): string[] {
   const args: string[] = [
     "--print",
     "--verbose",
@@ -238,6 +238,13 @@ export function buildCliArgs(w: ClaudeWith): string[] {
     "--output-format",
     "stream-json",
   ];
+  // `--mcp-config` precedes node-supplied flags and authority knobs so the
+  // per-dispatch MCP config can't be overridden by `with.args`. Pinned by
+  // the `node-executor` capability's "`--mcp-config` is passed when an MCP
+  // config path is in scope" scenario.
+  if (mcpConfigPath !== undefined && mcpConfigPath.length > 0) {
+    args.push("--mcp-config", mcpConfigPath);
+  }
   if (w.model) {
     args.push("--model", w.model);
   }
@@ -265,6 +272,7 @@ export function buildCliArgs(w: ClaudeWith): string[] {
 
 export class ClaudeExecutor implements NodeExecutor {
   readonly type = "claude";
+  readonly supportsMcp = true;
 
   private readonly spawn: SpawnLike;
   private readonly binary: string;
@@ -293,7 +301,7 @@ export class ClaudeExecutor implements NodeExecutor {
       parsed.data.emit_sentinel_instructions === false
         ? prompt
         : `${prompt}\n\n${SENTINEL_INSTRUCTIONS}`;
-    const cliArgs = buildCliArgs(parsed.data);
+    const cliArgs = buildCliArgs(parsed.data, ctx.mcpConfigPath);
 
     let child: ChildProcess;
     try {

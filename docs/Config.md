@@ -225,6 +225,30 @@ interface WorktreeConfig {
 }
 ```
 
+## Per-run state directory layout
+
+Runs that involve a [[Factory]] with `value` outputs and an MCP-capable
+executor (Claude) use an inline MCP server. The server's socket and per-
+node config files live alongside the per-run outputs tree under
+`${MINIFAC_HOME}/outputs/`:
+
+```
+${MINIFAC_HOME}/outputs/
+  <run-id>.mcp.sock                 # per-run unix socket
+  <run-id>/<node-id>/<iteration>/
+    .mcp.json                       # per-dispatch MCP client config (cleaned at run end)
+    <key>.json                      # `value` output, written via MCP or Write
+    <key>.<ext>                     # `file` output
+    <key>/                          # `directory` output
+```
+
+The socket path is computed by the runner at run start and is **not** a
+`config.yaml` key — operators don't tune socket paths, and surfacing it
+in config would invite operators to point it at exotic filesystems where
+unix-socket semantics are squirrely. See ADR-0029 D9. The `.mcp.json`
+files are removed at run termination alongside the socket close; the
+per-node outputs directories themselves are left for `prune --outputs`.
+
 ## Related
 
 - [[Worktree]] — describes where worktrees live and the lock mechanism
@@ -233,3 +257,5 @@ interface WorktreeConfig {
   machine-local state layout
 - [[0011-SQLite-for-Runs]] — rationale for SQLite as the runs store
 - [[0012-Where-State-Lives]] — decision on what lives in `~/.minifac/` vs. the repo
+- [[0029-Node-Outputs-MCP]] — rationale for the per-run MCP server and the
+  per-run state-directory layout

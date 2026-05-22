@@ -40,6 +40,7 @@ function fakeRegistry(scripts: Record<string, NodeEvent[]>): () => ExecutorRegis
     const reg = new ExecutorRegistry();
     const exec: NodeExecutor = {
       type: "test",
+      supportsMcp: false,
       async *run(node: ResolvedNode): AsyncIterable<NodeEvent> {
         const ev = scripts[node.id] ?? [{ kind: "status", status: "succeeded" }];
         for (const e of ev) yield e;

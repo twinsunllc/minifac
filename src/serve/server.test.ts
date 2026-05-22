@@ -26,6 +26,7 @@ function buildScripted(scripts: Record<string, NodeEvent[]>): () => ExecutorRegi
     const reg = new ExecutorRegistry();
     const exec: NodeExecutor = {
       type: "test",
+      supportsMcp: false,
       async *run(node: ResolvedNode): AsyncIterable<NodeEvent> {
         const ev = scripts[node.id] ?? [{ kind: "status", status: "succeeded" }];
         for (const e of ev) yield e;
@@ -221,6 +222,7 @@ describe("startDaemon http API", () => {
         const reg = new ExecutorRegistry();
         const exec: NodeExecutor = {
           type: "test",
+          supportsMcp: false,
           async *run(): AsyncIterable<NodeEvent> {
             await new Promise((r) => setTimeout(r, 200));
             yield { kind: "status", status: "succeeded" };
@@ -288,6 +290,7 @@ describe("startDaemon http API", () => {
         const reg = new ExecutorRegistry();
         const exec: NodeExecutor = {
           type: "test",
+          supportsMcp: false,
           async *run(): AsyncIterable<NodeEvent> {
             yield { kind: "stdout", line: "starting" };
             await new Promise((r) => setTimeout(r, 10_000));

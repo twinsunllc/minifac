@@ -366,6 +366,79 @@ describe("buildCliArgs", () => {
     expect(typedIdx).toBeGreaterThanOrEqual(0);
     expect(passthroughIdx).toBeGreaterThan(typedIdx);
   });
+
+  it("emits --mcp-config when an mcpConfigPath is passed in", () => {
+    const args = buildCliArgs({ prompt: "hi" }, "/tmp/x/.mcp.json");
+    const idx = args.indexOf("--mcp-config");
+    expect(idx).toBeGreaterThanOrEqual(0);
+    expect(args[idx + 1]).toBe("/tmp/x/.mcp.json");
+  });
+
+  it("places --mcp-config before authority knobs and passthrough", () => {
+    const args = buildCliArgs(
+      {
+        prompt: "hi",
+        permission_mode: "bypass_permissions",
+        args: ["--debug"],
+      },
+      "/tmp/x/.mcp.json",
+    );
+    const mcpIdx = args.indexOf("--mcp-config");
+    const authIdx = args.indexOf("--permission-mode");
+    const passthroughIdx = args.indexOf("--debug");
+    expect(mcpIdx).toBeGreaterThanOrEqual(0);
+    expect(authIdx).toBeGreaterThan(mcpIdx);
+    expect(passthroughIdx).toBeGreaterThan(authIdx);
+  });
+
+  it("omits --mcp-config when mcpConfigPath is undefined", () => {
+    const args = buildCliArgs({ prompt: "hi" });
+    expect(args).not.toContain("--mcp-config");
+  });
+
+  it("omits --mcp-config when mcpConfigPath is an empty string", () => {
+    const args = buildCliArgs({ prompt: "hi" }, "");
+    expect(args).not.toContain("--mcp-config");
+  });
+});
+
+describe("ClaudeExecutor MCP wiring", () => {
+  it("forwards ctx.mcpConfigPath to the spawned CLI as --mcp-config <path>", async () => {
+    let argsSeen: readonly string[] | null = null;
+    const executor = new ClaudeExecutor({
+      spawn: (_bin, args, _opts) => {
+        argsSeen = args;
+        const c = makeFakeChild();
+        setImmediate(() => c.finish(0));
+        return c as unknown as ReturnType<typeof import("node:child_process").spawn>;
+      },
+    });
+    const ctx = makeCtx({ mcpConfigPath: "/tmp/abc/.mcp.json" });
+    await collect(executor, makeNode(), ctx);
+    expect(argsSeen).not.toBeNull();
+    const idx = (argsSeen as readonly string[]).indexOf("--mcp-config");
+    expect(idx).toBeGreaterThanOrEqual(0);
+    expect((argsSeen as readonly string[])[idx + 1]).toBe("/tmp/abc/.mcp.json");
+  });
+
+  it("omits --mcp-config when ctx.mcpConfigPath is undefined (unit-test path)", async () => {
+    let argsSeen: readonly string[] | null = null;
+    const executor = new ClaudeExecutor({
+      spawn: (_bin, args, _opts) => {
+        argsSeen = args;
+        const c = makeFakeChild();
+        setImmediate(() => c.finish(0));
+        return c as unknown as ReturnType<typeof import("node:child_process").spawn>;
+      },
+    });
+    await collect(executor, makeNode(), makeCtx());
+    expect(argsSeen).not.toBeNull();
+    expect(argsSeen).not.toContain("--mcp-config");
+  });
+
+  it("supportsMcp is true on the Claude executor", () => {
+    expect(new ClaudeExecutor().supportsMcp).toBe(true);
+  });
 });
 
 describe("ClaudeExecutor with: validation", () => {

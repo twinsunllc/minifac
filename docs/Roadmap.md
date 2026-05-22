@@ -22,7 +22,13 @@ briefs supply intent, [[Studio]] eventually provides inspection
 
 ## In-flight
 
-(none — repo is in a clean state)
+- **`node-outputs-mcp`** — implementation in progress.
+  Per-run inline MCP server exposing typed
+  `mcp__minifac__report_<key>` tools derived from each dispatching
+  node's `value` outputs. Bridges into the same on-disk paths the
+  v1 filesystem transport used, with a `supportsMcp` capability
+  flag on the executor interface for fallback. See
+  [[0029-Node-Outputs-MCP]].
 
 ## Briefs queued ready-to-run
 
@@ -65,13 +71,8 @@ enforces this beyond explicit `depends_on` fields.
   after a `succeeded` sentinel. Default budget 1, opt-out
   with `output_nudge_budget: 0`. Sentinel-failed nodes never
   nudged. `depends_on: [node-outputs]`.
-- [ ] **`node-outputs-mcp`** — [[0029-Node-Outputs-MCP]].
-  Replace filesystem-JSON transport for `value` outputs with
-  an inline MCP server exposing typed tools per declared
-  output. File / directory outputs stay filesystem.
-  Cross-executor story preserved via a `supportsMcp`
-  capability flag with filesystem fallback.
-  `depends_on: [node-outputs]`.
+- (moved to **In-flight**) **`node-outputs-mcp`** —
+  [[0029-Node-Outputs-MCP]]. Implementation in progress.
 - [ ] **`callback-status-signaling`** *(design-pending — see
   [[Open-Questions]] § "Callback intervention surface")* —
   [[0017-Callback-Status-Signaling]]. Originally proposed as a

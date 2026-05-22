@@ -153,6 +153,7 @@ type Script = (ctx: RunContext, node: ResolvedNode) => Iterable<NodeEvent>;
 
 class FakeExecutor implements NodeExecutor {
   readonly type: string;
+  readonly supportsMcp = false;
   /** Per-node scripts keyed by node id. The same script runs every iteration. */
   scripts: Map<string, Script>;
   /** Optional capture of contexts seen, per node id. */
