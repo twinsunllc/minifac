@@ -34,7 +34,13 @@ function shOrThrow(cwd: string, args: string[]): void {
   }
 }
 
-/** Fake executor: emits a `started` then `succeeded` status. */
+/** Fake executor: emits a `started` then `succeeded` status. A small
+ *  delay between the two pushes completion past the next poll-loop
+ *  iteration, which prevents a flaky race in `dep-driven scheduling`:
+ *  without the delay, foo's mark-done step could land before bar's
+ *  decide() reads brief state, causing bar to be dispatched instead
+ *  of skipped-with-reason-`blocked`. Reproducibly bites on Node 24.x
+ *  (~12%); rare on Node 22 due to microtask scheduling differences. */
 class FakeExecutor implements NodeExecutor {
   readonly type = "fake";
   readonly supportsMcp = false;
@@ -42,6 +48,7 @@ class FakeExecutor implements NodeExecutor {
   async *run(_node: ResolvedNode, _ctx: RunContext): AsyncIterable<NodeEvent> {
     yield { kind: "stdout", line: "fake hello" };
     yield { kind: "status", status: "started" };
+    await new Promise<void>((r) => setTimeout(r, 50));
     yield { kind: "status", status: "succeeded" };
   }
 }
