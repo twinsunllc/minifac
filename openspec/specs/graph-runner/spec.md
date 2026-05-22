@@ -145,17 +145,26 @@ the total run duration.
 The runner SHALL accept an optional `brief` argument identifying the
 brief that initiated the run and an optional `runCwd` argument
 carrying the run-level cwd (see the "Run-level cwd resolution"
-requirement). Together with the per-node inputs map produced by step
-inlining (see the `factory-schema` capability's "Step inlining order"
-and "Step input validation" requirements), these form the
-substitution namespaces the runner offers to each scheduled node.
+requirement). The runner SHALL ALSO accept an optional
+`runBaseBranch` argument carrying the run's configured base branch
+(the branch the worktree was created from, per the
+`worktree-management` capability). Together with the per-node inputs
+map produced by step inlining (see the `factory-schema` capability's
+"Step inlining order" and "Step input validation" requirements),
+these form the substitution namespaces the runner offers to each
+scheduled node.
 
 For each scheduled node, immediately before dispatching to the
 node's executor, the runner SHALL substitute template tokens in
 both:
 
 - the node's `with.prompt` field (if and only if it is a string), and
-- the node's `cwd` field (if and only if it is a non-empty string)
+- the node's `cwd` field (if and only if it is a non-empty string), and
+- the node's `with.base` field (if and only if it is a string),
+  for the benefit of the `check-merge` executor and any future
+  executor whose `with:` schema names a string field whose contents
+  may carry brief/run/inputs tokens. The runner SHALL apply the
+  same substitution grammar to `with.base` as to `with.prompt`.
 
 The token grammar SHALL be: literal `{{`, optional ASCII whitespace,
 a namespace identifier (`brief`, `run`, or `inputs`), literal `.`, a
@@ -173,6 +182,14 @@ Field resolution rules per matched token:
 - `run.cwd`: substitute the run's `runCwd` value (the worktree path
   or the in-place cwd, as supplied by the CLI) when `runCwd` is in
   scope; otherwise leave the token verbatim.
+- `run.base_branch`: substitute the run's `runBaseBranch` value (the
+  branch the worktree was created from, per the
+  `worktree-management` capability) when `runBaseBranch` is in
+  scope and is a non-empty string; substitute the empty string
+  when `runBaseBranch` is in scope but is the empty string (in-
+  place / brief-less / no-base runs); leave the token verbatim
+  when `runBaseBranch` is not in scope at all (e.g. a unit-test
+  invocation of `runFactory` that does not supply it).
 - `inputs.<field>`: substitute the corresponding value from the
   per-node inputs map produced by step inlining. When the value is
   a string, substitute it verbatim. When the value is a number,
@@ -196,8 +213,10 @@ Field resolution rules per matched token:
 
 When the run has no brief, `brief.*` tokens SHALL be left verbatim.
 When the run has no `runCwd` in scope (e.g. a unit-test invocation
-of `runFactory` without the CLI sequencing wrapper), `run.*` tokens
-SHALL be left verbatim. When the node has no inputs map (inline
+of `runFactory` without the CLI sequencing wrapper), `run.cwd`
+tokens SHALL be left verbatim. When the run has no `runBaseBranch`
+in scope, `run.base_branch` tokens SHALL be left verbatim (matching
+`run.cwd`'s convention). When the node has no inputs map (inline
 node, not produced by step inlining), `inputs.*` tokens SHALL be
 left verbatim.
 
@@ -291,6 +310,39 @@ requirement.
   `"Run id: {{ run.id }}."` and the runner's `runCwd` is set
 - **THEN** the executor receives `with.prompt` equal to
   `"Run id: {{ run.id }}."` (verbatim, no error)
+
+#### Scenario: `{{ run.base_branch }}` substitutes in `with.base`
+
+- **WHEN** a node's `with.base` is `"{{ run.base_branch }}"` and the
+  runner's `runBaseBranch` is `"main"`
+- **THEN** the executor receives `with.base` equal to `"main"`
+
+#### Scenario: `{{ run.base_branch }}` substitutes inside `with.prompt`
+
+- **WHEN** a node's `with.prompt` is
+  `"Probing against {{ run.base_branch }}."` and the runner's
+  `runBaseBranch` is `"develop"`
+- **THEN** the executor receives `with.prompt` equal to
+  `"Probing against develop."`
+
+#### Scenario: `{{ run.base_branch }}` with empty runBaseBranch substitutes empty string
+
+- **WHEN** a node's `with.base` is `"{{ run.base_branch }}"` and the
+  runner was invoked with `runBaseBranch: ""` (in-place run, or
+  run from a non-worktree base)
+- **THEN** the substitution pass replaces the token with the empty
+  string, and `with.base` arrives at the executor as the empty
+  string (the executor's own `with:` validation determines whether
+  this is acceptable)
+
+#### Scenario: `{{ run.base_branch }}` with no runBaseBranch in scope passes through
+
+- **WHEN** a node's `with.base` is `"{{ run.base_branch }}"` and the
+  runner was invoked without a `runBaseBranch` argument at all
+  (e.g. a unit test of `runFactory` that supplies neither)
+- **THEN** the substitution pass leaves the field verbatim as
+  `"{{ run.base_branch }}"`; the executor's existing `with:`
+  validation applies to the unchanged string
 
 #### Scenario: `{{ inputs.<field> }}` substitutes a string input value
 

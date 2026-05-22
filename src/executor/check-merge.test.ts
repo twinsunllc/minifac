@@ -13,7 +13,10 @@ interface Snapshot {
   mergeFiles: Record<string, string | null>;
 }
 
-function runGit(cwd: string, args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
+function runGit(
+  cwd: string,
+  args: string[],
+): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     const child = nodeSpawn("git", args, { cwd });
     let stdout = "";
@@ -81,7 +84,11 @@ function makeNode(withVal: unknown): ResolvedNode {
 
 function makeCtx(cwd: string): RunContext {
   return {
-    factory: { name: "f", nodes: { check: { executor: "check-merge", terminal: true } }, edges: [] },
+    factory: {
+      name: "f",
+      nodes: { check: { executor: "check-merge", terminal: true } },
+      edges: [],
+    },
     priorResults: [],
     nodeId: "check",
     iteration: 1,
@@ -89,7 +96,11 @@ function makeCtx(cwd: string): RunContext {
   };
 }
 
-async function collect(exec: CheckMergeExecutor, node: ResolvedNode, ctx: RunContext): Promise<NodeEvent[]> {
+async function collect(
+  exec: CheckMergeExecutor,
+  node: ResolvedNode,
+  ctx: RunContext,
+): Promise<NodeEvent[]> {
   const events: NodeEvent[] = [];
   for await (const e of exec.run(node, ctx)) events.push(e);
   return events;
@@ -114,7 +125,11 @@ describe("CheckMergeExecutor", () => {
       // Base = main, HEAD = feature, fast-forward possible.
       const exec = new CheckMergeExecutor();
       const before = await snapshot(repo);
-      const events = await collect(exec, makeNode({ base: "main", mode: "any-merge" }), makeCtx(repo));
+      const events = await collect(
+        exec,
+        makeNode({ base: "main", mode: "any-merge" }),
+        makeCtx(repo),
+      );
       expect(finalStatus(events).status).toBe("succeeded");
       const after = await snapshot(repo);
       expect(after).toEqual(before);
@@ -155,7 +170,11 @@ describe("CheckMergeExecutor", () => {
       await git(repo, "checkout", "-q", "feature");
       const exec = new CheckMergeExecutor();
       const before = await snapshot(repo);
-      const events = await collect(exec, makeNode({ base: "main", mode: "any-merge" }), makeCtx(repo));
+      const events = await collect(
+        exec,
+        makeNode({ base: "main", mode: "any-merge" }),
+        makeCtx(repo),
+      );
       expect(finalStatus(events).status).toBe("succeeded");
       const after = await snapshot(repo);
       expect(after).toEqual(before);
@@ -203,7 +222,11 @@ describe("CheckMergeExecutor", () => {
       await git(repo, "checkout", "-q", "feature");
       const exec = new CheckMergeExecutor();
       const before = await snapshot(repo);
-      const events = await collect(exec, makeNode({ base: "main", mode: "any-merge" }), makeCtx(repo));
+      const events = await collect(
+        exec,
+        makeNode({ base: "main", mode: "any-merge" }),
+        makeCtx(repo),
+      );
       const fs = finalStatus(events);
       expect(fs.status).toBe("failed");
       expect(String((fs.meta as { message: string }).message)).toMatch(/conflict/);
@@ -278,11 +301,7 @@ describe("CheckMergeExecutor", () => {
     try {
       await commitFile(repo, "a.txt", "1\n", "init");
       const exec = new CheckMergeExecutor();
-      const events = await collect(
-        exec,
-        makeNode({ base: "main", mode: "rebase" }),
-        makeCtx(repo),
-      );
+      const events = await collect(exec, makeNode({ base: "main", mode: "rebase" }), makeCtx(repo));
       const fs = finalStatus(events);
       expect(fs.status).toBe("failed");
       expect(String((fs.meta as { message: string }).message)).toMatch(/rebase/);

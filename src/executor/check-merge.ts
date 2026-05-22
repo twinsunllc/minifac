@@ -107,9 +107,7 @@ function assertSnapshotsEqual(before: WorktreeSnapshot, after: WorktreeSnapshot)
     );
   }
   if (before.porcelain !== after.porcelain) {
-    throw new Error(
-      "check-merge invariant violation: git status --porcelain differs after probe",
-    );
+    throw new Error("check-merge invariant violation: git status --porcelain differs after probe");
   }
   if (before.untracked !== after.untracked) {
     throw new Error("check-merge invariant violation: untracked file set differs after probe");
@@ -346,4 +344,3 @@ export class CheckMergeExecutor implements NodeExecutor {
     };
   }
 }
-

@@ -134,9 +134,9 @@ describe("substitute (Substitutions record)", () => {
   });
 
   it("leaves unknown run.* field verbatim even with both fields in scope", () => {
-    expect(
-      substitute("id={{ run.id }}", { run: { cwd: "/wt", base_branch: "main" } }),
-    ).toBe("id={{ run.id }}");
+    expect(substitute("id={{ run.id }}", { run: { cwd: "/wt", base_branch: "main" } })).toBe(
+      "id={{ run.id }}",
+    );
   });
 });
 
