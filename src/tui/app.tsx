@@ -43,6 +43,44 @@ function QuitPrompt(): ReactElement {
   );
 }
 
+export interface RunBodyProps {
+  state: RunState;
+  glyphs: StatusGlyphs;
+  bodyHeight: number;
+  compact: boolean;
+}
+
+/** Body composition shared by `RunApp` and the autorun TUI's drilled-in
+ *  right region. Owns the side-by-side `StatusPane | rule | LogPane`
+ *  layout (and the single-pane compact fallback) WITHOUT the surrounding
+ *  bordered Box — callers provide their own outer container. */
+export function RunBody({ state, glyphs, bodyHeight, compact }: RunBodyProps): ReactElement {
+  const node = state.nodes.find((n) => n.id === state.selectedNodeId);
+  const prefix = node ? `${statusGlyph(glyphs, node.status)} ${node.id}` : "";
+  if (compact) {
+    return <LogPane state={state} prefix={prefix} height={bodyHeight} />;
+  }
+  return (
+    <>
+      <Box flexDirection="column" width={24}>
+        <StatusPane state={state} glyphs={glyphs} />
+      </Box>
+      {/* Vertical rule: a 1-column Box with only its left border renders
+          without seams against any outer round border. */}
+      <Box
+        borderStyle="single"
+        borderTop={false}
+        borderBottom={false}
+        borderRight={false}
+        marginX={1}
+      />
+      <Box flexDirection="column" flexGrow={1}>
+        <LogPane state={state} height={bodyHeight} />
+      </Box>
+    </>
+  );
+}
+
 export function RunApp({
   state,
   glyphs,
@@ -64,36 +102,13 @@ export function RunApp({
   // value rather than the unbounded terminal row count.
   const bodyHeight = Math.max(1, tuiRows - HEADER_ZONE_ROWS - HOTKEY_ZONE_ROWS);
 
-  const node = state.nodes.find((n) => n.id === state.selectedNodeId);
-  const prefix = node ? `${statusGlyph(glyphs, node.status)} ${node.id}` : "";
-
   return (
     <Box flexDirection="column" height={tuiRows}>
       <Box borderStyle="round" paddingX={1}>
         <Header state={state} />
       </Box>
       <Box borderStyle="round" paddingX={1} flexGrow={1}>
-        {compact ? (
-          <LogPane state={state} prefix={prefix} height={bodyHeight} />
-        ) : (
-          <>
-            <Box flexDirection="column" width={24}>
-              <StatusPane state={state} glyphs={glyphs} />
-            </Box>
-            {/* Vertical rule: a 1-column Box with only its left border
-                renders without seams against the body's round border. */}
-            <Box
-              borderStyle="single"
-              borderTop={false}
-              borderBottom={false}
-              borderRight={false}
-              marginX={1}
-            />
-            <Box flexDirection="column" flexGrow={1}>
-              <LogPane state={state} height={bodyHeight} />
-            </Box>
-          </>
-        )}
+        <RunBody state={state} glyphs={glyphs} bodyHeight={bodyHeight} compact={compact} />
       </Box>
       <Box borderStyle="round" paddingX={1}>
         <HotkeyBar state={state} />

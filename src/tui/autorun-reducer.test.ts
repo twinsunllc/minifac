@@ -78,6 +78,35 @@ describe("autorunReducer", () => {
     expect(s.briefs[0]?.skipReason).toBeUndefined();
   });
 
+  it("skipped → started → completed (succeeded) ends with no residual skipReason", () => {
+    let s = createInitialBriefListState();
+    s = autorunReducer(
+      s,
+      ev({ kind: "skipped", ts: 0, change: "foo", reason: "activity-succeeded" }),
+    );
+    s = autorunReducer(s, ev({ kind: "started", ts: 1, change: "foo", runId: "r1" }));
+    s = autorunReducer(
+      s,
+      ev({ kind: "completed", ts: 2, change: "foo", status: "succeeded", runId: "r1" }),
+    );
+    expect(s.briefs[0]?.status).toBe("succeeded");
+    expect(s.briefs[0]?.skipReason).toBeUndefined();
+    expect(s.briefs[0]?.runId).toBe("r1");
+  });
+
+  it("skipped → started → completed (failed) ends with no residual skipReason", () => {
+    let s = createInitialBriefListState();
+    s = autorunReducer(
+      s,
+      ev({ kind: "skipped", ts: 0, change: "foo", reason: "activity-running" }),
+    );
+    s = autorunReducer(s, ev({ kind: "started", ts: 1, change: "foo", runId: "r2" }));
+    s = autorunReducer(s, ev({ kind: "completed", ts: 2, change: "foo", status: "failed" }));
+    expect(s.briefs[0]?.status).toBe("failed");
+    expect(s.briefs[0]?.skipReason).toBeUndefined();
+    expect(s.briefs[0]?.runId).toBe("r2");
+  });
+
   it("dry-run-decision action=schedule routes to queued", () => {
     let s = createInitialBriefListState();
     s = autorunReducer(
