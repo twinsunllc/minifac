@@ -142,9 +142,11 @@ export async function inlineStepIntoNode(args: InlineArgs): Promise<InlinedNode>
     executor: step.executor,
     terminal: node.terminal ?? false,
     with: inlinedWith,
+    output_nudge_budget: node.output_nudge_budget,
   };
   if (node.max_iterations !== undefined) out.max_iterations = node.max_iterations;
   if (node.cwd !== undefined) out.cwd = node.cwd;
+  if (node.outputs !== undefined) out.outputs = node.outputs;
 
   // Attach the inputs map as a non-enumerable property so it doesn't
   // appear in serialized factory snapshots but is reachable at runtime.

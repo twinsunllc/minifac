@@ -17,6 +17,7 @@ const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as {
   };
 };
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { NodeResult } from "../executor/types.js";
 import { MigrationVersionError, SqliteRunStore } from "./sqlite.js";
 
 async function tmp(prefix: string): Promise<string> {
@@ -179,6 +180,63 @@ describe("SqliteRunStore", () => {
     seed.prepare("INSERT INTO schema_version (version) VALUES (?)").run(99);
     seed.close();
     expect(() => SqliteRunStore.open(dbPath)).toThrow(MigrationVersionError);
+  });
+
+  it("NodeResult JSON serialization round-trips the nudges_used field", () => {
+    const result: NodeResult = {
+      nodeId: "a",
+      iteration: 1,
+      status: "succeeded",
+      reason: null,
+      startedAt: 0,
+      endedAt: 100,
+      outputs: null,
+      nudges_used: 2,
+    };
+    const json = JSON.stringify(result);
+    const parsed = JSON.parse(json) as NodeResult;
+    expect(parsed.nudges_used).toBe(2);
+    expect(parsed.nodeId).toBe("a");
+  });
+
+  it("appendEvent persists runner-action and runner-nudge events in order", async () => {
+    const dbPath = path.join(dir, "runs.db");
+    store = SqliteRunStore.open(dbPath);
+    await store.createRun({
+      id: "r-nudge",
+      factoryPath: "/x/f.yaml",
+      factoryName: "f",
+      startedAt: 1000,
+    });
+    const t1 = await store.appendEvent("r-nudge", {
+      nodeId: "a",
+      iteration: 1,
+      kind: "stdout",
+      payload: { line: '{"type":"result","result":"done"}' },
+      emittedAt: 10,
+    });
+    const action = await store.appendEvent("r-nudge", {
+      nodeId: "a",
+      iteration: 1,
+      kind: "runner-action",
+      payload: {
+        kind: "runner-action",
+        line: "Required outputs missing, nudging (budget remaining: 0)...",
+      },
+      emittedAt: 11,
+    });
+    const nudge = await store.appendEvent("r-nudge", {
+      nodeId: "a",
+      iteration: 1,
+      kind: "runner-nudge",
+      payload: { kind: "runner-nudge", message: "missing findings.json" },
+      emittedAt: 12,
+    });
+    expect([t1.seq, action.seq, nudge.seq]).toEqual([0, 1, 2]);
+    const events = await store.getRunEvents("r-nudge");
+    expect(events.map((e) => e.kind)).toEqual(["stdout", "runner-action", "runner-nudge"]);
+    expect((events[1]?.payload as { line: string }).line).toMatch(/budget remaining: 0/);
+    expect((events[2]?.payload as { message: string }).message).toMatch(/findings\.json/);
   });
 
   it("appendEvent assigns monotonic seq starting at 0", async () => {

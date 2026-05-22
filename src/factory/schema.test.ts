@@ -107,3 +107,57 @@ describe("NodeSchema with outputs", () => {
     expect(() => NodeSchema.parse({ executor: "claude", retry: 3 })).toThrowError(/retry/);
   });
 });
+
+describe("NodeSchema — output_nudge_budget", () => {
+  it("defaults output_nudge_budget to 1 when absent", () => {
+    const node = NodeSchema.parse({
+      executor: "claude",
+      with: { prompt: "..." },
+      outputs: { findings: { type: "value", required: true } },
+    });
+    expect(node.output_nudge_budget).toBe(1);
+  });
+
+  it("accepts explicit output_nudge_budget: 0 (opt-out)", () => {
+    const node = NodeSchema.parse({
+      executor: "claude",
+      output_nudge_budget: 0,
+      outputs: { findings: { type: "value", required: true } },
+    });
+    expect(node.output_nudge_budget).toBe(0);
+  });
+
+  it("accepts explicit output_nudge_budget: 3", () => {
+    const node = NodeSchema.parse({
+      executor: "claude",
+      output_nudge_budget: 3,
+    });
+    expect(node.output_nudge_budget).toBe(3);
+  });
+
+  it("accepts output_nudge_budget on a node without outputs", () => {
+    const node = NodeSchema.parse({
+      executor: "claude",
+      output_nudge_budget: 1,
+    });
+    expect(node.output_nudge_budget).toBe(1);
+    expect(node.outputs).toBeUndefined();
+  });
+
+  it("rejects negative output_nudge_budget", () => {
+    expect(() => NodeSchema.parse({ executor: "claude", output_nudge_budget: -1 })).toThrowError();
+  });
+
+  it("rejects non-integer output_nudge_budget", () => {
+    expect(() => NodeSchema.parse({ executor: "claude", output_nudge_budget: 1.5 })).toThrowError();
+  });
+
+  it("rejects string-typed output_nudge_budget", () => {
+    expect(() => NodeSchema.parse({ executor: "claude", output_nudge_budget: "1" })).toThrowError();
+  });
+
+  it("accepts output_nudge_budget: 5 (any non-negative integer)", () => {
+    const node = NodeSchema.parse({ executor: "claude", output_nudge_budget: 5 });
+    expect(node.output_nudge_budget).toBe(5);
+  });
+});

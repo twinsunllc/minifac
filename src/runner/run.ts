@@ -11,7 +11,8 @@ import { minifacHome } from "../worktree/config.js";
 import { markBriefDone } from "./mark-done.js";
 import { writeMcpConfig } from "./mcp-config.js";
 import { type RunnerMcpServer, startRunnerMcpServer } from "./mcp-server.js";
-import { validateDeclaredOutputs } from "./outputs.js";
+import { type MissingOutput, buildNudgeMessage } from "./nudge.js";
+import { type ValidateOutputsResult, validateDeclaredOutputs } from "./outputs.js";
 import type { ExecutionLogEntry, RunResult } from "./result.js";
 import { type Substitutions, TemplateSubstitutionError, substitute } from "./substitute.js";
 
@@ -391,6 +392,162 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
       let finalStatus: "succeeded" | "failed" | null = null;
       let terminalMeta: unknown = undefined;
 
+      // Nudge-loop state: tracks the runner's in-turn nudge accounting for
+      // this dispatch. See `docs/decisions/0028-Node-Outputs-Nudge.md`
+      // and the `graph-runner` capability's "Post-execution nudge loop"
+      // requirement.
+      let nudgesUsed = 0;
+      let remainingBudget = node.output_nudge_budget ?? 1;
+      let inputClosed = false;
+      let lastValidation: ValidateOutputsResult | null = null;
+      const stdinWriteErrorBox: { value: string | null } = { value: null };
+      const nudgeEligible =
+        executor.supportsNudge === true && typeof executor.writeUserMessage === "function";
+
+      type SupportsNudgeExecutor = typeof executor & {
+        writeUserMessage(msg: string): Promise<void>;
+        closeInput?(): void;
+      };
+      const nudgeCapable = executor as SupportsNudgeExecutor;
+
+      const ensureInputClosed = (): void => {
+        if (inputClosed) return;
+        inputClosed = true;
+        if (typeof nudgeCapable.closeInput === "function") {
+          nudgeCapable.closeInput();
+        }
+      };
+
+      // Parse a single stdout line for a stream-json `result` event. Returns
+      // the (per-turn) sentinel decision, or null when the line is not a
+      // `result` event. The `result.result` text is the model's final
+      // assistant message for that turn.
+      const parseTurnFromStdout = (
+        line: string,
+      ): { sentinel: "succeeded" | "failed" | null } | null => {
+        let obj: unknown;
+        try {
+          obj = JSON.parse(line);
+        } catch {
+          return null;
+        }
+        if (
+          !obj ||
+          typeof obj !== "object" ||
+          (obj as { type?: unknown }).type !== "result" ||
+          typeof (obj as { result?: unknown }).result !== "string"
+        ) {
+          return null;
+        }
+        const resultText = (obj as { result: string }).result;
+        const SENTINEL_LINE = /^MINIFAC_STATUS:[ \t]*(succeeded|failed)\b/m;
+        const m = resultText.match(SENTINEL_LINE);
+        if (!m) return { sentinel: null };
+        return { sentinel: m[1] === "failed" ? "failed" : "succeeded" };
+      };
+
+      const buildMissingList = (validation: ValidateOutputsResult): MissingOutput[] => {
+        const missing: MissingOutput[] = [];
+        if (!node.outputs) return missing;
+        for (const key of validation.missing) {
+          const def = node.outputs[key];
+          if (!def) continue;
+          let expectedPath = path.join(outputsDir, `${key}`);
+          if (def.type === "value") {
+            expectedPath = path.join(outputsDir, `${key}.json`);
+          } else if (def.type === "file") {
+            const filename = (def as { filename?: string }).filename ?? `${key}.*`;
+            expectedPath = path.join(outputsDir, filename);
+          } else if (def.type === "directory") {
+            expectedPath = path.join(outputsDir, key);
+          }
+          const detail = validation.detail[key];
+          const entry: MissingOutput = {
+            key,
+            type: def.type,
+            expected_path: expectedPath,
+          };
+          if (detail !== undefined && detail.length > 0) entry.detail = detail;
+          missing.push(entry);
+        }
+        return missing;
+      };
+
+      // Decide what to do at a turn boundary (a `result` event). For
+      // nudge-capable executors this orchestrates the nudge loop; for
+      // others it's a no-op (those executors close their own stdin).
+      const handleTurnBoundary = async (turnSentinel: "succeeded" | "failed" | null) => {
+        if (inputClosed) return;
+        if (!nudgeEligible) return;
+        // Sentinel-failed turn: never nudge; close input and let the
+        // executor finalize with the sentinel-failed status.
+        if (turnSentinel === "failed") {
+          ensureInputClosed();
+          return;
+        }
+        // No outputs declared: nothing to validate; close so the
+        // executor can finalize.
+        if (!node.outputs) {
+          ensureInputClosed();
+          return;
+        }
+        // Validate the just-completed turn's outputs.
+        const validation = await validateDeclaredOutputs(node, outputsDir, {
+          mcpAvailable: mcpInScope,
+          mcpReported: perDispatchTransports,
+        });
+        lastValidation = validation;
+        if (validation.missing.length === 0) {
+          ensureInputClosed();
+          return;
+        }
+        if (remainingBudget <= 0) {
+          ensureInputClosed();
+          return;
+        }
+        // Nudge.
+        const missingList = buildMissingList(validation);
+        const nudgeMessage = buildNudgeMessage(missingList);
+        const newRemaining = remainingBudget - 1;
+        const actionLine = `Required outputs missing, nudging (budget remaining: ${newRemaining})...`;
+        const actionEmit: EmittedEvent = {
+          nodeId,
+          iteration,
+          emittedAt: Date.now() - runStart,
+          event: { kind: "runner-action", line: actionLine },
+        };
+        onEvent?.(actionEmit);
+        await appendStoreEvent(
+          nodeId,
+          iteration,
+          "runner-action",
+          actionEmit.event,
+          actionEmit.emittedAt,
+        );
+        const nudgeEmit: EmittedEvent = {
+          nodeId,
+          iteration,
+          emittedAt: Date.now() - runStart,
+          event: { kind: "runner-nudge", message: nudgeMessage },
+        };
+        onEvent?.(nudgeEmit);
+        await appendStoreEvent(
+          nodeId,
+          iteration,
+          "runner-nudge",
+          nudgeEmit.event,
+          nudgeEmit.emittedAt,
+        );
+        try {
+          await nudgeCapable.writeUserMessage(nudgeMessage);
+          nudgesUsed += 1;
+          remainingBudget = newRemaining;
+        } catch (err) {
+          stdinWriteErrorBox.value = err instanceof Error ? err.message : String(err);
+          ensureInputClosed();
+        }
+      };
+
       let aborted = false;
       for await (const event of executor.run(resolvedNode, ctx)) {
         if (options.abortSignal?.aborted) {
@@ -412,8 +569,17 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
             finalStatus = event.status;
             terminalMeta = event.meta;
           }
+        } else if (event.kind === "stdout" && !inputClosed) {
+          const turn = parseTurnFromStdout(event.line);
+          if (turn !== null) {
+            await handleTurnBoundary(turn.sentinel);
+          }
         }
       }
+      // Belt-and-suspenders: if the executor's stream ended without our
+      // having closed stdin (e.g. the executor self-finalized), this is a
+      // no-op; otherwise it prevents a dangling open handle.
+      ensureInputClosed();
       if (aborted) {
         result = {
           status: "failed",
@@ -445,27 +611,47 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
       //  - declared an `outputs:` block, AND
       //  - terminated `succeeded`.
       // Sentinel-failed and other-failed nodes skip validation; their
-      // `NodeResult.outputs` stays null.
+      // `NodeResult.outputs` stays null. For nudge-capable executors the
+      // nudge loop may have already populated `lastValidation` during the
+      // stream drain — reuse it so we don't double-scan the directory.
       let outputsForResult: NodeOutputIndex | null = null;
       let resultReason: string | null = extractReason(finalStatus, terminalMeta);
       let validatedIndex: NodeOutputIndex = {};
       if (finalStatus === "succeeded" && node.outputs) {
-        const validation = await validateDeclaredOutputs(node, outputsDir, {
-          mcpAvailable: mcpInScope,
-          mcpReported: perDispatchTransports,
-        });
+        const validation =
+          lastValidation !== null
+            ? lastValidation
+            : await validateDeclaredOutputs(node, outputsDir, {
+                mcpAvailable: mcpInScope,
+                mcpReported: perDispatchTransports,
+              });
         validatedIndex = validation.index;
         if (validation.missing.length > 0) {
           finalStatus = "failed";
           resultReason = "missing_required_output";
+          // Compose the detail map. When a stdin-write failure broke the
+          // nudge loop, suffix the detail strings so operators can
+          // distinguish stdin failures from genuine output omissions.
+          const composedDetail: Record<string, string> = { ...validation.detail };
+          const stdinErrMsg = stdinWriteErrorBox.value;
+          if (stdinErrMsg !== null) {
+            for (const key of validation.missing) {
+              const base = composedDetail[key] ?? "";
+              const suffix = `nudge stdin write failed: ${stdinErrMsg}`;
+              composedDetail[key] = base.length > 0 ? `${base}; ${suffix}` : suffix;
+            }
+          }
           // Surface the override on stderr so operators see what happened.
           const lines: string[] = [];
           lines.push(
             `missing_required_output: node "${nodeId}" succeeded but is missing required outputs: ${validation.missing.join(", ")} (dir: ${outputsDir})`,
           );
           for (const key of validation.missing) {
-            const d = validation.detail[key];
+            const d = composedDetail[key];
             if (d) lines.push(`  - ${d}`);
+          }
+          if (nudgesUsed > 0) {
+            lines.push(`  - nudges_used: ${nudgesUsed}`);
           }
           for (const line of lines) {
             const entry: EmittedEvent = {
@@ -488,9 +674,10 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
               meta: {
                 reason: "missing_required_output",
                 missing_outputs: validation.missing,
-                missing_outputs_detail: validation.detail,
+                missing_outputs_detail: composedDetail,
                 outputs_dir: outputsDir,
                 partial_index: validation.index,
+                nudges_used: nudgesUsed,
               },
             },
           };
@@ -517,6 +704,7 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
         startedAt,
         endedAt,
         outputs: outputsForResult,
+        nudges_used: nudgesUsed,
       });
 
       // Persist any indexed outputs (including the partial index on override)

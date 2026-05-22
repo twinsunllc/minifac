@@ -11,6 +11,7 @@ import { runFactory } from "./run.js";
 class WriterExecutor implements NodeExecutor {
   readonly type = "writer";
   readonly supportsMcp = false;
+  readonly supportsNudge = false;
   readonly capturedPrompts = new Map<string, string>();
 
   async *run(node: ResolvedNode, ctx: RunContext): AsyncIterable<NodeEvent> {
@@ -97,6 +98,7 @@ describe("integration: writer → reader via priorResults outputs", () => {
     class NoWriteWriter implements NodeExecutor {
       readonly type = "writer";
       readonly supportsMcp = false;
+      readonly supportsNudge = false;
       readonly seen = new Set<string>();
       async *run(node: ResolvedNode): AsyncIterable<NodeEvent> {
         this.seen.add(node.id);

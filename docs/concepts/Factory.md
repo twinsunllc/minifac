@@ -230,6 +230,7 @@ it and inlines the step's `executor` and `with`, discarding any
 | `terminal` | boolean | no | `false` | When `true`, a successful exit from this node ends the run. Use on the last node in a forward-flow path. |
 | `max_iterations` | positive integer | no | — | Maximum times this node may be dispatched across the entire run (counting all edge traversals). Absent means unlimited, subject to `max_traversals` on inbound edges. |
 | `outputs` | map (string → [[#Output fields\|output]]) | no | — | Declared outputs the node produces (typed JSON values, files, or directories under the per-iteration outputs directory). Keys match the same identifier grammar as step input keys. See [[Outputs]] for the full contract. |
+| `output_nudge_budget` | non-negative integer | no | `1` | How many in-turn nudge retries the runner MAY use to recover a missing-required-output protocol mistake before recording the node as `failed`. Setting `0` opts the node out of nudging entirely; the missing-outputs override fires on the first validation pass. Per-node only; no factory-level default. The budget is per-node-iteration — a graph-level recovery edge that re-dispatches the same node gets a fresh budget. See [[Outputs#Nudge recovery]] and [[0028-Node-Outputs-Nudge]]. |
 
 ### Output fields
 

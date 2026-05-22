@@ -154,6 +154,7 @@ type Script = (ctx: RunContext, node: ResolvedNode) => Iterable<NodeEvent>;
 class FakeExecutor implements NodeExecutor {
   readonly type: string;
   readonly supportsMcp = false;
+  readonly supportsNudge = false;
   /** Per-node scripts keyed by node id. The same script runs every iteration. */
   scripts: Map<string, Script>;
   /** Optional capture of contexts seen, per node id. */
@@ -443,8 +444,18 @@ describe("runFactory", () => {
     expect(typeof entry?.endedAt).toBe("number");
     // The shape contains exactly the documented keys — no extras.
     expect(Object.keys(entry ?? {}).sort()).toEqual(
-      ["endedAt", "iteration", "nodeId", "outputs", "reason", "startedAt", "status"].sort(),
+      [
+        "endedAt",
+        "iteration",
+        "nodeId",
+        "nudges_used",
+        "outputs",
+        "reason",
+        "startedAt",
+        "status",
+      ].sort(),
     );
+    expect(entry?.nudges_used).toBe(0);
   });
 
   it("P on iteration 2 sees P iter-1 result and V iter-1 result", async () => {
@@ -1597,5 +1608,617 @@ describe("runFactory — outputs directory and validation", () => {
     expect(entry.nodeId).toBe("a");
     expect(entry.iteration).toBe(1);
     expect(entry.outputs.findings?.type).toBe("value");
+  });
+});
+
+/**
+ * Per-turn script for {@link NudgeableExecutor}. Each script returns the
+ * events to emit during that turn AND an optional side effect to run
+ * before yielding (e.g. writing the missing file to disk during a
+ * later turn). The runner observes the stream-json-style `result` line
+ * the script ends with — sentinel parsing keys off `result.result`.
+ */
+interface NudgeTurn {
+  /** Side effect to run before yielding the turn's events (e.g. write
+   * a file). Receives the dispatch context. */
+  before?: (ctx: RunContext) => void | Promise<void>;
+  /** The model's final assistant message for the turn. The executor
+   * wraps it as a stream-json `result` line so the runner can detect
+   * the turn boundary and the sentinel. */
+  result: string;
+  /** Optional stdout/stderr events to emit before the `result` line. */
+  pre?: NodeEvent[];
+}
+
+/**
+ * Nudge-capable fake executor. Holds the iterator open between turns
+ * and waits for either `writeUserMessage` (advance to next turn) or
+ * `closeInput` (finalize with the most recent turn's sentinel as the
+ * terminal status). Used to exercise the runner's post-execution nudge
+ * loop without spawning the real Claude CLI.
+ */
+class NudgeableExecutor implements NodeExecutor {
+  readonly type = "nudgeable";
+  readonly supportsMcp = false;
+  readonly supportsNudge = true;
+  /** Per-node ordered list of turn scripts. Turn N runs after the Nth
+   * input (turn 0 runs on initial dispatch; turn 1 after the first
+   * `writeUserMessage` call; etc.). */
+  scripts: Map<string, NudgeTurn[]>;
+  nudgeMessagesReceived: Map<string, string[]> = new Map();
+  closeCallsByNode: Map<string, number> = new Map();
+  /** Optional write-failure injection: when set for a node id, the
+   * first `writeUserMessage` call rejects with the given error. */
+  writeRejections: Map<string, Error> = new Map();
+
+  private currentNodeId: string | null = null;
+  private pendingResolve: (() => void) | null = null;
+  private pendingClose = false;
+  private nudgeQueue: string[] = [];
+
+  constructor(scripts: Record<string, NudgeTurn[]>) {
+    this.scripts = new Map(Object.entries(scripts));
+  }
+
+  async writeUserMessage(msg: string): Promise<void> {
+    const nodeId = this.currentNodeId;
+    if (!nodeId) throw new Error("writeUserMessage with no active node");
+    const reject = this.writeRejections.get(nodeId);
+    if (reject) {
+      this.writeRejections.delete(nodeId);
+      throw reject;
+    }
+    const list = this.nudgeMessagesReceived.get(nodeId) ?? [];
+    list.push(msg);
+    this.nudgeMessagesReceived.set(nodeId, list);
+    this.nudgeQueue.push(msg);
+    this.wake();
+  }
+
+  closeInput(): void {
+    const nodeId = this.currentNodeId;
+    if (nodeId) {
+      this.closeCallsByNode.set(nodeId, (this.closeCallsByNode.get(nodeId) ?? 0) + 1);
+    }
+    this.pendingClose = true;
+    this.wake();
+  }
+
+  private wake(): void {
+    if (this.pendingResolve) {
+      const r = this.pendingResolve;
+      this.pendingResolve = null;
+      r();
+    }
+  }
+
+  async *run(node: ResolvedNode, ctx: RunContext): AsyncIterable<NodeEvent> {
+    this.currentNodeId = node.id;
+    this.pendingClose = false;
+    this.nudgeQueue = [];
+    const turns = this.scripts.get(node.id) ?? [];
+    for (let i = 0; i < turns.length; i++) {
+      const turn = turns[i];
+      if (!turn) break;
+      if (turn.before) await turn.before(ctx);
+      if (turn.pre) {
+        for (const evt of turn.pre) yield evt;
+      }
+      // Emit the `result` line as a stdout event — the runner parses
+      // it for turn boundaries.
+      const resultLine = JSON.stringify({ type: "result", result: turn.result });
+      yield { kind: "stdout", line: resultLine };
+      // Wait for next input or close.
+      if (i + 1 < turns.length) {
+        await this.waitForInput();
+        if (this.pendingClose) break;
+      } else {
+        // No more turns; wait for closeInput.
+        await this.waitForInput();
+      }
+    }
+    // Synthesize a final status: use the LAST emitted result's sentinel.
+    const lastTurn = turns[turns.length - 1];
+    if (lastTurn) {
+      const SENTINEL =
+        /^MINIFAC_STATUS:[ \t]*(succeeded|failed)\b[ \t]*(?:\r?\nREASON:[ \t]*(.*))?/m;
+      const m = lastTurn.result.match(SENTINEL);
+      if (m) {
+        if (m[1] === "failed") {
+          yield {
+            kind: "status",
+            status: "failed",
+            meta: { reason: "sentinel_failed", sentinel: m[2] },
+          };
+        } else {
+          yield { kind: "status", status: "succeeded", meta: { reason: "sentinel_succeeded" } };
+        }
+      } else {
+        yield { kind: "status", status: "succeeded" };
+      }
+    } else {
+      yield { kind: "status", status: "failed" };
+    }
+    this.currentNodeId = null;
+  }
+
+  private async waitForInput(): Promise<void> {
+    if (this.pendingClose) return;
+    if (this.nudgeQueue.length > 0) {
+      this.nudgeQueue.shift();
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      this.pendingResolve = resolve;
+    });
+    if (this.nudgeQueue.length > 0) this.nudgeQueue.shift();
+  }
+}
+
+describe("runFactory — post-execution nudge loop", () => {
+  let savedHome: string | undefined;
+  let homeDir: string | undefined;
+
+  beforeEach(async () => {
+    const os = await import("node:os");
+    const fs = await import("node:fs/promises");
+    savedHome = process.env.MINIFAC_HOME;
+    homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "minifac-nudge-test-"));
+    process.env.MINIFAC_HOME = homeDir;
+  });
+
+  afterEach(() => {
+    if (savedHome === undefined) {
+      Reflect.deleteProperty(process.env, "MINIFAC_HOME");
+    } else {
+      process.env.MINIFAC_HOME = savedHome;
+    }
+  });
+
+  function makeNode(over: Partial<Factory["nodes"][string]> = {}) {
+    return {
+      executor: "nudgeable",
+      terminal: true,
+      ...over,
+    } as Factory["nodes"][string];
+  }
+
+  it("default budget recovers a forgotten output (nudges_used: 1)", async () => {
+    const { writeFileSync } = await import("node:fs");
+    const factory: Factory = {
+      name: "f",
+      nodes: {
+        a: makeNode({
+          outputs: { findings: { type: "value", required: true } },
+          output_nudge_budget: 1,
+        }),
+      },
+      edges: [],
+    };
+    const exec = new NudgeableExecutor({
+      a: [
+        { result: "I'm done.\nMINIFAC_STATUS: succeeded" },
+        {
+          before: (ctx) => {
+            writeFileSync(path.join(ctx.outputsDir, "findings.json"), JSON.stringify({ ok: true }));
+          },
+          result: "Wrote it.\nMINIFAC_STATUS: succeeded",
+        },
+      ],
+    });
+    const reg = new ExecutorRegistry();
+    reg.register(exec);
+    const events: EmittedEvent[] = [];
+    const res = await runFactory(wrap(factory), {
+      registry: reg,
+      runId: "rid",
+      onEvent: (e) => events.push(e),
+    });
+    expect(res.status).toBe("succeeded");
+    expect(exec.nudgeMessagesReceived.get("a")?.length).toBe(1);
+    const actionEvents = events.filter((e) => e.event.kind === "runner-action");
+    const nudgeEvents = events.filter((e) => e.event.kind === "runner-nudge");
+    expect(actionEvents).toHaveLength(1);
+    expect(nudgeEvents).toHaveLength(1);
+  });
+
+  it("default budget exhausted records missing_required_output (nudges_used: 1)", async () => {
+    const factory: Factory = {
+      name: "f",
+      nodes: {
+        a: makeNode({
+          outputs: { findings: { type: "value", required: true } },
+          output_nudge_budget: 1,
+        }),
+      },
+      edges: [],
+    };
+    const exec = new NudgeableExecutor({
+      a: [
+        { result: "Done.\nMINIFAC_STATUS: succeeded" },
+        // Second turn also doesn't write the file.
+        { result: "Still done.\nMINIFAC_STATUS: succeeded" },
+      ],
+    });
+    const reg = new ExecutorRegistry();
+    reg.register(exec);
+    const events: EmittedEvent[] = [];
+    const res = await runFactory(wrap(factory), {
+      registry: reg,
+      runId: "rid",
+      onEvent: (e) => events.push(e),
+    });
+    expect(res.status).toBe("failed");
+    expect(exec.nudgeMessagesReceived.get("a")?.length).toBe(1);
+    const overrideStatus = events
+      .filter((e) => e.event.kind === "status")
+      .map((e) => e.event)
+      .find(
+        (ev) =>
+          ev.kind === "status" &&
+          ev.status === "failed" &&
+          (ev.meta as { reason?: string } | undefined)?.reason === "missing_required_output",
+      );
+    expect(overrideStatus).toBeDefined();
+    const meta = (overrideStatus as { meta: { nudges_used?: number } }).meta;
+    expect(meta.nudges_used).toBe(1);
+  });
+
+  it("budget 0 opts out: immediate failed, nudges_used 0, no nudge events", async () => {
+    const factory: Factory = {
+      name: "f",
+      nodes: {
+        a: makeNode({
+          outputs: { findings: { type: "value", required: true } },
+          output_nudge_budget: 0,
+        }),
+      },
+      edges: [],
+    };
+    const exec = new NudgeableExecutor({
+      a: [{ result: "Done.\nMINIFAC_STATUS: succeeded" }],
+    });
+    const reg = new ExecutorRegistry();
+    reg.register(exec);
+    const events: EmittedEvent[] = [];
+    const res = await runFactory(wrap(factory), {
+      registry: reg,
+      runId: "rid",
+      onEvent: (e) => events.push(e),
+    });
+    expect(res.status).toBe("failed");
+    expect(exec.nudgeMessagesReceived.get("a")).toBeUndefined();
+    expect(events.find((e) => e.event.kind === "runner-action")).toBeUndefined();
+    expect(events.find((e) => e.event.kind === "runner-nudge")).toBeUndefined();
+  });
+
+  it("sentinel-failed node skips the nudge loop entirely", async () => {
+    const factory: Factory = {
+      name: "f",
+      nodes: {
+        a: makeNode({
+          outputs: { findings: { type: "value", required: true } },
+          output_nudge_budget: 1,
+        }),
+      },
+      edges: [],
+    };
+    const exec = new NudgeableExecutor({
+      a: [
+        {
+          result: "Could not complete.\nMINIFAC_STATUS: failed\nREASON: verify hit 3 test failures",
+        },
+      ],
+    });
+    const reg = new ExecutorRegistry();
+    reg.register(exec);
+    const events: EmittedEvent[] = [];
+    const res = await runFactory(wrap(factory), {
+      registry: reg,
+      runId: "rid",
+      onEvent: (e) => events.push(e),
+    });
+    expect(res.status).toBe("failed");
+    expect(exec.nudgeMessagesReceived.get("a")).toBeUndefined();
+    expect(events.find((e) => e.event.kind === "runner-action")).toBeUndefined();
+  });
+
+  it("first-try success with valid outputs: no nudge fired", async () => {
+    const { writeFileSync } = await import("node:fs");
+    const factory: Factory = {
+      name: "f",
+      nodes: {
+        a: makeNode({
+          outputs: { findings: { type: "value", required: true } },
+          output_nudge_budget: 1,
+        }),
+      },
+      edges: [],
+    };
+    const exec = new NudgeableExecutor({
+      a: [
+        {
+          before: (ctx) => {
+            writeFileSync(path.join(ctx.outputsDir, "findings.json"), JSON.stringify({ ok: true }));
+          },
+          result: "Done.\nMINIFAC_STATUS: succeeded",
+        },
+      ],
+    });
+    const reg = new ExecutorRegistry();
+    reg.register(exec);
+    const events: EmittedEvent[] = [];
+    const res = await runFactory(wrap(factory), {
+      registry: reg,
+      runId: "rid",
+      onEvent: (e) => events.push(e),
+    });
+    expect(res.status).toBe("succeeded");
+    expect(exec.nudgeMessagesReceived.get("a")).toBeUndefined();
+    expect(events.find((e) => e.event.kind === "runner-action")).toBeUndefined();
+  });
+
+  it("budget 3 with two nudges needed: two nudges sent, third turn succeeds", async () => {
+    const { writeFileSync } = await import("node:fs");
+    const factory: Factory = {
+      name: "f",
+      nodes: {
+        a: makeNode({
+          outputs: { findings: { type: "value", required: true } },
+          output_nudge_budget: 3,
+        }),
+      },
+      edges: [],
+    };
+    const exec = new NudgeableExecutor({
+      a: [
+        { result: "Turn 1 done.\nMINIFAC_STATUS: succeeded" },
+        { result: "Turn 2 done.\nMINIFAC_STATUS: succeeded" },
+        {
+          before: (ctx) => {
+            writeFileSync(path.join(ctx.outputsDir, "findings.json"), JSON.stringify({ ok: true }));
+          },
+          result: "Turn 3 done.\nMINIFAC_STATUS: succeeded",
+        },
+      ],
+    });
+    const reg = new ExecutorRegistry();
+    reg.register(exec);
+    const events: EmittedEvent[] = [];
+    const res = await runFactory(wrap(factory), {
+      registry: reg,
+      runId: "rid",
+      onEvent: (e) => events.push(e),
+    });
+    expect(res.status).toBe("succeeded");
+    expect(exec.nudgeMessagesReceived.get("a")?.length).toBe(2);
+    expect(events.filter((e) => e.event.kind === "runner-action")).toHaveLength(2);
+    expect(events.filter((e) => e.event.kind === "runner-nudge")).toHaveLength(2);
+  });
+
+  it("broken stdin during nudge fails the node immediately (nudges_used: 0)", async () => {
+    const factory: Factory = {
+      name: "f",
+      nodes: {
+        a: makeNode({
+          outputs: { findings: { type: "value", required: true } },
+          output_nudge_budget: 1,
+        }),
+      },
+      edges: [],
+    };
+    const exec = new NudgeableExecutor({
+      a: [
+        { result: "Done.\nMINIFAC_STATUS: succeeded" },
+        // Second turn won't actually run — the write rejects.
+        { result: "should not see this turn.\nMINIFAC_STATUS: succeeded" },
+      ],
+    });
+    const epipe = new Error("EPIPE");
+    (epipe as NodeJS.ErrnoException).code = "EPIPE";
+    exec.writeRejections.set("a", epipe);
+    const reg = new ExecutorRegistry();
+    reg.register(exec);
+    const events: EmittedEvent[] = [];
+    const res = await runFactory(wrap(factory), {
+      registry: reg,
+      runId: "rid",
+      onEvent: (e) => events.push(e),
+    });
+    expect(res.status).toBe("failed");
+    const overrideStatus = events
+      .filter((e) => e.event.kind === "status")
+      .map((e) => e.event)
+      .find(
+        (ev) =>
+          ev.kind === "status" &&
+          ev.status === "failed" &&
+          (ev.meta as { reason?: string } | undefined)?.reason === "missing_required_output",
+      );
+    expect(overrideStatus).toBeDefined();
+    const meta = (
+      overrideStatus as {
+        meta: { nudges_used?: number; missing_outputs_detail?: Record<string, string> };
+      }
+    ).meta;
+    expect(meta.nudges_used).toBe(0);
+    const detail = meta.missing_outputs_detail?.findings ?? "";
+    expect(detail).toMatch(/nudge stdin write failed/);
+    expect(detail).toMatch(/EPIPE/);
+  });
+
+  it("runner-action and runner-nudge events carry nodeId and iteration", async () => {
+    const factory: Factory = {
+      name: "f",
+      nodes: {
+        a: makeNode({
+          outputs: { findings: { type: "value", required: true } },
+          output_nudge_budget: 1,
+        }),
+      },
+      edges: [],
+    };
+    const exec = new NudgeableExecutor({
+      a: [
+        { result: "Done.\nMINIFAC_STATUS: succeeded" },
+        { result: "Still nothing.\nMINIFAC_STATUS: succeeded" },
+      ],
+    });
+    const reg = new ExecutorRegistry();
+    reg.register(exec);
+    const events: EmittedEvent[] = [];
+    await runFactory(wrap(factory), {
+      registry: reg,
+      runId: "rid",
+      onEvent: (e) => events.push(e),
+    });
+    const action = events.find((e) => e.event.kind === "runner-action");
+    const nudge = events.find((e) => e.event.kind === "runner-nudge");
+    expect(action?.nodeId).toBe("a");
+    expect(action?.iteration).toBe(1);
+    expect(nudge?.nodeId).toBe("a");
+    expect(nudge?.iteration).toBe(1);
+    // Order: action precedes nudge
+    const aIdx = events.findIndex((e) => e.event.kind === "runner-action");
+    const nIdx = events.findIndex((e) => e.event.kind === "runner-nudge");
+    expect(aIdx).toBeLessThan(nIdx);
+  });
+
+  it("nudge events are persisted via the store hook", async () => {
+    const factory: Factory = {
+      name: "f",
+      nodes: {
+        a: makeNode({
+          outputs: { findings: { type: "value", required: true } },
+          output_nudge_budget: 1,
+        }),
+      },
+      edges: [],
+    };
+    const exec = new NudgeableExecutor({
+      a: [
+        { result: "Done.\nMINIFAC_STATUS: succeeded" },
+        { result: "Still nothing.\nMINIFAC_STATUS: succeeded" },
+      ],
+    });
+    const reg = new ExecutorRegistry();
+    reg.register(exec);
+    const store = new FakeStore();
+    await runFactory(wrap(factory), { registry: reg, runId: "rid", store });
+    const stored = store.events.get("rid") ?? [];
+    const actionRows = stored.filter((s) => s.kind === "runner-action");
+    const nudgeRows = stored.filter((s) => s.kind === "runner-nudge");
+    expect(actionRows.length).toBe(1);
+    expect(nudgeRows.length).toBe(1);
+    // Action precedes nudge in the persisted stream.
+    expect((actionRows[0]?.seq ?? -1) < (nudgeRows[0]?.seq ?? -1)).toBe(true);
+  });
+
+  it("non-nudge-capable executor skips the loop even with budget > 0", async () => {
+    const factory: Factory = {
+      name: "f",
+      nodes: {
+        a: makeNode({
+          executor: "fake",
+          outputs: { findings: { type: "value", required: true } },
+          output_nudge_budget: 1,
+        }),
+      },
+      edges: [],
+    };
+    const exec = new FakeExecutor("fake", {
+      a: () => [succeeded],
+    });
+    const reg = new ExecutorRegistry();
+    reg.register(exec);
+    const events: EmittedEvent[] = [];
+    const res = await runFactory(wrap(factory), {
+      registry: reg,
+      runId: "rid",
+      onEvent: (e) => events.push(e),
+    });
+    expect(res.status).toBe("failed");
+    expect(events.find((e) => e.event.kind === "runner-action")).toBeUndefined();
+    expect(events.find((e) => e.event.kind === "runner-nudge")).toBeUndefined();
+  });
+
+  it("iteration boundary resets the nudge budget", async () => {
+    const factory: Factory = {
+      name: "f",
+      nodes: {
+        a: makeNode({
+          terminal: false,
+          outputs: { findings: { type: "value", required: true } },
+          output_nudge_budget: 1,
+          max_iterations: 2,
+        }),
+        t: makeNode({ executor: "fake", terminal: true }),
+      },
+      edges: [
+        { from: "a", to: "a", when: "on_failure", max_traversals: 1 },
+        { from: "a", to: "t", when: "on_success" },
+      ],
+    };
+    const { writeFileSync } = await import("node:fs");
+    // Two iterations of `a`: first fails (budget consumed), then a graph-level
+    // recovery edge re-dispatches with a fresh budget; iter-2 nudges and
+    // recovers.
+    const exec = new NudgeableExecutor({
+      a: [
+        // Iteration 1: turn 1 doesn't write; turn 2 (after nudge) also doesn't.
+        // We bake 4 turns into the script and the executor's per-dispatch
+        // counter resets per dispatch in run(); but the same NudgeableExecutor
+        // instance is re-used for iter-2. So we need iter-2 turns to follow.
+        // Use a separate executor instance per iteration would be cleaner, but
+        // for this test we'll just verify iter-2 nudges.
+        { result: "Iter1 turn1.\nMINIFAC_STATUS: succeeded" },
+        { result: "Iter1 turn2.\nMINIFAC_STATUS: succeeded" },
+      ],
+    });
+    // Rebuild scripts for second iteration: after the first dispatch the
+    // executor's run() restarts when called again — but currentNodeId is
+    // tied to the live dispatch. The scripts map is keyed by node id. To
+    // support multiple iterations of the same node, we extend the script
+    // length and rely on the executor restarting from the beginning. Since
+    // each `run()` call starts at i=0 it WILL replay turns. For an honest
+    // test, we patch the scripts after iter-1 completes.
+    const fakeExec = new FakeExecutor("fake", { t: () => [succeeded] });
+    const reg = new ExecutorRegistry();
+    reg.register(exec);
+    reg.register(fakeExec);
+    // Run the factory. Iteration 1 should consume one nudge then fail.
+    // The on_failure edge re-dispatches a; second time, the model writes the
+    // file on turn 2.
+    // To make iter-2 produce the file, swap the scripts midway via a
+    // hand-rolled wrapper: override `before` on the second-turn entry to
+    // also write the file ONLY after iter-1 has already happened.
+    let dispatchCount = 0;
+    const orig = exec.run.bind(exec);
+    exec.run = async function* (node, ctx) {
+      dispatchCount += 1;
+      if (dispatchCount === 2) {
+        // For iteration 2's turn-2, write the file.
+        const turns = exec.scripts.get("a");
+        if (turns?.[1]) {
+          turns[1] = {
+            before: (c) => {
+              writeFileSync(path.join(c.outputsDir, "findings.json"), JSON.stringify({ ok: true }));
+            },
+            result: "Iter2 turn2 wrote file.\nMINIFAC_STATUS: succeeded",
+          };
+        }
+      }
+      yield* orig(node, ctx);
+    };
+    const events: EmittedEvent[] = [];
+    const res = await runFactory(wrap(factory), {
+      registry: reg,
+      runId: "rid",
+      onEvent: (e) => events.push(e),
+    });
+    expect(res.status).toBe("succeeded");
+    // Each iteration's dispatch consumed at most its own budget (1). Iter-1
+    // spent its nudge and failed; iter-2 spent its nudge and recovered.
+    expect(exec.nudgeMessagesReceived.get("a")?.length ?? 0).toBeGreaterThanOrEqual(2);
   });
 });

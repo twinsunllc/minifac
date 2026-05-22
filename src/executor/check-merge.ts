@@ -131,6 +131,7 @@ async function refExists(runner: GitRunner, cwd: string, ref: string): Promise<b
 export class CheckMergeExecutor implements NodeExecutor {
   readonly type = "check-merge";
   readonly supportsMcp = false;
+  readonly supportsNudge = false;
 
   private readonly gitRunner: GitRunner;
 

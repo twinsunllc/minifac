@@ -201,6 +201,20 @@ export function renderNodeEvent(entry: EmittedEvent): RenderedEvent {
       rawNodeEvent: e,
     };
   }
+  if (e.kind === "runner-action") {
+    return {
+      kind: "raw",
+      summary: shortenOneLine(e.line),
+      rawNodeEvent: e,
+    };
+  }
+  if (e.kind === "runner-nudge") {
+    return {
+      kind: "raw",
+      summary: shortenOneLine(e.message),
+      rawNodeEvent: e,
+    };
+  }
   // status
   return {
     kind: "status",
