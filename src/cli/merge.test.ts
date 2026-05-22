@@ -521,6 +521,280 @@ describe("runMerge", () => {
     expect(err.text()).toMatch(/predates per-run branch naming/i);
   });
 
+  describe("mark-done post-step", () => {
+    it("change-by-name merge success calls mark-done", async () => {
+      const store = new MemStore();
+      store.seed({
+        id: "abcd1234",
+        change: "feat-md",
+        branchName: "run/feat-md-aaaaaa",
+        status: "succeeded",
+        startedAt: 1,
+      });
+      const out = new BufferStream();
+      const err = new BufferStream();
+      const { spawn } = makeSpawn([
+        { match: argsEq("status", "--porcelain"), result: { stdout: "", stderr: "", exitCode: 0 } },
+        {
+          match: argsEq("rev-parse", "--abbrev-ref", "HEAD"),
+          result: { stdout: "main\n", stderr: "", exitCode: 0 },
+        },
+        {
+          match: argsEq("merge", "--ff-only", "run/feat-md-aaaaaa"),
+          result: { stdout: "", stderr: "", exitCode: 0 },
+        },
+        {
+          match: argsEq("rev-parse", "HEAD"),
+          result: { stdout: "feeeeed\n", stderr: "", exitCode: 0 },
+        },
+      ]);
+      const markCalls: Array<{ change: string; runCwd: string }> = [];
+      const code = await runMerge({
+        arg: "feat-md",
+        store,
+        cwd: "/repo",
+        stdin: emptyStdin(),
+        stdout: out,
+        stderr: err,
+        resolveDefaultBranch: async () => "main",
+        spawnGit: spawn,
+        markBriefDoneFn: async (input) => {
+          markCalls.push(input);
+          return { moved: true };
+        },
+      });
+      expect(code).toBe(0);
+      expect(markCalls).toHaveLength(1);
+      expect(markCalls[0]?.change).toBe("feat-md");
+      expect(markCalls[0]?.runCwd).toBe("/repo");
+    });
+
+    it("change-by-name merge success with brief already in inputs/done/ is no-op", async () => {
+      const store = new MemStore();
+      store.seed({
+        id: "1234abcd",
+        change: "feat-idem",
+        branchName: "run/feat-idem-bbbbbb",
+        status: "succeeded",
+        startedAt: 1,
+      });
+      const out = new BufferStream();
+      const err = new BufferStream();
+      const { spawn } = makeSpawn([
+        { match: argsEq("status", "--porcelain"), result: { stdout: "", stderr: "", exitCode: 0 } },
+        {
+          match: argsEq("rev-parse", "--abbrev-ref", "HEAD"),
+          result: { stdout: "main\n", stderr: "", exitCode: 0 },
+        },
+        {
+          match: argsEq("merge", "--ff-only", "run/feat-idem-bbbbbb"),
+          result: { stdout: "", stderr: "", exitCode: 0 },
+        },
+        {
+          match: argsEq("rev-parse", "HEAD"),
+          result: { stdout: "babebabe\n", stderr: "", exitCode: 0 },
+        },
+      ]);
+      const code = await runMerge({
+        arg: "feat-idem",
+        store,
+        cwd: "/repo",
+        stdin: emptyStdin(),
+        stdout: out,
+        stderr: err,
+        resolveDefaultBranch: async () => "main",
+        spawnGit: spawn,
+        markBriefDoneFn: async () => ({ moved: false }),
+      });
+      expect(code).toBe(0);
+      expect(err.text()).toBe("");
+    });
+
+    it("change-by-name merge success with mark-done failing writes warning, exits 0", async () => {
+      const store = new MemStore();
+      store.seed({
+        id: "9999cccc",
+        change: "feat-warn",
+        branchName: "run/feat-warn-cccccc",
+        status: "succeeded",
+        startedAt: 1,
+      });
+      const out = new BufferStream();
+      const err = new BufferStream();
+      const { spawn } = makeSpawn([
+        { match: argsEq("status", "--porcelain"), result: { stdout: "", stderr: "", exitCode: 0 } },
+        {
+          match: argsEq("rev-parse", "--abbrev-ref", "HEAD"),
+          result: { stdout: "main\n", stderr: "", exitCode: 0 },
+        },
+        {
+          match: argsEq("merge", "--ff-only", "run/feat-warn-cccccc"),
+          result: { stdout: "", stderr: "", exitCode: 0 },
+        },
+        {
+          match: argsEq("rev-parse", "HEAD"),
+          result: { stdout: "dddd\n", stderr: "", exitCode: 0 },
+        },
+      ]);
+      const code = await runMerge({
+        arg: "feat-warn",
+        store,
+        cwd: "/repo",
+        stdin: emptyStdin(),
+        stdout: out,
+        stderr: err,
+        resolveDefaultBranch: async () => "main",
+        spawnGit: spawn,
+        markBriefDoneFn: async () => ({
+          moved: false,
+          warning: "mark-done: `git mv` failed for `feat-warn`",
+        }),
+      });
+      expect(code).toBe(0);
+      expect(err.text()).toMatch(/mark-done.*failed/);
+    });
+
+    it("run-id-prefix merge success does NOT call mark-done", async () => {
+      const store = new MemStore();
+      store.seed({
+        id: "deadbeef0000",
+        change: "feat-id",
+        branchName: "run/feat-id-deadbe",
+        status: "succeeded",
+        startedAt: 1,
+      });
+      const out = new BufferStream();
+      const err = new BufferStream();
+      const { spawn } = makeSpawn([
+        { match: argsEq("status", "--porcelain"), result: { stdout: "", stderr: "", exitCode: 0 } },
+        {
+          match: argsEq("rev-parse", "--abbrev-ref", "HEAD"),
+          result: { stdout: "main\n", stderr: "", exitCode: 0 },
+        },
+        {
+          match: argsEq("merge", "--ff-only", "run/feat-id-deadbe"),
+          result: { stdout: "", stderr: "", exitCode: 0 },
+        },
+        {
+          match: argsEq("rev-parse", "HEAD"),
+          result: { stdout: "abc\n", stderr: "", exitCode: 0 },
+        },
+      ]);
+      let called = false;
+      const code = await runMerge({
+        arg: "deadbeef",
+        store,
+        cwd: "/repo",
+        stdin: emptyStdin(),
+        stdout: out,
+        stderr: err,
+        resolveDefaultBranch: async () => "main",
+        spawnGit: spawn,
+        markBriefDoneFn: async () => {
+          called = true;
+          return { moved: true };
+        },
+      });
+      expect(code).toBe(0);
+      expect(called).toBe(false);
+    });
+
+    it("change-by-name merge failure (conflict) does NOT call mark-done", async () => {
+      const store = new MemStore();
+      store.seed({
+        id: "5555eeee",
+        change: "feat-conf",
+        branchName: "run/feat-conf-eeeeee",
+        status: "succeeded",
+        startedAt: 1,
+      });
+      const out = new BufferStream();
+      const err = new BufferStream();
+      const { spawn } = makeSpawn([
+        { match: argsEq("status", "--porcelain"), result: { stdout: "", stderr: "", exitCode: 0 } },
+        {
+          match: argsEq("rev-parse", "--abbrev-ref", "HEAD"),
+          result: { stdout: "main\n", stderr: "", exitCode: 0 },
+        },
+        {
+          match: argsEq("merge", "--ff-only", "run/feat-conf-eeeeee"),
+          result: { stdout: "", stderr: "not a fast-forward", exitCode: 1 },
+        },
+        {
+          match: startsWith("merge", "--no-ff", "-m"),
+          result: { stdout: "", stderr: "CONFLICT", exitCode: 1 },
+        },
+        {
+          match: argsEq("merge", "--abort"),
+          result: { stdout: "", stderr: "", exitCode: 0 },
+        },
+        {
+          match: argsEq("diff", "--name-only", "--diff-filter=U"),
+          result: { stdout: "a.txt\n", stderr: "", exitCode: 0 },
+        },
+      ]);
+      let called = false;
+      const code = await runMerge({
+        arg: "feat-conf",
+        store,
+        cwd: "/repo",
+        stdin: emptyStdin(),
+        stdout: out,
+        stderr: err,
+        resolveDefaultBranch: async () => "main",
+        spawnGit: spawn,
+        markBriefDoneFn: async () => {
+          called = true;
+          return { moved: true };
+        },
+      });
+      expect(code).toBe(1);
+      expect(called).toBe(false);
+    });
+
+    it("change-by-name merge failure (ff-only refusal) does NOT call mark-done", async () => {
+      const store = new MemStore();
+      store.seed({
+        id: "6666ffff",
+        change: "feat-ffref",
+        branchName: "run/feat-ffref-ffffff",
+        status: "succeeded",
+        startedAt: 1,
+      });
+      const out = new BufferStream();
+      const err = new BufferStream();
+      const { spawn } = makeSpawn([
+        { match: argsEq("status", "--porcelain"), result: { stdout: "", stderr: "", exitCode: 0 } },
+        {
+          match: argsEq("rev-parse", "--abbrev-ref", "HEAD"),
+          result: { stdout: "main\n", stderr: "", exitCode: 0 },
+        },
+        {
+          match: argsEq("merge", "--ff-only", "run/feat-ffref-ffffff"),
+          result: { stdout: "", stderr: "not a fast-forward", exitCode: 1 },
+        },
+      ]);
+      let called = false;
+      const code = await runMerge({
+        arg: "feat-ffref",
+        ffOnly: true,
+        store,
+        cwd: "/repo",
+        stdin: emptyStdin(),
+        stdout: out,
+        stderr: err,
+        resolveDefaultBranch: async () => "main",
+        spawnGit: spawn,
+        markBriefDoneFn: async () => {
+          called = true;
+          return { moved: true };
+        },
+      });
+      expect(code).toBe(1);
+      expect(called).toBe(false);
+    });
+  });
+
   it("merge does NOT delete the branch on success", async () => {
     const store = new MemStore();
     store.seed({

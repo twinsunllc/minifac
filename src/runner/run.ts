@@ -35,6 +35,12 @@ export interface RunOptions {
   branchName?: string;
   /** Optional cancellation signal. */
   abortSignal?: AbortSignal;
+  /** When true, the runner SHALL NOT invoke `markBriefDone` on terminal-
+   *  success. The runs row is still recorded as `succeeded`. Used by
+   *  autorun's wrapper when it plans to own the mark-done call after a
+   *  successful auto-merge. Defaults to `false` so manual `minifac run`
+   *  callers retain today's behavior. */
+  skipMarkDone?: boolean;
 }
 
 interface QueueItem {
@@ -491,7 +497,13 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
     };
   }
 
-  if (result.status === "succeeded" && brief && runCwd !== undefined && runCwd.length > 0) {
+  if (
+    result.status === "succeeded" &&
+    brief &&
+    runCwd !== undefined &&
+    runCwd.length > 0 &&
+    options.skipMarkDone !== true
+  ) {
     const change = brief.frontmatter.change;
     if (typeof change === "string" && change.length > 0) {
       try {

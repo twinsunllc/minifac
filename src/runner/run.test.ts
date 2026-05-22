@@ -1078,6 +1078,80 @@ describe("runFactory", () => {
       expect(existsSync(pathMod.join(repo, "inputs", "done"))).toBe(false);
     });
 
+    it("with skipMarkDone:true does NOT move the brief; runs row still succeeds", async () => {
+      const { mkdir, writeFile } = await import("node:fs/promises");
+      const { existsSync } = await import("node:fs");
+      const pathMod = await import("node:path");
+      const { spawnSync } = await import("node:child_process");
+      const repo = await makeGitRepo();
+      await mkdir(pathMod.join(repo, "inputs"), { recursive: true });
+      await writeFile(
+        pathMod.join(repo, "inputs", "foo.md"),
+        "---\nchange: foo\nfactory: sdd\n---\nbody\n",
+      );
+      const sh = (args: string[]): void => {
+        const r = spawnSync(args[0] as string, args.slice(1), { cwd: repo, encoding: "utf8" });
+        if (r.status !== 0) throw new Error(`${args.join(" ")} failed: ${r.stderr}`);
+      };
+      sh(["git", "add", "."]);
+      sh(["git", "commit", "-q", "-m", "add brief"]);
+
+      const { factory, reg } = trivialSuccess();
+      const store = new FakeStore();
+      const warnings: string[] = [];
+      const result = await runFactory(wrap(factory), {
+        registry: reg,
+        brief: briefFor("foo"),
+        runCwd: repo,
+        store,
+        runId: "r1",
+        skipMarkDone: true,
+        onEvent: (e) => {
+          if (e.nodeId === "__mark_done__" && e.event.kind === "stderr") {
+            warnings.push(e.event.line);
+          }
+        },
+      });
+      expect(result.status).toBe("succeeded");
+      // Brief stays put.
+      expect(existsSync(pathMod.join(repo, "inputs", "foo.md"))).toBe(true);
+      expect(existsSync(pathMod.join(repo, "inputs", "done", "foo.md"))).toBe(false);
+      // No mark-done warning either way.
+      expect(warnings).toEqual([]);
+      // Runs row still finalized succeeded.
+      expect(store.runs.get("r1")?.status).toBe("succeeded");
+    });
+
+    it("with skipMarkDone unset/false still moves the brief (regression)", async () => {
+      const { mkdir, writeFile } = await import("node:fs/promises");
+      const { existsSync } = await import("node:fs");
+      const pathMod = await import("node:path");
+      const { spawnSync } = await import("node:child_process");
+      const repo = await makeGitRepo();
+      await mkdir(pathMod.join(repo, "inputs"), { recursive: true });
+      await writeFile(
+        pathMod.join(repo, "inputs", "bar.md"),
+        "---\nchange: bar\nfactory: sdd\n---\nbody\n",
+      );
+      const sh = (args: string[]): void => {
+        const r = spawnSync(args[0] as string, args.slice(1), { cwd: repo, encoding: "utf8" });
+        if (r.status !== 0) throw new Error(`${args.join(" ")} failed: ${r.stderr}`);
+      };
+      sh(["git", "add", "."]);
+      sh(["git", "commit", "-q", "-m", "add brief"]);
+
+      const { factory, reg } = trivialSuccess();
+      const result = await runFactory(wrap(factory), {
+        registry: reg,
+        brief: briefFor("bar"),
+        runCwd: repo,
+        skipMarkDone: false,
+      });
+      expect(result.status).toBe("succeeded");
+      expect(existsSync(pathMod.join(repo, "inputs", "bar.md"))).toBe(false);
+      expect(existsSync(pathMod.join(repo, "inputs", "done", "bar.md"))).toBe(true);
+    });
+
     it("logs a warning and still succeeds when git mv fails", async () => {
       const { mkdir, writeFile } = await import("node:fs/promises");
       const pathMod = await import("node:path");
