@@ -123,11 +123,7 @@ function applyAutorunEvent(state: BriefListState, event: AutorunEvent): BriefLis
     }
     case "skipped":
       return upsertBrief(state, event.change, (row) => {
-        if (
-          row.status === "running" ||
-          row.status === "succeeded" ||
-          row.status === "failed"
-        ) {
+        if (row.status === "running" || row.status === "succeeded" || row.status === "failed") {
           return row;
         }
         return { ...row, status: "skipped", skipReason: event.reason };

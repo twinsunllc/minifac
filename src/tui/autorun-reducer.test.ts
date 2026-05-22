@@ -138,10 +138,7 @@ describe("autorunReducer", () => {
     let s = createInitialBriefListState();
     s = autorunReducer(s, ev({ kind: "started", ts: 0, change: "foo", runId: "r2" }));
     s = autorunReducer(s, ev({ kind: "completed", ts: 1, change: "foo", status: "failed" }));
-    s = autorunReducer(
-      s,
-      ev({ kind: "skipped", ts: 2, change: "foo", reason: "activity-failed" }),
-    );
+    s = autorunReducer(s, ev({ kind: "skipped", ts: 2, change: "foo", reason: "activity-failed" }));
     expect(s.briefs[0]?.status).toBe("failed");
     expect(s.briefs[0]?.skipReason).toBeUndefined();
   });
