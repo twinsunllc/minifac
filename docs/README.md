@@ -31,6 +31,7 @@ accepted; superseded by new decisions rather than edited. See
 
 - [[Roadmap]] — current proposal sequence, in-flight work, deferred items
 - [[Open-Questions]] — decisions deferred with named triggers
+- [[Config]] — config file locations, all keys, env vars, and merge rules
 
 ## Conventions
 
@@ -46,7 +47,8 @@ accepted; superseded by new decisions rather than edited. See
 2. [[Roadmap]] — what we're building and what's next
 3. [[Factory]] and [[Brief]] — the two central concepts
 4. `decisions/0004-Factory-vs-Input-Separation.md` — the architectural framing
-5. Browse other concept notes as needed; backlinks in Obsidian help
+5. [[CLI]] — full command reference once you're ready to run things
+6. Browse other concept notes as needed; backlinks in Obsidian help
 
 ## Updating
 

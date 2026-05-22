@@ -139,6 +139,70 @@ intent and declare `brief: optional | none`. Lookup at invocation time
 falls through to the factory name if no brief matches. See
 [[0006-Verb-Shape]].
 
+## Schema
+
+A factory file is parsed in two passes. The on-disk shape (accepted by
+`FactoryLayerSchema`) may carry an `extends:` key; after chain resolution
+and merge the result is validated through `FactorySchema`, which strips
+`extends:` and requires `name`, `nodes`, and `edges`.
+
+### Top-level fields
+
+| Field | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | string (min 1) | yes (post-merge) | — | Identifier for the factory. Must be non-empty. |
+| `description` | string | no | — | Human-readable prose shown in tooling output. |
+| `brief` | `"required"` \| `"optional"` \| `"none"` | no | `"required"` | Whether the factory expects a [[Brief]]. `"required"` rejects invocations with no brief; `"optional"` accepts both; `"none"` is for brief-less factories (scheduled tasks, etc.). |
+| `extends` | string (min 1) | no | — | Reference to a parent factory. Same resolution precedence as a brief's `factory:` field. Stripped before downstream code sees the factory. Only valid in the on-disk layer; the resolved factory never carries this field. |
+| `nodes` | map of node-id → [[#Node fields\|node]] | yes (post-merge) | — | Keyed by node id (the string you reference in edges). |
+| `edges` | array of [[#Edge fields\|edge]] | yes (post-merge) | `[]` | Control-flow declarations. An empty array is valid (single-node factory). |
+
+### Node fields
+
+Each entry under `nodes:` is a map key (the node id) to a node object.
+A node uses **either** the inline form (`executor` + `with`) **or** the
+step-reference form (`uses` + optional `inputs`). The two forms are
+mutually exclusive at dispatch: if `uses:` is present the loader resolves
+it and inlines the step's `executor` and `with`, discarding any
+`executor` or `with` keys on the node itself.
+
+| Field | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `executor` | string (min 1) | no | — | Which [[Executor]] runs this node. Omit when using `uses:`. The only implemented value is `"claude"`. |
+| `with` | map (string → unknown) | no | — | Executor-specific configuration. Shape is validated by the executor at dispatch time, not by the factory loader. See [[#`with:` fields (claude executor)\|with fields]] below. Omit when using `uses:`. |
+| `uses` | string (min 1) | no | — | Reference to a reusable [[Step]]. Mutually exclusive with `executor` + `with`. See [[Step#Reference syntax and lookup precedence]]. |
+| `inputs` | map (string → unknown) | no | — | Input values supplied to the step declared in `uses:`. Keys must match the step's declared input names. Omit when using inline `executor` + `with`. |
+| `cwd` | string | no | — | Working directory for this node. Accepts `{{ run.cwd }}` and `{{ brief.* }}` template tokens. If omitted the runner's default cwd applies. |
+| `terminal` | boolean | no | `false` | When `true`, a successful exit from this node ends the run. Use on the last node in a forward-flow path. |
+| `max_iterations` | positive integer | no | — | Maximum times this node may be dispatched across the entire run (counting all edge traversals). Absent means unlimited, subject to `max_traversals` on inbound edges. |
+
+### `with:` fields (claude executor)
+
+The `with:` block on a `claude`-executor node (or inside a step that
+uses `executor: claude`) is validated by the executor's own `WithSchema`
+at dispatch time. The factory loader treats `with:` as an opaque map.
+
+| Field | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `prompt` | string (min 1) | yes | — | The instruction text sent to the Claude CLI. Accepts `{{ brief.* }}`, `{{ run.* }}`, and `{{ inputs.* }}` template tokens. The executor auto-appends sentinel-emission instructions unless `emit_sentinel_instructions: false`. |
+| `model` | string | no | — | Per-node model override. Maps to `--model <value>` on the Claude CLI. |
+| `permission_mode` | `"default"` \| `"accept_edits"` \| `"bypass_permissions"` | no | — | Filesystem authority granted to the spawned Claude session. `"default"` emits no flag (CLI default applies). Maps to `--permission-mode <camelCaseValue>`. |
+| `allowed_tools` | string[] | no | — | Allowlist of tool names. Non-empty → `--allowedTools <a,b,c>`. Empty array treated as "emit no flag". |
+| `add_dirs` | string[] | no | — | Additional directories the session may read/write beyond `cwd`. Each element → a separate `--add-dir <dir>` flag, in array order. |
+| `args` | string[] | no | — | Raw passthrough arguments appended to the Claude CLI invocation after all typed flags. Cannot override typed flags. |
+| `emit_sentinel_instructions` | boolean | no | `true` | When `false`, suppresses the auto-appended sentinel-emission instruction block. Response-side sentinel parsing is unaffected. |
+
+### Edge fields
+
+| Field | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `from` | string (min 1) | yes | — | Source node id. Must match a key in `nodes:`. |
+| `to` | string (min 1) | yes | — | Destination node id. Must match a key in `nodes:`. |
+| `when` | `"on_success"` \| `"on_failure"` | no | `"on_success"` | Condition for traversing this edge. `"on_failure"` edges form recovery paths (e.g. verify → apply retry loop). |
+| `max_traversals` | positive integer | no | — | Maximum times this edge may be traversed in a single run. Absent means unlimited. Use to bound [[Cycle]]s. |
+
+Source: `src/factory/schema.ts`, `src/executor/claude.ts`
+
 ## Related
 
 - [[Brief]] — per-change input

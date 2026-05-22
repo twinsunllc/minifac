@@ -106,6 +106,51 @@ of minifac dictates which step versions exist. The reference syntax
 Independent step versioning is filed under [[Open-Questions]] as a
 future concern.
 
+## Schema
+
+A step file is a single YAML document validated by `StepSchema`.
+
+### Top-level fields
+
+| Field | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | string matching `[a-z][a-z0-9-]*` | yes | — | Kebab-case identifier. Must start with a lowercase letter. Used in error messages and for future registry lookup. |
+| `version` | string (min 1) | yes | — | Semver or any non-empty string. Parsed off `uses:` references but ignored for path resolution in v0 (the bundled file is always used). |
+| `description` | string | no | — | Human-readable prose describing what the step does. |
+| `inputs` | map of input-name → [[#Input definition fields\|input def]] | no | — | Typed input schema. Input names must match `[a-zA-Z_][a-zA-Z0-9_]*`. If absent the step takes no inputs. |
+| `executor` | string (min 1) | yes | — | Which [[Executor]] runs this step. The only implemented value is `"claude"`. |
+| `with` | map (string → unknown) | yes | — | Executor-specific configuration. Accepts `{{ inputs.* }}` template tokens that are resolved at dispatch time. See [[Factory#`with:` fields (claude executor)]] for the full field list when `executor: claude`. |
+
+### Input definition fields
+
+Each key under `inputs:` names an input variable. The value is an input
+definition object.
+
+| Field | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `type` | `"string"` \| `"number"` \| `"boolean"` \| `"array"` \| `"object"` | yes | — | Declared type of the input. The loader enforces this at inlining time (loose check: `string`, `number`, `boolean` → `typeof`; `array` → `Array.isArray`; `object` → non-null, non-array object). |
+| `required` | boolean | no | — | When `true`, the factory node must supply this input. May not be combined with `default`. |
+| `default` | matches `type` | no | — | Fallback value when the factory node omits this input. Type must match `type`. May not be combined with `required: true`. |
+| `description` | string | no | — | Human-readable description of what the input controls. |
+
+**Constraint**: a single input may not declare both `required: true` and
+`default`. The schema validates this and rejects the step file if
+violated.
+
+### Reference syntax
+
+A factory node's `uses:` field accepts three forms:
+
+| Form | Example | Resolution |
+|---|---|---|
+| `minifac:<name>[@<version>]` | `minifac:openspec-verify` | Built-in only. Resolves directly to `<callerCwd>/examples/steps/<name>.yaml`. Skips local lookup. |
+| `<scope>/<name>[@<version>]` | `myorg/lint-check` | Namespaced. The `<scope>/` prefix carries no runtime semantics in v0; lookup follows the bare-name precedence. |
+| `<name>[@<version>]` | `lint-check` | Bare. Tries `<callerCwd>/.minifac/steps/<name>.yaml` first; falls back to `<callerCwd>/examples/steps/<name>.yaml`. |
+
+Name and scope components must each match `[a-z][a-z0-9-]*`. The `@<version>` pin is parsed and validated (non-empty, no whitespace) but ignored for path resolution in v0. File extensions, backslashes, whitespace, and empty pins are rejected.
+
+Source: `src/step/schema.ts`, `src/step/resolve.ts`
+
 ## Related
 
 - [[Factory]] — composes steps via nodes' `uses:` field
