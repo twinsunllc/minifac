@@ -1,0 +1,131 @@
+name: release
+
+# Cuts a GitHub Release with dist archives and publishes the
+# package to npm with SLSA provenance attestation. Triggered by
+# pushing a `vX.Y.Z` tag; can also be run manually with the tag
+# as an input.
+#
+# Security model (see docs/decisions/0026-Release-Pipeline.md):
+# - npm authentication via OIDC trusted publisher, not a
+#   long-lived NPM_TOKEN secret
+# - `--provenance` attaches a SLSA attestation linking the
+#   tarball to this workflow + commit + tag
+# - Tag must match `package.json` version (refuses mismatched
+#   releases)
+# - The freshness gate (3-day cooldown) runs before any
+#   `npm ci` so a fresh dep can't execute postinstall during
+#   release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release (e.g. v0.1.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build, verify, publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write       # gh release create
+      id-token: write       # npm provenance / OIDC trusted publishing
+
+    steps:
+      - name: Resolve tag
+        id: tag
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "name=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          ref: ${{ steps.tag.outputs.name }}
+
+      - name: Setup Node 22
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0
+        with:
+          node-version: "22"
+          cache: npm
+          registry-url: "https://registry.npmjs.org"
+
+      # Defense against publish-then-yank supply-chain attacks.
+      # Runs before install so a fresh dep can't execute postinstall
+      # hooks even once during a release.
+      - name: Check dependency freshness (3-day cooldown)
+        run: npm run check:dep-freshness
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint + format check
+        run: npm run check
+
+      - name: Test
+        run: npm test
+
+      - name: Audit (production tree, high+)
+        run: npm audit --audit-level=high
+
+      - name: Verify package.json version matches tag
+        run: |
+          TAG_VERSION="${{ steps.tag.outputs.name }}"
+          TAG_VERSION="${TAG_VERSION#v}"
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "Tag $TAG_VERSION does not match package.json $PKG_VERSION"
+            exit 1
+          fi
+
+      - name: Build
+        run: npm run build
+
+      - name: Extract changelog notes
+        id: changelog
+        run: |
+          TAG="${{ steps.tag.outputs.name }}"
+          VERSION="${TAG#v}"
+          NOTES=$(awk "/^## \[${VERSION}\]/{found=1; next} found && /^## \[/{exit} found{print}" CHANGELOG.md)
+          if [ -z "$NOTES" ]; then
+            NOTES="See [CHANGELOG.md](./CHANGELOG.md) for details."
+          fi
+          echo "$NOTES" > /tmp/release-notes.md
+          echo "notes_file=/tmp/release-notes.md" >> "$GITHUB_OUTPUT"
+
+      - name: Create dist archives
+        run: |
+          tar -czf minifac-dist-${{ steps.tag.outputs.name }}.tar.gz dist/
+          zip -r minifac-dist-${{ steps.tag.outputs.name }}.zip dist/
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ steps.tag.outputs.name }}" \
+            --title "${{ steps.tag.outputs.name }}" \
+            --notes-file "${{ steps.changelog.outputs.notes_file }}" \
+            --verify-tag \
+            "minifac-dist-${{ steps.tag.outputs.name }}.tar.gz" \
+            "minifac-dist-${{ steps.tag.outputs.name }}.zip"
+
+      - name: Publish to npm (with provenance)
+        # Authentication: npm OIDC trusted publisher (no NPM_TOKEN
+        # secret required). Configure once at
+        #   https://www.npmjs.com/package/minifac/access/trusted-publishers
+        # with repo=twinsunllc/minifac, workflow=release.yml, ref=v*.
+        run: npm publish --access public --provenance
