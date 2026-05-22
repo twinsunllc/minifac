@@ -27,7 +27,7 @@ function buildScripted(scripts: Record<string, NodeEvent[]>): () => ExecutorRegi
     const reg = new ExecutorRegistry();
     const exec: NodeExecutor = {
       type: "test",
-      async *run(node: ResolvedNode): AsyncIterable<NodeEvent> {
+      supportsMcp: false,      async *run(node: ResolvedNode): AsyncIterable<NodeEvent> {
         const ev = scripts[node.id] ?? [{ kind: "status", status: "succeeded" }];
         for (const e of ev) yield e;
       },
@@ -42,7 +42,7 @@ function buildSlowSuccess(delayMs: number): () => ExecutorRegistry {
     const reg = new ExecutorRegistry();
     const exec: NodeExecutor = {
       type: "test",
-      async *run(): AsyncIterable<NodeEvent> {
+      supportsMcp: false,      async *run(): AsyncIterable<NodeEvent> {
         await new Promise((r) => setTimeout(r, delayMs));
         yield { kind: "stdout", line: "tick" };
         yield { kind: "status", status: "succeeded" };

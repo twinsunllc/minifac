@@ -47,11 +47,27 @@ export interface RunContext {
   /** Absolute path to the per-node-per-iteration outputs directory. The
    * runner creates this directory (mkdirp) before invoking the executor. */
   outputsDir: string;
+  /** Absolute path to the per-dispatch `.mcp.json` config file emitted by
+   * the runner when the executor's `supportsMcp` is `true` and the run's
+   * MCP server is in scope. Executors that speak MCP forward this to their
+   * CLI's `--mcp-config` argument. Empty / undefined when the runner has
+   * not emitted a config (e.g. unit-test invocations outside the runner,
+   * or executors with `supportsMcp: false`). */
+  mcpConfigPath?: string;
 }
 
 export type ResolvedNode = FactoryNode & { id: string };
 
 export interface NodeExecutor {
   readonly type: string;
+  /** Whether the executor's underlying runtime can connect to an MCP server
+   * and invoke its tools. When `true`, the runner registers per-node MCP
+   * tools for declared `type: "value"` outputs, emits a per-dispatch
+   * `.mcp.json`, and threads its path through `ctx.mcpConfigPath`. When
+   * `false`, all of the above are skipped and the executor falls back to
+   * the filesystem-JSON transport for `value` outputs. See ADR-0029 and
+   * the `node-executor` capability's "Executor `supportsMcp` capability
+   * flag" requirement. */
+  readonly supportsMcp: boolean;
   run(node: ResolvedNode, ctx: RunContext): AsyncIterable<NodeEvent>;
 }

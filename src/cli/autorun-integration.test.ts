@@ -37,6 +37,7 @@ function shOrThrow(cwd: string, args: string[]): void {
 /** Fake executor: emits a `started` then `succeeded` status. */
 class FakeExecutor implements NodeExecutor {
   readonly type = "fake";
+  readonly supportsMcp = false;
   async *run(_node: ResolvedNode, _ctx: RunContext): AsyncIterable<NodeEvent> {
     yield { kind: "stdout", line: "fake hello" };
     yield { kind: "status", status: "started" };

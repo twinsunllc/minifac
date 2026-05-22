@@ -53,6 +53,7 @@ async function makeRepoConflicting(): Promise<string> {
 
 class TrackingExecutor implements NodeExecutor {
   readonly type: string;
+  readonly supportsMcp = false;
   visited: string[] = [];
 
   constructor(type: string) {

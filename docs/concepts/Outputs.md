@@ -17,10 +17,15 @@ This concept note covers the v1 (filesystem-JSON) shape.
 
 ## Three output types
 
-- **`type: "value"`** — a JSON-encoded value. The model writes it to
-  `<outputs_dir>/<key>.json` using its existing `Write` tool. The
-  runner parses it as JSON during post-execution validation; a
-  `required` value that's missing or unparseable fails the node.
+- **`type: "value"`** — a JSON-encoded value. The model reports it
+  via the per-run MCP transport (`mcp__minifac__report_<key>(value)`)
+  when the dispatching executor speaks MCP; the runner's bridge writes
+  `<outputs_dir>/<key>.json` atomically. The filesystem-JSON fallback
+  is still honored — if the model writes `<outputs_dir>/<key>.json`
+  directly with its `Write` tool, the validator picks it up unchanged.
+  See [[Decisions/0029-Node-Outputs-MCP]] for the dual-transport
+  rationale. A `required` value that's missing or unparseable fails
+  the node.
 - **`type: "file"`** — a file in the outputs directory. With
   `filename: "patch.diff"` the runner looks at exactly that path.
   Without `filename:`, it globs `<outputs_dir>/<key>.*` and requires
@@ -121,12 +126,36 @@ operators see the actual failure reason, not a misleading
   [--failed]` — reclaims per-run output directories using the same
   hybrid policy as worktree pruning. Running runs are never eligible.
 
+## Dual transport for `value` outputs
+
+`value` outputs land via one of two paths, both converging on the
+same `<outputs_dir>/<key>.json` file:
+
+1. **MCP transport (preferred, default for Claude).** The runner
+   starts a per-run inline MCP server on a unix socket sibling to
+   the per-run outputs tree (see [[Config]]). For each dispatching
+   node, it registers one MCP tool per declared `type: "value"`
+   output: `mcp__minifac__report_<key>(value: <derived schema>)`.
+   When the model calls the tool, the runner's bridge validates the
+   payload, serializes deterministically (sorted keys, 2-space
+   indent), and writes the file atomically (`.tmp-*` sibling +
+   `rename`). Tool calls are visible as `tool_use` events in the
+   stream-json log, so the TUI / web viewer see "outputs reported"
+   in the timeline.
+2. **Filesystem-JSON fallback.** Executors with
+   `supportsMcp: false`, or any model that prefers its own `Write`
+   tool, can land `<outputs_dir>/<key>.json` directly. The validator
+   reads from disk regardless of transport.
+
+`file` and `directory` outputs are filesystem-only — MCP doesn't
+help when the natural shape is a file. The model writes them with
+its existing tools; the validator detects them on disk after
+termination.
+
+Binding decision: `docs/decisions/0029-Node-Outputs-MCP.md`.
+
 ## v1 trade-offs
 
-- The model writes `value` outputs as plain JSON files with its
-  existing `Write` tool. No MCP transport in v1 — that's a follow-on.
-  The on-disk shape is forward-compatible: an MCP-transport upgrade
-  would intercept an `emit` tool call and write the same `<key>.json`.
 - The `:read` cap is 64 KB. Oversize throws rather than truncates so
   the failure is loud.
 - `prune --outputs` does not yet sweep outputs lazily at run start;

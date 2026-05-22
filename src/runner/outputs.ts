@@ -30,13 +30,27 @@ interface OutputCheck {
   unsatisfied?: string;
 }
 
+export interface ValidateDeclaredOutputsOptions {
+  /** True when the dispatching executor's `supportsMcp` was true and the
+   * runner's per-run MCP server was in scope. Used to enrich the
+   * `missing_outputs_detail` strings for absent `value` outputs. */
+  mcpAvailable?: boolean;
+  /** Optional map of outputs reported via MCP during the dispatch. Keys
+   * present here landed via tool call; absent keys never reported via MCP
+   * (they may still have landed via the filesystem fallback). */
+  mcpReported?: ReadonlyMap<string, "mcp" | "fs"> | null;
+}
+
 export async function validateDeclaredOutputs(
   node: FactoryNode,
   outputsDir: string,
+  options: ValidateDeclaredOutputsOptions = {},
 ): Promise<ValidateOutputsResult> {
   const index: NodeOutputIndex = {};
   const missing: string[] = [];
   const detail: Record<string, string> = {};
+  const mcpAvailable = options.mcpAvailable === true;
+  const mcpReported = options.mcpReported ?? null;
 
   const outputs = node.outputs;
   if (!outputs) return { index, missing, detail };
@@ -49,7 +63,21 @@ export async function validateDeclaredOutputs(
     }
     if (check.unsatisfied !== undefined && def.required) {
       missing.push(key);
-      detail[key] = check.unsatisfied;
+      // For absent `value` outputs with MCP in scope, enrich the detail
+      // string so the operator sees both the un-called tool and the
+      // absent fallback file. Per the `graph-runner` capability's
+      // "missing_outputs_detail" requirement.
+      const baseDetail = check.unsatisfied;
+      if (
+        def.type === "value" &&
+        mcpAvailable &&
+        (mcpReported === null || !mcpReported.has(key))
+      ) {
+        detail[key] =
+          `${baseDetail} (MCP tool mcp__minifac__report_${key} was available but not called; no fallback file at ${key}.json either)`;
+      } else {
+        detail[key] = baseDetail;
+      }
     }
   }
 

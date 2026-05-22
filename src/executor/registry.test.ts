@@ -5,6 +5,7 @@ import type { NodeEvent, NodeExecutor } from "./types.js";
 function makeExecutor(type: string): NodeExecutor {
   return {
     type,
+    supportsMcp: false,
     async *run(): AsyncIterable<NodeEvent> {
       yield { kind: "status", status: "succeeded" };
     },

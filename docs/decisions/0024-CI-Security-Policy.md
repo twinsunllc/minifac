@@ -62,6 +62,15 @@ This eliminates the typosquat / brand-similar attack vector. No
 random community actions, however popular, without a deliberate
 discussion captured in a follow-on ADR.
 
+The same verified-publisher posture extends to runtime `dependencies`
+we add. `@modelcontextprotocol/sdk` (added for ADR-0029's MCP outputs
+transport) is published by the Anthropic-affiliated
+`modelcontextprotocol` GitHub org and the matching npm org; it ships
+under the `MIT` license with its source visible at
+github.com/modelcontextprotocol/typescript-sdk. We lock it by version
+in `package.json` and rely on the dep-freshness gate (rule 4) plus
+the standard `npm audit` cycle for ongoing coverage.
+
 ### 3. Minimum permissions, declared explicitly
 
 Every workflow declares a top-level `permissions:` block with

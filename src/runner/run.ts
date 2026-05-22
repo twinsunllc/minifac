@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir } from "node:fs/promises";
+import { mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import type { Brief } from "../brief/loader.js";
 import type { ExecutorRegistry } from "../executor/registry.js";
@@ -9,6 +9,8 @@ import type { NodeOutputIndex } from "../factory/schema.js";
 import type { RunStore, StoredEventKind } from "../storage/run-store.js";
 import { minifacHome } from "../worktree/config.js";
 import { markBriefDone } from "./mark-done.js";
+import { writeMcpConfig } from "./mcp-config.js";
+import { type RunnerMcpServer, startRunnerMcpServer } from "./mcp-server.js";
 import { validateDeclaredOutputs } from "./outputs.js";
 import type { ExecutionLogEntry, RunResult } from "./result.js";
 import { type Substitutions, TemplateSubstitutionError, substitute } from "./substitute.js";
@@ -58,6 +60,77 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
   const priorResults: NodeResult[] = [];
   const log: ExecutionLogEntry[] = [];
   const outputsRoot = path.join(minifacHome(), "outputs", runId);
+
+  // The per-run MCP server's socket lives sibling to the run's outputs
+  // tree. The bind needs the parent directory present, and per-node outputs
+  // dirs are mkdirp'd ad-hoc when a node dispatches — so we mkdirp the root
+  // here unconditionally rather than wait for the first dispatch.
+  try {
+    await mkdir(outputsRoot, { recursive: true, mode: 0o755 });
+  } catch (err) {
+    reportStoreError(onEvent, runStart, err);
+  }
+
+  // Per-dispatch transport tracking. Populated by the MCP server's
+  // `onOutput` callback when a tool call lands. Read by the validator's
+  // detail-string composer so `missing_outputs_detail` can name the MCP
+  // tool that was available but not called.
+  let perDispatchTransports: Map<string, "mcp" | "fs"> | null = null;
+
+  let mcpServer: RunnerMcpServer | null = null;
+  try {
+    mcpServer = await startRunnerMcpServer({
+      runId,
+      outputsRoot,
+      onOutput: (nodeId, key) => {
+        // Only mark when we're inside the dispatching node; tool calls
+        // landing during another node's window are defensive impossibilities
+        // because per-node tool registration is torn down at termination.
+        if (perDispatchTransports) {
+          perDispatchTransports.set(key, "mcp");
+        }
+      },
+    });
+  } catch (err) {
+    // Surface server-start failures on stderr and continue — the v1
+    // filesystem-JSON transport is still available as a fallback for
+    // every executor (`supportsMcp: false` semantics).
+    const entry: EmittedEvent = {
+      nodeId: "__mcp__",
+      iteration: 0,
+      emittedAt: Date.now() - runStart,
+      event: {
+        kind: "stderr",
+        line: `mcp server failed to start: ${(err as Error).message}; falling back to filesystem-JSON transport`,
+      },
+    };
+    onEvent?.(entry);
+  }
+  /** Absolute paths of every `.mcp.json` written during the run; cleaned up
+   * at run termination so the per-node outputs dirs are left containing
+   * only the model's outputs. */
+  const mcpConfigPaths: string[] = [];
+
+  const cleanupRunResources = async (): Promise<void> => {
+    if (mcpServer) {
+      try {
+        await mcpServer.close();
+      } catch (err) {
+        reportStoreError(onEvent, runStart, err);
+      }
+      mcpServer = null;
+    }
+    for (const p of mcpConfigPaths) {
+      try {
+        await rm(p, { force: true });
+      } catch {
+        /* already gone */
+      }
+    }
+    mcpConfigPaths.length = 0;
+  };
+
+  try {
 
   if (store) {
     try {
@@ -276,6 +349,29 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
     }
     const snapshot: readonly NodeResult[] = Object.freeze(priorResults.slice());
 
+    // MCP integration. Per ADR-0029 D6, the runner consults the executor's
+    // `supportsMcp` flag: when true we register per-node MCP tools, emit a
+    // per-dispatch `.mcp.json`, and thread its path through `ctx`. When
+    // false, none of that happens (the per-run server still runs — other
+    // nodes in the same run may use it).
+    const mcpInScope = executor.supportsMcp && mcpServer !== null;
+    perDispatchTransports = new Map();
+    let mcpConfigPath: string | undefined;
+    if (mcpInScope && mcpServer) {
+      if (node.outputs) {
+        mcpServer.registerNodeOutputs(nodeId, outputsDir, node.outputs);
+      }
+      try {
+        mcpConfigPath = await writeMcpConfig({
+          outputsDir,
+          socketPath: mcpServer.socketPath,
+        });
+        mcpConfigPaths.push(mcpConfigPath);
+      } catch (err) {
+        reportStoreError(onEvent, runStart, err);
+      }
+    }
+
     const ctx: RunContext = {
       factory,
       priorResults: snapshot,
@@ -283,6 +379,7 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
       iteration,
       cwd: resolveCwd(node.cwd, inputsMap, outputsDir),
       outputsDir,
+      mcpConfigPath,
     };
 
     const startedAt = Date.now() - runStart;
@@ -331,6 +428,14 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
 
     log.push({ nodeId, iteration, status: finalStatus, startedAt, endedAt });
 
+    // De-register the dispatching node's MCP tools immediately after the
+    // executor's event stream drains, before validation. A late tool call
+    // arriving after this point returns an MCP "unknown tool" error (per
+    // ADR-0029's tear-down rules).
+    if (mcpInScope && mcpServer && node.outputs) {
+      mcpServer.clearNodeOutputs(nodeId);
+    }
+
     // Post-execution outputs validation. Runs only when the node:
     //  - declared an `outputs:` block, AND
     //  - terminated `succeeded`.
@@ -340,7 +445,10 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
     let resultReason: string | null = extractReason(finalStatus, terminalMeta);
     let validatedIndex: NodeOutputIndex = {};
     if (finalStatus === "succeeded" && node.outputs) {
-      const validation = await validateDeclaredOutputs(node, outputsDir);
+      const validation = await validateDeclaredOutputs(node, outputsDir, {
+        mcpAvailable: mcpInScope,
+        mcpReported: perDispatchTransports,
+      });
       validatedIndex = validation.index;
       if (validation.missing.length > 0) {
         finalStatus = "failed";
@@ -541,6 +649,14 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
   }
 
   return result;
+  } finally {
+    // Tear down the MCP server (closes connections, removes the socket
+    // file) and sweep every `.mcp.json` written during the run. The
+    // per-node outputs directories themselves are left for
+    // `prune --outputs`. Lives in a finally block so an exception thrown
+    // mid-run still releases the socket per ADR-0029's lifecycle scenario.
+    await cleanupRunResources();
+  }
 }
 
 function extractReason(status: "succeeded" | "failed", meta: unknown): string | null {

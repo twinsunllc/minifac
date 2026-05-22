@@ -38,7 +38,12 @@
       "types": "./dist/index.d.ts"
     }
   },
-  "files": ["dist", "README.md", "LICENSE", "CHANGELOG.md"],
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json && node scripts/copy-web-assets.mjs",
     "start": "node dist/cli.js",
@@ -51,6 +56,7 @@
     "prepare": "npm run build"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@types/react": "^19.2.14",
     "commander": "^12.1.0",
     "ink": "^7.0.3",
