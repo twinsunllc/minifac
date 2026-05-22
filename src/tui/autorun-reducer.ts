@@ -122,11 +122,16 @@ function applyAutorunEvent(state: BriefListState, event: AutorunEvent): BriefLis
       }));
     }
     case "skipped":
-      return upsertBrief(state, event.change, (row) => ({
-        ...row,
-        status: "skipped",
-        skipReason: event.reason,
-      }));
+      return upsertBrief(state, event.change, (row) => {
+        if (
+          row.status === "running" ||
+          row.status === "succeeded" ||
+          row.status === "failed"
+        ) {
+          return row;
+        }
+        return { ...row, status: "skipped", skipReason: event.reason };
+      });
     case "dry-run-decision":
       if (event.action === "schedule") {
         return upsertBrief(state, event.change, (row) => ({
