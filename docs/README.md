@@ -20,6 +20,7 @@ The system has a small vocabulary. Click any of these to read what it is.
 - [[SDD-Loop]] — the canonical factory: propose/apply/verify/archive
 - [[Runs-DB]] — persistent run history
 - [[Auto-Mode]] — long-running `minifac autorun` that picks up ready briefs
+- [[Reference]] — the share-and-compose primitive: how `uses:` and `extends:` resolve, today and eventually
 
 ## Decisions
 

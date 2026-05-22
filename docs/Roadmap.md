@@ -30,6 +30,14 @@ These have ADRs + brief markdown committed; just need a `minifac
 run <change>` to start. Listed roughly in suggested order; nothing
 enforces this beyond explicit `depends_on` fields.
 
+- [ ] **`bundle-builtins`** — [[0030-Bundle-Builtins]].
+  Pre-publish blocker. Ship `examples/` in the tarball and
+  teach the resolver to find `minifac:*` references in the
+  installed package directory. Today `npx minifac init
+  --with-sdd && npx minifac run …` is aspirational — the
+  README quickstart doesn't actually work against a fresh
+  npm install. Fixes that. Also documents the
+  eventual resolver chain in [[Reference]].
 - [ ] **`cli-symlink-main-guard`** —
   [[0023-CLI-Symlink-Main-Guard]]. One-line fix: the `isMain`
   guard in `src/cli.ts` compares `import.meta.url` (realpath)

@@ -19,8 +19,12 @@ in a decision note.
 distributed, and how does pinning + supply-chain trust work?
 **Trigger:** A second repo wants to depend on a step authored in
 another repo's `.minifac/steps/`; copy-paste becomes the friction.
-**v0 stance:** Local-only steps; tool-version-locked. See
-[[0018-Reusable-Steps]].
+**v0 stance:** Local-only steps; tool-version-locked. Bundled
+`minifac:*` references ship with the package per
+[[0030-Bundle-Builtins]]. The eventual remote-fetch
+resolver (cross-repo / cross-org sharing via git URLs) is sketched
+in [[Reference]] § Direction; trigger to brief is "first user
+wants to share a step across multiple repos."
 
 ### Step authoring helper
 **Question:** Should there be a `minifac step <name>` CLI verb (and
@@ -61,8 +65,12 @@ versions, or someone wants to pin an older factory with a newer minifac.
 **Question:** Can a custom factory in repo A be referenced by repo B?
 **Trigger:** Two repos want the same custom factory and copy-paste
 becomes the friction point.
-**Note:** Likely subsumed by the step marketplace question — steps
-become the sharing unit, factories compose them locally.
+**Note:** Same resolver layer as the step marketplace question —
+[[Reference]] § Direction sketches a unified resolver chain
+(bundled → user-local → cached-remote → fetch-fresh) covering both
+steps and factory `extends:`. Whether factories are also a sharing
+unit (vs. always composed locally from shared steps) is a smaller
+sub-question inside that.
 
 ### Autorun `--factory` flag
 **Question:** Should `minifac autorun` ([[0016-Auto-Mode]]) accept a
