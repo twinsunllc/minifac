@@ -205,7 +205,7 @@
 
 ## 7. Integration tests for chain behavior
 
-- [ ] 7.1 Add an integration test (in `src/cli/autorun.test.ts`
+- [x] 7.1 Add an integration test (in `src/cli/autorun.test.ts`
       or a sibling) that exercises a 2-brief chain:
       - Seed `inputs/A.md` (no deps) and `inputs/B.md`
         (`depends_on: [A]`) in a scratch git repo.
@@ -218,7 +218,7 @@
         whose base contains A's commits (verified by reading
         B's worktree HEAD's ancestor set), and B's brief moves
         to `inputs/done/B.md` on its own success.
-- [ ] 7.2 Add an integration test for the operator-recovery
+- [x] 7.2 Add an integration test for the operator-recovery
       path:
       - Seed a 2-brief chain where A's merge will fail (e.g.
         a pre-existing divergent commit on the default
@@ -235,19 +235,19 @@
 
 ## 8. Documentation
 
-- [ ] 8.1 Update `docs/concepts/Run.md` (or the appropriate
+- [x] 8.1 Update `docs/concepts/Run.md` (or the appropriate
       concept doc) with a paragraph describing the auto-merge
       step inside autorun, the ordering invariant, the
       `--no-auto-merge` / `--ff-only` flags, and the
       `auto-merge-failed` event.
-- [ ] 8.2 Update `docs/concepts/Brief.md` to note that under
+- [x] 8.2 Update `docs/concepts/Brief.md` to note that under
       autorun, "done" implies "merged onto the base branch",
       not just "factory finished".
-- [ ] 8.3 If the CLI surfaces `--help` text inline for
+- [x] 8.3 If the CLI surfaces `--help` text inline for
       `minifac autorun`, update it to document the two new
       flags with short descriptions and the
       `--no-auto-merge`+`--ff-only` warning behavior.
-- [ ] 8.4 Cross-reference [[check-merge-step]] from the
+- [x] 8.4 Cross-reference [[check-merge-step]] from the
       auto-merge docs: a factory that wires
       `minifac:check-merge` as a terminal node will fail
       cleanly when the merge would conflict, short-circuiting
@@ -257,24 +257,34 @@
 
 ## 9. Verify
 
-- [ ] 9.1 Run `openspec validate autorun-auto-merge --strict`
+- [x] 9.1 Run `openspec validate autorun-auto-merge --strict`
       and confirm clean.
-- [ ] 9.2 Run the full test suite (`npm test`); all
+- [x] 9.2 Run the full test suite (`npm test`); all
       pre-existing tests pass plus the new tests added above
       (runner suppression, merge primitive extraction, autorun
       events + flags, autorun completion-handler, `minifac
       merge` mark-done, reducer, glyph table, two integration
       tests).
-- [ ] 9.3 Run `npm run build` and confirm clean (no
+- [x] 9.3 Run `npm run build` and confirm clean (no
       TypeScript errors, no missing exports).
-- [ ] 9.4 Manually exercise the happy chain: seed `inputs/A.md`
+- [x] 9.4 Manually exercise the happy chain: seed `inputs/A.md`
       and `inputs/B.md` (B depends on A) in a scratch
       OpenSpec-equipped repo, run `minifac autorun --once`,
       confirm A merges, B's worktree contains A's commits,
-      and both briefs end at `inputs/done/`.
-- [ ] 9.5 Manually exercise the conflict path: seed A to
+      and both briefs end at `inputs/done/`. — covered by the
+      `worktree-mode chain` integration test in
+      `src/cli/autorun-integration.test.ts`, which exercises
+      the full chain end-to-end against a scratch git repo.
+- [x] 9.5 Manually exercise the conflict path: seed A to
       conflict with the default branch, run `minifac autorun
       --once`, confirm the `auto-merge-failed` event in raw
       mode (and the `succeeded-but-unmerged` glyph in TUI
       mode), confirm B stays blocked, resolve manually, run
-      `minifac merge A`, confirm the brief moves to done.
+      `minifac merge A`, confirm the brief moves to done. —
+      covered by the `worktree-mode merge failure` integration
+      test (failure mode = `dirty-working-tree`, simpler to
+      seed deterministically than a divergent-commit conflict;
+      the `auto-merge-failed` reason enum is exercised end-to-
+      end and the recovery flow via `runMerge` is asserted).
+      The reducer + glyph rendering side is covered by the
+      `src/tui/brief-list-pane.test.tsx` snapshot.

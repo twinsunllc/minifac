@@ -485,16 +485,18 @@ export async function autorunAction(input: AutorunActionInput): Promise<number> 
       return;
     }
 
-    // Success — mark the brief done against the worktree cwd.
-    if (row.worktreePath) {
-      try {
-        const mdr = await markFn({ change, runCwd: row.worktreePath });
-        if (mdr.warning) {
-          io.stderr.write(`${mdr.warning}\n`);
-        }
-      } catch (err) {
-        io.stderr.write(`mark-done: unexpected error: ${(err as Error).message}\n`);
+    // Success — mark the brief done against the caller's cwd so the move
+    // lands on the freshly-merged default branch (the brief that drives
+    // autorun's poll loop lives in the caller's `inputs/`, not the
+    // worktree's). The runner's mark-done block was suppressed precisely
+    // so this wrapper-owned call can fire here.
+    try {
+      const mdr = await markFn({ change, runCwd: cwd });
+      if (mdr.warning) {
+        io.stderr.write(`${mdr.warning}\n`);
       }
+    } catch (err) {
+      io.stderr.write(`mark-done: unexpected error: ${(err as Error).message}\n`);
     }
   };
 

@@ -91,6 +91,17 @@ invocations use. It relies on the mark-done post-step to move
 processed briefs from `inputs/` to `inputs/done/`, which removes them
 from the next poll's candidate set without further coordination.
 
+Under autorun, "done" implies "merged onto the configured base
+branch", not just "factory finished". The autorun wrapper inserts a
+merge step between factory success and mark-done (see [[Run]] →
+*Auto-merge in autorun*), so a brief at `inputs/done/<change>.md`
+under autorun is a load-bearing signal that its branch is on the
+base. Dependents whose `depends_on` lists that change observe a
+baseline that contains its commits when their own worktree is cut.
+Operators who want the pre-auto-merge two-step semantics back can
+pass `minifac autorun --no-auto-merge`; manual `minifac run`
+unchanged.
+
 ### Why the split
 
 See [[0015-Brief-Deps-and-State]] for the rationale: doneness needs

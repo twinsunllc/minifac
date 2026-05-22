@@ -529,7 +529,10 @@ describe("autorunAction auto-merge step", () => {
     expect(merges[0]?.row.change).toBe("foo");
     expect(marks).toHaveLength(1);
     expect(marks[0]?.change).toBe("foo");
-    expect(marks[0]?.runCwd).toBe("/wt/foo");
+    // mark-done runs against the caller's cwd, not the worktree, so the
+    // move commit lands on the just-merged default branch and the brief
+    // that autorun's poll loop reads disappears from `inputs/`.
+    expect(marks[0]?.runCwd).toBe(repo);
     expect(out.text()).not.toMatch(/auto-merge-failed/);
   });
 
