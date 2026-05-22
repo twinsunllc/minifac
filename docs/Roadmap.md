@@ -72,9 +72,21 @@ enforces this beyond explicit `depends_on` fields.
   Cross-executor story preserved via a `supportsMcp`
   capability flag with filesystem fallback.
   `depends_on: [node-outputs]`.
-- [ ] **`callback-status-signaling`** — [[0017-Callback-Status-Signaling]].
-  Opt-in HTTP endpoint per node for bidirectional comms. Unblocks
-  mid-run human-in-the-loop and the future [[Studio]] chat surface.
+- [ ] **`callback-status-signaling`** *(design-pending — see
+  [[Open-Questions]] § "Callback intervention surface")* —
+  [[0017-Callback-Status-Signaling]]. Originally proposed as a
+  combined transport for structured outputs + bidirectional
+  intervention. The outputs half split off into [[0027-Node-Outputs]]
+  with MCP as the transport. What remains for this brief is the
+  intervention surface only, and it needs a re-scoped design
+  before the brief is runnable. **Blocked from autorun via a
+  sentinel `depends_on` entry; clear the dep when the design lands.**
+- [ ] **`autorun-failure-backoff`** —
+  [[0031-Autorun-Failure-Backoff]]. Per-session failure cap on
+  `minifac autorun` (default 3); skip with `failure-cap` reason
+  after N consecutive failures of the same change. Restart of
+  autorun resets the counter. Prevents a broken brief from
+  hammering the loop indefinitely.
 
 ## Open-source readiness (chore tier)
 

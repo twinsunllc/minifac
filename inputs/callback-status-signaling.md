@@ -2,7 +2,36 @@
 change: callback-status-signaling
 factory: sdd
 base_branch: main
+depends_on:
+  - callback-status-signaling-design-pending
 ---
+
+> ## 🚧 NOT YET READY FOR IMPLEMENTATION
+>
+> This brief has open design questions that need resolution before
+> it can run. Specifically:
+>
+> - Scope changed during the [[0027-Node-Outputs]] design pass: the
+>   transport split between "structured outputs" (now MCP, see
+>   [[0029-Node-Outputs-MCP]]) and "bidirectional intervention"
+>   (the remaining job for this brief) needs to be reflected in
+>   ADR 0017 itself.
+> - The "studio chat surface" use case is now further out than
+>   v0.1; the brief's design should be re-scoped to just the
+>   in-process intervention case (Ctrl-C-equivalent, "hey also
+>   do X" mid-run) without committing to remote / studio shape.
+> - Authentication model wasn't decided: opt-in per-node is one
+>   thing; trusting a separately-authenticated client (studio,
+>   curl, an MCP client) is another.
+>
+> The `depends_on: [callback-status-signaling-design-pending]`
+> sentinel keeps this brief visible in `minifac briefs` but
+> blocked from autorun and `--ready`. When the design is ready,
+> remove the depends_on entry. The sentinel brief itself is
+> never created.
+>
+> Tracked in [[Open-Questions]] under "Callback intervention
+> surface — design re-scope."
 
 ## Background
 

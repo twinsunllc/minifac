@@ -83,6 +83,33 @@ has shipped and `autorun` will inherit the same override pattern when
 the `auto-mode` change lands. Pre-specifying it here would commit a
 surface area that has no implementation yet.
 
+## Callback intervention surface — design re-scope
+
+**Question:** What does the bidirectional intervention surface ADR 0017
+proposed actually look like, now that structured outputs have been
+split off into [[0027-Node-Outputs]] and the MCP transport
+([[0029-Node-Outputs-MCP]]) is the channel for them?
+
+The original 0017 framing bundled "structured per-node payloads" with
+"bidirectional intervention" (Ctrl-C-equivalent, "hey also do X"
+mid-run, studio chat). The outputs work split off the first
+responsibility cleanly. What's left for 0017 is just *intervention* —
+which is a smaller, more focused surface, and probably wants different
+trade-offs than the original ADR captured.
+
+Also unresolved: the authentication model. Opt-in per-node is one
+thing; trusting a separately-authenticated client (Studio, curl, an
+MCP client) is another.
+
+**Trigger:** Concrete need for in-process mid-run intervention
+(separate from the [[Run-TUI]]'s `q quit` affordance). Likely tied to
+when Studio work starts.
+
+**v0 stance:** ADR 0017 stays as-is for now; the
+`callback-status-signaling` brief is blocked-pending-design via a
+sentinel `depends_on` entry. When the design is re-scoped, edit the
+brief (or replace ADR 0017 with a successor) and clear the dep.
+
 ## Status signaling
 
 ### Hook-enforced sentinel
