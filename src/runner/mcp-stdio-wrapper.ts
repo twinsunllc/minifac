@@ -22,9 +22,7 @@ if (!socketPath) {
 const socket = net.createConnection(socketPath);
 
 socket.on("error", (err) => {
-  process.stderr.write(
-    `minifac-mcp-stdio-wrapper: socket error: ${(err as Error).message}\n`,
-  );
+  process.stderr.write(`minifac-mcp-stdio-wrapper: socket error: ${(err as Error).message}\n`);
   process.exit(1);
 });
 

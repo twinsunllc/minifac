@@ -13,10 +13,10 @@ import { ReadBuffer, serializeMessage } from "@modelcontextprotocol/sdk/shared/s
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ExecutorRegistry } from "../executor/registry.js";
 import type { NodeEvent, NodeExecutor, ResolvedNode, RunContext } from "../executor/types.js";
-import type { Factory } from "../factory/schema.js";
 import type { LoadedFactory } from "../factory/loader.js";
-import { runFactory } from "./run.js";
+import type { Factory } from "../factory/schema.js";
 import * as worktreeConfig from "../worktree/config.js";
+import { runFactory } from "./run.js";
 
 // Same socket-client transport as in mcp-server.test.ts. Duplicated to
 // keep the test file self-contained.
@@ -81,13 +81,8 @@ function wrap(factory: Factory, sourceDir = "/tmp"): LoadedFactory {
 class McpClientStub implements NodeExecutor {
   readonly type = "claude-stub";
   readonly supportsMcp = true;
-  scriptByNode: Record<
-    string,
-    { tool: string; arg: unknown } | "no-tool"
-  > = {};
-  constructor(
-    scripts: Record<string, { tool: string; arg: unknown } | "no-tool"> = {},
-  ) {
+  scriptByNode: Record<string, { tool: string; arg: unknown } | "no-tool"> = {};
+  constructor(scripts: Record<string, { tool: string; arg: unknown } | "no-tool"> = {}) {
     this.scriptByNode = scripts;
   }
   async *run(node: ResolvedNode, ctx: RunContext): AsyncIterable<NodeEvent> {
@@ -105,7 +100,10 @@ class McpClientStub implements NodeExecutor {
       await client.connect(transport as any);
       const script = this.scriptByNode[node.id];
       if (script && script !== "no-tool") {
-        await client.callTool({ name: script.tool, arguments: script.arg as Record<string, unknown> });
+        await client.callTool({
+          name: script.tool,
+          arguments: script.arg as Record<string, unknown>,
+        });
       }
       await client.close();
     }
@@ -125,10 +123,7 @@ class FsWriterStub implements NodeExecutor {
       for (const key of Object.keys(node.outputs)) {
         await mkdir(ctx.outputsDir, { recursive: true });
         const { writeFile } = await import("node:fs/promises");
-        await writeFile(
-          path.join(ctx.outputsDir, `${key}.json`),
-          JSON.stringify(this.contents),
-        );
+        await writeFile(path.join(ctx.outputsDir, `${key}.json`), JSON.stringify(this.contents));
       }
     }
     yield { kind: "status", status: "succeeded" };
@@ -206,9 +201,7 @@ describe("run.ts MCP integration — end-to-end", () => {
     expect(contents).toEqual([{ ok: true }]);
 
     // Server still ran (other nodes might use it), socket gone after termination.
-    await expect(
-      stat(path.join(tmpHome, "outputs", "r2.mcp.sock")),
-    ).rejects.toThrow();
+    await expect(stat(path.join(tmpHome, "outputs", "r2.mcp.sock"))).rejects.toThrow();
     // No `.mcp.json` for non-MCP executor.
     await expect(stat(path.join(outDir, ".mcp.json"))).rejects.toThrow();
   });

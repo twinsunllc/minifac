@@ -2,13 +2,13 @@ import { mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
 import * as net from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { Client as ClientCls } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { ReadBuffer, serializeMessage } from "@modelcontextprotocol/sdk/shared/stdio.js";
-import { Client as ClientCls } from "@modelcontextprotocol/sdk/client/index.js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OutputDef } from "../factory/schema.js";
-import { startRunnerMcpServer, type RunnerMcpServer } from "./mcp-server.js";
+import { type RunnerMcpServer, startRunnerMcpServer } from "./mcp-server.js";
 
 /**
  * In-process MCP client transport: speaks the SDK's stdio framing over a
@@ -196,10 +196,7 @@ describe("startRunnerMcpServer — tool registration / scoping", () => {
     try {
       const list = await client.listTools();
       const names = list.tools.map((t) => t.name).sort();
-      expect(names).toEqual([
-        "mcp__minifac__report_findings",
-        "mcp__minifac__report_summary",
-      ]);
+      expect(names).toEqual(["mcp__minifac__report_findings", "mcp__minifac__report_summary"]);
     } finally {
       await client.close();
     }
@@ -219,9 +216,7 @@ describe("startRunnerMcpServer — tool registration / scoping", () => {
     try {
       const list = await client.listTools();
       const tool = list.tools.find((t) => t.name === "mcp__minifac__report_findings");
-      expect(tool?.description).toBe(
-        "Code review findings as an array of issue objects.",
-      );
+      expect(tool?.description).toBe("Code review findings as an array of issue objects.");
     } finally {
       await client.close();
     }
@@ -311,9 +306,7 @@ describe("startRunnerMcpServer — MCP-to-filesystem bridge", () => {
       expect(res.isError).not.toBe(true);
       const contents = await readFile(path.join(outDir, "findings.json"), "utf8");
       expect(JSON.parse(contents)).toEqual(payload);
-      expect(h.outputsByCall).toEqual([
-        { nodeId: "propose", key: "findings", value: payload },
-      ]);
+      expect(h.outputsByCall).toEqual([{ nodeId: "propose", key: "findings", value: payload }]);
     } finally {
       await client.close();
     }
@@ -335,7 +328,7 @@ describe("startRunnerMcpServer — MCP-to-filesystem bridge", () => {
           name: "mcp__minifac__report_summary",
           arguments: { value: 42 },
         })
-        .catch((e: Error) => ({ error: e.message, isError: true } as const));
+        .catch((e: Error) => ({ error: e.message, isError: true }) as const);
       const before = await readdir(outDir);
       expect(before).not.toContain("summary.json");
       // Either an SDK-side validation error (thrown) or our bridge-side

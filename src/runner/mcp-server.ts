@@ -33,18 +33,14 @@ import { randomBytes } from "node:crypto";
 import { mkdir, rename, unlink, writeFile } from "node:fs/promises";
 import * as net from "node:net";
 import path from "node:path";
-import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { z } from "zod";
 import type { OutputDef, OutputValueDef } from "../factory/schema.js";
 import { deriveShapeKind, validateValuePayload } from "./mcp-schema.js";
 
 /** Public callback signature: invoked once per successful tool-call bridge. */
-export type OnOutputCallback = (
-  nodeId: string,
-  key: string,
-  value: unknown,
-) => void;
+export type OnOutputCallback = (nodeId: string, key: string, value: unknown) => void;
 
 export interface RunnerMcpServer {
   /** Absolute path to the unix socket the server is bound to. */
@@ -128,7 +124,6 @@ export async function startRunnerMcpServer(
     handleConnection(socket).catch((err) => {
       // Mirror the SDK's pattern of swallowing per-connection errors;
       // we log to stderr so an operator debugging an MCP issue can see them.
-      // biome-ignore lint/suspicious/noConsole: surfacing transport errors to operators
       console.error(`[minifac mcp] connection error: ${(err as Error).message}`);
       try {
         socket.destroy();

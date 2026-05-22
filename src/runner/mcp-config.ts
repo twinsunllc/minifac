@@ -10,9 +10,9 @@
 // See `openspec/specs/graph-runner/spec.md` ("Per-dispatch `.mcp.json`
 // config emission") and `openspec/changes/node-outputs-mcp/design.md` D5.
 
-import { fileURLToPath } from "node:url";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 /**
  * Resolve the on-disk path to the bundled stdio wrapper. At runtime we live

@@ -68,11 +68,7 @@ export async function validateDeclaredOutputs(
       // absent fallback file. Per the `graph-runner` capability's
       // "missing_outputs_detail" requirement.
       const baseDetail = check.unsatisfied;
-      if (
-        def.type === "value" &&
-        mcpAvailable &&
-        (mcpReported === null || !mcpReported.has(key))
-      ) {
+      if (def.type === "value" && mcpAvailable && (mcpReported === null || !mcpReported.has(key))) {
         detail[key] =
           `${baseDetail} (MCP tool mcp__minifac__report_${key} was available but not called; no fallback file at ${key}.json either)`;
       } else {

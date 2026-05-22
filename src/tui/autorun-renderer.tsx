@@ -98,6 +98,7 @@ function RendererRoot({
   // `stateRef`) so they do not need to be re-bound per render. Binding
   // once also avoids the cleanup/setup race in test environments where
   // React 19 strict mode double-invokes effects.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: bind once
   useEffect(() => {
     bridgeRef.current = {
       onEvent: (event) => {
@@ -127,7 +128,6 @@ function RendererRoot({
     return () => {
       bridgeRef.current = null;
     };
-    // biome-ignore lint/correctness/useExhaustiveDependencies: bind once
   }, []);
 
   // Tick the spinner ~10 fps while any brief is running. Also tick the
@@ -137,7 +137,6 @@ function RendererRoot({
   // drilled-in status pane animating. Guards live inside the setState
   // callbacks so they read the latest state rather than the initial
   // closure.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: deliberate
   useEffect(() => {
     const handle = setInterval(() => {
       setState((prev) => {
@@ -147,9 +146,7 @@ function RendererRoot({
       setState((prev) => {
         const row = prev.briefs[prev.selectedBriefIndex];
         if (!row?.runState) return prev;
-        if (
-          !row.runState.nodes.some((n) => n.status === "running" || n.status === "retrying")
-        ) {
+        if (!row.runState.nodes.some((n) => n.status === "running" || n.status === "retrying")) {
           return prev;
         }
         const nextRun = runReducer(row.runState, { kind: "tick" });

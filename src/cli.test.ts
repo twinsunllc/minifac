@@ -58,7 +58,8 @@ function fakeRegistry(scripts: Record<string, NodeEvent[]>): () => ExecutorRegis
     const reg = new ExecutorRegistry();
     const exec: NodeExecutor = {
       type: "test",
-      supportsMcp: false,      async *run(node: ResolvedNode): AsyncIterable<NodeEvent> {
+      supportsMcp: false,
+      async *run(node: ResolvedNode): AsyncIterable<NodeEvent> {
         const ev = scripts[node.id] ?? [{ kind: "status", status: "succeeded" }];
         for (const e of ev) yield e;
       },
@@ -192,7 +193,8 @@ the body
       const reg = new ExecutorRegistry();
       const exec: NodeExecutor = {
         type: "test",
-        supportsMcp: false,        async *run(node: ResolvedNode): AsyncIterable<NodeEvent> {
+        supportsMcp: false,
+        async *run(node: ResolvedNode): AsyncIterable<NodeEvent> {
           captured.push(typeof node.with?.prompt === "string" ? node.with.prompt : "");
           yield { kind: "status", status: "succeeded" };
         },
@@ -254,7 +256,8 @@ mode: in-place
       const reg = new ExecutorRegistry();
       const exec: NodeExecutor = {
         type: "test",
-        supportsMcp: false,        async *run(_node: ResolvedNode): AsyncIterable<NodeEvent> {
+        supportsMcp: false,
+        async *run(_node: ResolvedNode): AsyncIterable<NodeEvent> {
           sawBrief = true;
           yield { kind: "status", status: "succeeded" };
         },
@@ -528,7 +531,8 @@ base_branch: main
         const reg = new ExecutorRegistry();
         const exec: NodeExecutor = {
           type: "test",
-          supportsMcp: false,          async *run(_node: ResolvedNode, ctx: { cwd: string }): AsyncIterable<NodeEvent> {
+          supportsMcp: false,
+          async *run(_node: ResolvedNode, ctx: { cwd: string }): AsyncIterable<NodeEvent> {
             seenCwds.push(ctx.cwd);
             yield { kind: "status", status: "succeeded" };
           },
@@ -761,7 +765,8 @@ the body
         const reg = new ExecutorRegistry();
         const exec: NodeExecutor = {
           type: "test",
-          supportsMcp: false,          async *run(node: ResolvedNode): AsyncIterable<NodeEvent> {
+          supportsMcp: false,
+          async *run(node: ResolvedNode): AsyncIterable<NodeEvent> {
             captured.push(typeof node.with?.prompt === "string" ? node.with.prompt : "");
             yield { kind: "status", status: "succeeded" };
           },
@@ -825,7 +830,8 @@ the body
         const reg = new ExecutorRegistry();
         const exec: NodeExecutor = {
           type: "test",
-          supportsMcp: false,          async *run(node: ResolvedNode): AsyncIterable<NodeEvent> {
+          supportsMcp: false,
+          async *run(node: ResolvedNode): AsyncIterable<NodeEvent> {
             captured.push(typeof node.with?.prompt === "string" ? node.with.prompt : "");
             yield { kind: "status", status: "succeeded" };
           },
@@ -887,7 +893,8 @@ body
         const reg = new ExecutorRegistry();
         const exec: NodeExecutor = {
           type: "test",
-          supportsMcp: false,          async *run(node: ResolvedNode): AsyncIterable<NodeEvent> {
+          supportsMcp: false,
+          async *run(node: ResolvedNode): AsyncIterable<NodeEvent> {
             captured.push(typeof node.with?.prompt === "string" ? node.with.prompt : "");
             yield { kind: "status", status: "succeeded" };
           },
@@ -936,7 +943,8 @@ body
         const reg = new ExecutorRegistry();
         const exec: NodeExecutor = {
           type: "test",
-          supportsMcp: false,          async *run(node: ResolvedNode): AsyncIterable<NodeEvent> {
+          supportsMcp: false,
+          async *run(node: ResolvedNode): AsyncIterable<NodeEvent> {
             captured.push(typeof node.with?.prompt === "string" ? node.with.prompt : "");
             yield { kind: "status", status: "succeeded" };
           },
@@ -1002,7 +1010,8 @@ body
         const reg = new ExecutorRegistry();
         const exec: NodeExecutor = {
           type: "test",
-          supportsMcp: false,          async *run(node: ResolvedNode): AsyncIterable<NodeEvent> {
+          supportsMcp: false,
+          async *run(node: ResolvedNode): AsyncIterable<NodeEvent> {
             captured.push(typeof node.with?.prompt === "string" ? node.with.prompt : "");
             yield { kind: "status", status: "succeeded" };
           },
@@ -1150,7 +1159,8 @@ body
         const reg = new ExecutorRegistry();
         const exec: NodeExecutor = {
           type: "test",
-          supportsMcp: false,          async *run(_node: ResolvedNode): AsyncIterable<NodeEvent> {
+          supportsMcp: false,
+          async *run(_node: ResolvedNode): AsyncIterable<NodeEvent> {
             // Yield asynchronously so the two invocations actually overlap
             // (the second claims its lock while the first is mid-flight).
             await new Promise((r) => setTimeout(r, 50));
