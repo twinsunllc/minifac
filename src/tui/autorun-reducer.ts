@@ -1,13 +1,20 @@
-import type { AutorunEvent } from "../cli/autorun.js";
+import type { AutoMergeFailEventReason, AutorunEvent } from "../cli/autorun.js";
 import { type RunState, type RunStateInit, createInitialRunState } from "./reducer.js";
 
-export type BriefStatus = "queued" | "running" | "succeeded" | "failed" | "skipped";
+export type BriefStatus =
+  | "queued"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "skipped"
+  | "succeeded-but-unmerged";
 
 export interface BriefRowState {
   change: string;
   status: BriefStatus;
   runId?: string;
   skipReason?: string;
+  autoMergeFailReason?: AutoMergeFailEventReason;
   runState?: RunState;
 }
 
@@ -71,6 +78,7 @@ function isAutorunEvent(event: AutorunReducerEvent): event is AutorunEvent {
     case "skipped":
     case "dry-run-decision":
     case "info":
+    case "auto-merge-failed":
       return true;
     default:
       return false;
@@ -123,7 +131,12 @@ function applyAutorunEvent(state: BriefListState, event: AutorunEvent): BriefLis
     }
     case "skipped":
       return upsertBrief(state, event.change, (row) => {
-        if (row.status === "running" || row.status === "succeeded" || row.status === "failed") {
+        if (
+          row.status === "running" ||
+          row.status === "succeeded" ||
+          row.status === "failed" ||
+          row.status === "succeeded-but-unmerged"
+        ) {
           return row;
         }
         return { ...row, status: "skipped", skipReason: event.reason };
@@ -141,6 +154,21 @@ function applyAutorunEvent(state: BriefListState, event: AutorunEvent): BriefLis
         status: "skipped",
         ...(event.reason ? { skipReason: event.reason } : {}),
       }));
+    case "auto-merge-failed":
+      return upsertBrief(state, event.change, (row) => {
+        // Only `succeeded` (and `succeeded-but-unmerged` on a retry/refresh)
+        // are valid predecessors per the `autorun-tui` spec's transition
+        // table. Other statuses leave the row unchanged — they reflect a
+        // protocol violation and the reducer SHALL NOT crash.
+        if (row.status !== "succeeded" && row.status !== "succeeded-but-unmerged") {
+          return row;
+        }
+        return {
+          ...row,
+          status: "succeeded-but-unmerged",
+          autoMergeFailReason: event.reason,
+        };
+      });
   }
 }
 

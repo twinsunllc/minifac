@@ -9,6 +9,10 @@ export interface StatusGlyphs {
   failed: string;
   retrying: string;
   skipped: string;
+  /** Brief succeeded but its autorun-driven auto-merge failed — the
+   *  factory work is done but the branch is not on the base. Half-filled
+   *  circle reads as "almost done" against the filled `●` for succeeded. */
+  succeededButUnmerged: string;
   arrow: string;
   check: string;
   cross: string;
@@ -22,6 +26,7 @@ export const UNICODE_GLYPHS: StatusGlyphs = {
   failed: "●",
   retrying: "↻",
   skipped: "↷",
+  succeededButUnmerged: "◐",
   arrow: "→",
   check: "✓",
   cross: "✗",
@@ -35,6 +40,7 @@ export const ASCII_GLYPHS: StatusGlyphs = {
   failed: "!",
   retrying: "*",
   skipped: "~",
+  succeededButUnmerged: "*",
   arrow: ">",
   check: "+",
   cross: "-",

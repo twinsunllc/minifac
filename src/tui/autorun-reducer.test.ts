@@ -288,4 +288,119 @@ describe("autorunReducer", () => {
     expect(s.briefs[0]?.runState).toBe(runState);
     expect(s.briefs[0]?.status).toBe("running");
   });
+
+  describe("auto-merge-failed event", () => {
+    it("transitions succeeded -> succeeded-but-unmerged", () => {
+      let s = createInitialBriefListState();
+      s = autorunReducer(s, ev({ kind: "started", ts: 0, change: "foo", runId: "r1" }));
+      s = autorunReducer(
+        s,
+        ev({ kind: "completed", ts: 1, change: "foo", status: "succeeded", runId: "r1" }),
+      );
+      expect(s.briefs[0]?.status).toBe("succeeded");
+      s = autorunReducer(
+        s,
+        ev({ kind: "auto-merge-failed", ts: 2, change: "foo", runId: "r1", reason: "conflict" }),
+      );
+      expect(s.briefs[0]?.status).toBe("succeeded-but-unmerged");
+      expect(s.briefs[0]?.autoMergeFailReason).toBe("conflict");
+      // Preserves the runId from the prior `completed` event.
+      expect(s.briefs[0]?.runId).toBe("r1");
+    });
+
+    it("preserves embedded RunState across the transition", () => {
+      let s = createInitialBriefListState();
+      s = autorunReducer(s, ev({ kind: "started", ts: 0, change: "foo" }));
+      const runState = makeRunStateSlot({
+        factory: { name: "sdd" },
+        brief: { change: "foo" },
+        nodeIds: ["a"],
+      });
+      s = autorunReducer(s, { kind: "set-run-state", change: "foo", runState });
+      s = autorunReducer(s, ev({ kind: "completed", ts: 1, change: "foo", status: "succeeded" }));
+      s = autorunReducer(
+        s,
+        ev({ kind: "auto-merge-failed", ts: 2, change: "foo", reason: "conflict" }),
+      );
+      expect(s.briefs[0]?.status).toBe("succeeded-but-unmerged");
+      expect(s.briefs[0]?.runState).toBe(runState);
+    });
+
+    it("leaves running / queued / failed / skipped rows unchanged", () => {
+      // running
+      {
+        let s = createInitialBriefListState();
+        s = autorunReducer(s, ev({ kind: "started", ts: 0, change: "foo" }));
+        s = autorunReducer(
+          s,
+          ev({ kind: "auto-merge-failed", ts: 1, change: "foo", reason: "conflict" }),
+        );
+        expect(s.briefs[0]?.status).toBe("running");
+        expect(s.briefs[0]?.autoMergeFailReason).toBeUndefined();
+      }
+      // queued (via dry-run-decision)
+      {
+        let s = createInitialBriefListState();
+        s = autorunReducer(
+          s,
+          ev({ kind: "dry-run-decision", ts: 0, change: "foo", action: "schedule" }),
+        );
+        s = autorunReducer(
+          s,
+          ev({ kind: "auto-merge-failed", ts: 1, change: "foo", reason: "conflict" }),
+        );
+        expect(s.briefs[0]?.status).toBe("queued");
+      }
+      // failed
+      {
+        let s = createInitialBriefListState();
+        s = autorunReducer(s, ev({ kind: "started", ts: 0, change: "foo" }));
+        s = autorunReducer(s, ev({ kind: "completed", ts: 1, change: "foo", status: "failed" }));
+        s = autorunReducer(
+          s,
+          ev({ kind: "auto-merge-failed", ts: 2, change: "foo", reason: "conflict" }),
+        );
+        expect(s.briefs[0]?.status).toBe("failed");
+      }
+      // skipped
+      {
+        let s = createInitialBriefListState();
+        s = autorunReducer(s, ev({ kind: "skipped", ts: 0, change: "foo", reason: "blocked" }));
+        s = autorunReducer(
+          s,
+          ev({ kind: "auto-merge-failed", ts: 1, change: "foo", reason: "conflict" }),
+        );
+        expect(s.briefs[0]?.status).toBe("skipped");
+      }
+    });
+
+    it("second auto-merge-failed updates autoMergeFailReason; status stays", () => {
+      let s = createInitialBriefListState();
+      s = autorunReducer(s, ev({ kind: "started", ts: 0, change: "foo" }));
+      s = autorunReducer(s, ev({ kind: "completed", ts: 1, change: "foo", status: "succeeded" }));
+      s = autorunReducer(
+        s,
+        ev({ kind: "auto-merge-failed", ts: 2, change: "foo", reason: "conflict" }),
+      );
+      s = autorunReducer(
+        s,
+        ev({ kind: "auto-merge-failed", ts: 3, change: "foo", reason: "non-fast-forward" }),
+      );
+      expect(s.briefs[0]?.status).toBe("succeeded-but-unmerged");
+      expect(s.briefs[0]?.autoMergeFailReason).toBe("non-fast-forward");
+    });
+
+    it("skipped event against a succeeded-but-unmerged row leaves it unchanged", () => {
+      let s = createInitialBriefListState();
+      s = autorunReducer(s, ev({ kind: "started", ts: 0, change: "foo" }));
+      s = autorunReducer(s, ev({ kind: "completed", ts: 1, change: "foo", status: "succeeded" }));
+      s = autorunReducer(
+        s,
+        ev({ kind: "auto-merge-failed", ts: 2, change: "foo", reason: "conflict" }),
+      );
+      s = autorunReducer(s, ev({ kind: "skipped", ts: 3, change: "foo", reason: "blocked" }));
+      expect(s.briefs[0]?.status).toBe("succeeded-but-unmerged");
+      expect(s.briefs[0]?.autoMergeFailReason).toBe("conflict");
+    });
+  });
 });

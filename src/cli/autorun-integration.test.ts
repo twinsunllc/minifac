@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { Writable } from "node:stream";
+import { Readable, Writable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ExecutorRegistry } from "../executor/registry.js";
 import type { NodeEvent, NodeExecutor, ResolvedNode, RunContext } from "../executor/types.js";
@@ -117,6 +117,93 @@ afterEach(() => {
   }
 });
 
+/** Fake executor that commits a unique stamp file into its run's cwd
+ *  (worktree). The stamp name embeds a counter so multiple chained runs
+ *  in the same repo produce distinct commits that merge cleanly. */
+let stampCounter = 0;
+class CommittingExecutor implements NodeExecutor {
+  readonly type = "fake";
+  async *run(_node: ResolvedNode, ctx: RunContext): AsyncIterable<NodeEvent> {
+    const { writeFileSync } = await import("node:fs");
+    stampCounter += 1;
+    const fname = path.join(ctx.cwd, `stamp-${stampCounter}.txt`);
+    writeFileSync(fname, `run ${stampCounter}\n`);
+    shOrThrow(ctx.cwd, ["git", "add", "."]);
+    shOrThrow(ctx.cwd, [
+      "git",
+      "-c",
+      "user.email=fake@example.com",
+      "-c",
+      "user.name=Fake",
+      "-c",
+      "commit.gpgsign=false",
+      "-c",
+      "core.hooksPath=/dev/null",
+      "commit",
+      "-q",
+      "-m",
+      `stamp ${stampCounter} commit`,
+    ]);
+    yield { kind: "stdout", line: `committed in ${ctx.cwd}` };
+    yield { kind: "status", status: "succeeded" };
+  }
+}
+
+function buildCommitRegistry(): ExecutorRegistry {
+  const reg = new ExecutorRegistry();
+  reg.register(new CommittingExecutor());
+  return reg;
+}
+
+/** Set up a repo with a worktree-mode brief factory ready to run. */
+async function setupWorktreeRepo(): Promise<{ repo: string; storeDir: string }> {
+  const repo = await mkdtemp(path.join(tmpdir(), "minifac-autorun-wt-"));
+  shOrThrow(repo, ["git", "init", "-q", "-b", "main"]);
+  shOrThrow(repo, ["git", "config", "user.email", "test@example.com"]);
+  shOrThrow(repo, ["git", "config", "user.name", "Test"]);
+  shOrThrow(repo, ["git", "config", "commit.gpgsign", "false"]);
+  shOrThrow(repo, ["git", "config", "core.hooksPath", "/dev/null"]);
+  await writeFile(path.join(repo, "README.md"), "hi\n");
+  shOrThrow(repo, ["git", "add", "."]);
+  shOrThrow(repo, ["git", "commit", "-q", "-m", "init"]);
+  await mkdir(path.join(repo, "examples"), { recursive: true });
+  await writeFile(
+    path.join(repo, "examples", "fake.yaml"),
+    `name: fake-factory
+brief: required
+nodes:
+  only:
+    executor: fake
+    terminal: true
+    with:
+      prompt: "noop"
+edges: []
+`,
+    "utf8",
+  );
+  const storeDir = await mkdtemp(path.join(tmpdir(), "minifac-autorun-store-"));
+  return { repo, storeDir };
+}
+
+/** Write a worktree-mode brief (no `mode: in-place`). */
+async function writeWorktreeBrief(
+  repo: string,
+  change: string,
+  opts: { depends_on?: string[] } = {},
+): Promise<void> {
+  await mkdir(path.join(repo, "inputs"), { recursive: true });
+  const depends_on = opts.depends_on ?? [];
+  const deps =
+    depends_on.length === 0 ? "" : `depends_on:\n${depends_on.map((d) => `  - ${d}`).join("\n")}\n`;
+  await writeFile(
+    path.join(repo, "inputs", `${change}.md`),
+    `---\nchange: ${change}\nfactory: fake\nbase_branch: main\n${deps}---\nbody for ${change}\n`,
+    "utf8",
+  );
+  shOrThrow(repo, ["git", "add", "."]);
+  shOrThrow(repo, ["git", "commit", "-q", "-m", `add brief ${change}`]);
+}
+
 describe("autorun integration", () => {
   it("end-to-end: runs two ready briefs, records to runs.db, moves briefs to done/", async () => {
     const { repo, storeDir } = await setupIntegrationRepo();
@@ -212,5 +299,147 @@ describe("autorun integration", () => {
     const lines2 = out2.lines().map((l) => JSON.parse(l));
     const started2 = lines2.filter((l) => l.event === "started").map((l) => l.change);
     expect(started2).toEqual(["bar"]);
+  });
+
+  it("worktree-mode chain: A merges to main, then B's worktree contains A's commit", async () => {
+    const { repo, storeDir } = await setupWorktreeRepo();
+    await writeWorktreeBrief(repo, "alpha");
+    await writeWorktreeBrief(repo, "beta", { depends_on: ["alpha"] });
+
+    const storePath = path.join(storeDir, "runs.db");
+    const out = new BufferStream();
+    const err = new BufferStream();
+    const code = await autorunAction({
+      options: { once: true, maxConcurrent: 1, json: true },
+      cwd: repo,
+      io: { stdout: out, stderr: err },
+      buildRegistry: buildCommitRegistry,
+      openRunStore: async () => SqliteRunStore.open(storePath),
+    });
+    expect(code).toBe(0);
+
+    // alpha completed and merged onto main → main HEAD has alpha-stamp.txt.
+    const mainLog = spawnSync("git", ["log", "main", "--pretty=%s"], {
+      cwd: repo,
+      encoding: "utf8",
+    });
+    expect(mainLog.status).toBe(0);
+    expect(mainLog.stdout).toMatch(/stamp \d+ commit/);
+    // Main HEAD contains at least one of the stamp files.
+    const lsMain = spawnSync("git", ["ls-tree", "--name-only", "main"], {
+      cwd: repo,
+      encoding: "utf8",
+    });
+    expect(lsMain.status).toBe(0);
+    expect(lsMain.stdout).toMatch(/stamp-\d+\.txt/);
+
+    // alpha's brief moved to inputs/done/.
+    expect(existsSync(path.join(repo, "inputs", "alpha.md"))).toBe(false);
+    expect(existsSync(path.join(repo, "inputs", "done", "alpha.md"))).toBe(true);
+
+    // beta should have been blocked on this poll (alpha was scheduled and
+    // ran serially under --max-concurrent 1, completing in the same loop;
+    // the scheduler made the blocked decision against the still-active
+    // brief). Run a second cycle now that alpha is done.
+    const out2 = new BufferStream();
+    const err2 = new BufferStream();
+    const code2 = await autorunAction({
+      options: { once: true, maxConcurrent: 1, json: true },
+      cwd: repo,
+      io: { stdout: out2, stderr: err2 },
+      buildRegistry: buildCommitRegistry,
+      openRunStore: async () => SqliteRunStore.open(storePath),
+    });
+    expect(code2).toBe(0);
+
+    // beta now ran, was merged, and moved to done.
+    expect(existsSync(path.join(repo, "inputs", "beta.md"))).toBe(false);
+    expect(existsSync(path.join(repo, "inputs", "done", "beta.md"))).toBe(true);
+
+    // beta's branch was based off main (which already had alpha's commit),
+    // so beta's worktree HEAD ancestry includes alpha's commit subject.
+    const mainLogFinal = spawnSync("git", ["log", "main", "--pretty=%s"], {
+      cwd: repo,
+      encoding: "utf8",
+    });
+    // main HEAD contains both alpha's and beta's stamp commits.
+    const stampCommits = (mainLogFinal.stdout.match(/stamp \d+ commit/g) ?? []).length;
+    expect(stampCommits).toBeGreaterThanOrEqual(2);
+  });
+
+  it("worktree-mode merge failure: brief stays put, B stays blocked, recovery via minifac merge A", async () => {
+    const { repo, storeDir } = await setupWorktreeRepo();
+    await writeWorktreeBrief(repo, "alpha");
+    await writeWorktreeBrief(repo, "beta", { depends_on: ["alpha"] });
+
+    // Dirty the caller's working tree (untracked file) so the auto-merge
+    // step refuses with reason=dirty-working-tree. This is the simplest
+    // deterministic failure mode that does not require coordinating
+    // divergent commits with worktree creation timing.
+    await writeFile(path.join(repo, "scratch.txt"), "uncommitted\n");
+
+    const storePath = path.join(storeDir, "runs.db");
+    const out = new BufferStream();
+    const err = new BufferStream();
+    const code = await autorunAction({
+      options: { once: true, maxConcurrent: 1, json: true },
+      cwd: repo,
+      io: { stdout: out, stderr: err },
+      buildRegistry: buildCommitRegistry,
+      openRunStore: async () => SqliteRunStore.open(storePath),
+    });
+    expect(code).toBe(0);
+
+    // alpha's factory succeeded but merge failed.
+    const lines = out.lines().map((l) => JSON.parse(l));
+    const failed = lines.find((l) => l.event === "auto-merge-failed" && l.change === "alpha");
+    expect(failed).toBeDefined();
+    expect(failed?.reason).toBe("dirty-working-tree");
+    // alpha's brief stays put.
+    expect(existsSync(path.join(repo, "inputs", "alpha.md"))).toBe(true);
+    expect(existsSync(path.join(repo, "inputs", "done", "alpha.md"))).toBe(false);
+
+    // beta should be skipped reason=blocked.
+    const skipped = lines.find((l) => l.event === "skipped" && l.change === "beta");
+    expect(skipped?.reason).toBe("blocked");
+
+    // Recovery: clean up the dirty file, then run `minifac merge alpha`.
+    const { unlinkSync } = await import("node:fs");
+    unlinkSync(path.join(repo, "scratch.txt"));
+    const store = SqliteRunStore.open(storePath);
+    try {
+      const { runMerge } = await import("./merge.js");
+      const out2 = new BufferStream();
+      const err2 = new BufferStream();
+      const mergeCode = await runMerge({
+        arg: "alpha",
+        store,
+        cwd: repo,
+        stdin: Readable.from([]),
+        stdout: out2,
+        stderr: err2,
+      });
+      expect(mergeCode).toBe(0);
+    } finally {
+      await store.close();
+    }
+    // alpha's brief now moved to done by the merge command's mark-done step.
+    expect(existsSync(path.join(repo, "inputs", "alpha.md"))).toBe(false);
+    expect(existsSync(path.join(repo, "inputs", "done", "alpha.md"))).toBe(true);
+
+    // Next autorun cycle: beta is unblocked and runs.
+    const out3 = new BufferStream();
+    const err3 = new BufferStream();
+    const code3 = await autorunAction({
+      options: { once: true, maxConcurrent: 1, json: true },
+      cwd: repo,
+      io: { stdout: out3, stderr: err3 },
+      buildRegistry: buildCommitRegistry,
+      openRunStore: async () => SqliteRunStore.open(storePath),
+    });
+    expect(code3).toBe(0);
+    const lines3 = out3.lines().map((l) => JSON.parse(l));
+    const started3 = lines3.filter((l) => l.event === "started").map((l) => l.change);
+    expect(started3).toContain("beta");
   });
 });

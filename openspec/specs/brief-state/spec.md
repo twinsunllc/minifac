@@ -214,7 +214,9 @@ propagate the cycle error as a usage error (`exit 1`), and the
 The runner SHALL execute a mark-done post-step against the worktree
 (or in-place cwd, in `--in-place` mode) after observing the
 factory's terminal-success status but before recording the run as
-`succeeded` in the run store. The post-step SHALL be:
+`succeeded` in the run store, UNLESS the caller passed the
+`skipMarkDone: true` option on the runner's options surface. The
+post-step SHALL be:
 
 1. If the brief frontmatter lacks a `change` value, skip (defensive
    — every brief has a `change` today; the post-step is no-op for
@@ -237,6 +239,28 @@ process exit code.
 The factory's nodes — including the SDD archive node — SHALL NOT
 have any responsibility for the move. The mark-done step is a
 minifac-level contract that holds regardless of which factory ran.
+
+The `skipMarkDone` option is a caller-supplied boolean (default
+`false`) that the runner SHALL accept on its options surface
+(`RunOptions` or equivalent). When `skipMarkDone === true`, the
+runner SHALL NOT invoke the mark-done post-step on
+terminal-success; the runs row is still recorded as `succeeded`
+and the brief is left at `inputs/<change>.md`. The option is
+intended for callers (currently: the `auto-mode` capability's
+autorun wrapper, when its auto-merge step is enabled) that own
+the mark-done invocation themselves so they can gate it on a
+later-stage action (e.g. a successful auto-merge). The runner
+itself takes no opinion on what the caller does in that case;
+it simply omits the post-step. The same mark-done helper the
+runner uses internally SHALL be exported (or otherwise made
+callable) so callers using `skipMarkDone: true` can invoke it
+themselves with identical behavior — same git mv, same commit
+message, same idempotent-skip rules.
+
+Manual `minifac run` callers SHALL NOT set `skipMarkDone`; the
+default behavior (the runner does the move) is preserved for
+that path so the manual two-step flow (`minifac run` followed by
+`minifac merge`) is unchanged.
 
 #### Scenario: Successful run moves the brief to inputs/done/
 
@@ -278,13 +302,22 @@ minifac-level contract that holds regardless of which factory ran.
 
 - **WHEN** a run terminates with status `failed`
 - **THEN** the runner SHALL NOT invoke the mark-done post-step;
-  `inputs/<change>.md` remains in `inputs/` and no new commit is
-  written
+  the brief SHALL remain at `inputs/<change>.md`
 
-#### Scenario: Brief-less factory run does not invoke mark-done
+#### Scenario: skipMarkDone option suppresses the post-step
 
-- **WHEN** a successful run is brief-less (the factory declares
-  `brief: "none"` and no brief was resolved)
-- **THEN** the runner SHALL NOT invoke the mark-done post-step;
-  no `inputs/done/` activity occurs
+- **WHEN** a caller invokes the runner with `skipMarkDone: true`
+  and the factory terminates `succeeded`
+- **THEN** the runner SHALL NOT invoke the mark-done helper, the
+  brief SHALL remain at `inputs/<change>.md`, the runs row SHALL
+  still be recorded as `succeeded`, and no mark-done warning
+  SHALL be emitted
+
+#### Scenario: skipMarkDone defaults to false for manual run
+
+- **WHEN** the `minifac run` CLI invokes the runner without
+  setting `skipMarkDone` (the manual one-shot path)
+- **THEN** the runner SHALL invoke the mark-done post-step on
+  terminal-success exactly as it did before this option existed
+  (the manual two-step flow remains unchanged)
 

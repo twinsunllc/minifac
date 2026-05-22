@@ -12,6 +12,11 @@ export type {
   EmittedEvent,
 } from "./executor/types.js";
 export { runFactory, type RunOptions } from "./runner/run.js";
+export {
+  markBriefDone,
+  type MarkBriefDoneInput,
+  type MarkBriefDoneResult,
+} from "./runner/mark-done.js";
 export type {
   RunResult,
   RunStatus,

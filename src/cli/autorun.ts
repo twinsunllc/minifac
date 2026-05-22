@@ -5,8 +5,9 @@ import { type Brief, BriefLoadError, loadBrief } from "../brief/loader.js";
 import type { ExecutorRegistry } from "../executor/registry.js";
 import type { EmittedEvent } from "../executor/types.js";
 import { loadFactory } from "../factory/loader.js";
+import { markBriefDone } from "../runner/mark-done.js";
 import { openDefaultRunStore } from "../storage/open.js";
-import type { RunStore } from "../storage/run-store.js";
+import type { RunStore, StoredRun } from "../storage/run-store.js";
 import { type InkAutorunRenderer, createInkAutorunRenderer } from "../tui/autorun-renderer.js";
 import { loadWorktreeConfig } from "../worktree/config.js";
 import { probeLockLiveness } from "../worktree/lock.js";
@@ -19,6 +20,7 @@ import {
   type SchedulerDecision,
   type SkipReason,
 } from "./autorun-scheduler.js";
+import { type MergeOutcome, type MergeRunOptions, mergeRun } from "./merge.js";
 import { resolveFactoryByName } from "./resolve.js";
 import { runBriefAutomated } from "./run-brief.js";
 
@@ -39,12 +41,32 @@ export interface AutorunOptions {
   force?: boolean;
   raw?: boolean;
   tui?: boolean;
+  /** Opt out of the auto-merge step in autorun's completion handler.
+   *  When true, autorun restores today's behavior exactly: no merge call,
+   *  the runner's mark-done post-step is NOT suppressed, the brief moves
+   *  to `inputs/done/` unconditionally on factory success, and no
+   *  `auto-merge-failed` events fire. */
+  noAutoMerge?: boolean;
+  /** Forwarded to `mergeRun` as `ffOnly`: a non-fast-forward merge becomes
+   *  a merge failure rather than falling back to a merge commit. Under
+   *  autorun, that failure surfaces as `auto-merge-failed
+   *  reason=non-fast-forward`. When `noAutoMerge` is set, this flag is a
+   *  no-op (warned at startup, not a usage error). */
+  ffOnly?: boolean;
   /** Pre-resolved output mode from `pickOutputMode`. When omitted, the
    *  action falls back to raw. The CLI layer is responsible for picking
    *  the mode (and for refusing `--raw` + `--tui` / `--tui` + `--json`
    *  before reaching this point). */
   outputMode?: "raw" | "tui";
 }
+
+export type AutoMergeFailEventReason =
+  | "conflict"
+  | "non-fast-forward"
+  | "dirty-working-tree"
+  | "no-default-branch"
+  | "null-branch-name"
+  | "other";
 
 export interface AutorunActionInput {
   options: AutorunOptions;
@@ -63,6 +85,11 @@ export interface AutorunActionInput {
   now?: () => number;
   /** Inject the autorun TUI renderer factory (tests). */
   createAutorunTuiRenderer?: typeof createInkAutorunRenderer;
+  /** @internal Test seam. Default = real `mergeRun`. Allows tests to
+   *  exercise the auto-merge completion handler without spawning git. */
+  mergeRunFn?: (row: StoredRun, opts: MergeRunOptions) => Promise<MergeOutcome>;
+  /** @internal Test seam. Default = real `markBriefDone`. */
+  markBriefDoneFn?: typeof markBriefDone;
 }
 
 interface ResolvedOptions {
@@ -76,6 +103,8 @@ interface ResolvedOptions {
   dryRun: boolean;
   json: boolean;
   force: boolean;
+  noAutoMerge: boolean;
+  ffOnly: boolean;
   outputMode: "raw" | "tui";
 }
 
@@ -110,6 +139,13 @@ export type AutorunEvent =
   | (AutorunEventBase & {
       kind: "info";
       message: string;
+    })
+  | (AutorunEventBase & {
+      kind: "auto-merge-failed";
+      change: string;
+      runId?: string;
+      reason: AutoMergeFailEventReason;
+      detail?: string;
     });
 
 export interface AutorunLogger {
@@ -144,6 +180,10 @@ function formatHuman(event: AutorunEvent): string {
       }${event.detail ? ` detail=${event.detail}` : ""}`;
     case "info":
       return `${ts} info ${event.message}`;
+    case "auto-merge-failed":
+      return `${ts} auto-merge-failed ${event.change} reason=${event.reason}${
+        event.runId ? ` runId=${event.runId}` : ""
+      }${event.detail ? ` detail=${event.detail}` : ""}`;
   }
 }
 
@@ -274,6 +314,8 @@ function validateOptions(
       dryRun: options.dryRun === true,
       json: options.json === true,
       force: options.force === true,
+      noAutoMerge: options.noAutoMerge === true,
+      ffOnly: options.ffOnly === true,
       outputMode: options.outputMode ?? "raw",
     },
   };
@@ -283,6 +325,7 @@ function buildDefaultRunFactory(
   cwd: string,
   store: RunStore | undefined,
   buildRegistry: (() => ExecutorRegistry) | undefined,
+  skipMarkDone: boolean,
 ): AutorunRunFactory {
   return (args: RunFactoryArgs) => {
     const ac = new AbortController();
@@ -293,6 +336,7 @@ function buildDefaultRunFactory(
       abortSignal: ac.signal,
       ...(buildRegistry ? { buildRegistry } : {}),
       ...(args.onRunEvent ? { onEvent: args.onRunEvent } : {}),
+      ...(skipMarkDone ? { skipMarkDone: true } : {}),
     }).then((result) => ({
       status: result.status,
       runId: result.runId,
@@ -362,7 +406,112 @@ export async function autorunAction(input: AutorunActionInput): Promise<number> 
     },
   });
 
-  const runFactory = input.runFactory ?? buildDefaultRunFactory(cwd, store, input.buildRegistry);
+  const runFactory =
+    input.runFactory ??
+    buildDefaultRunFactory(cwd, store, input.buildRegistry, !resolved.noAutoMerge);
+
+  // In-process mutex serializing the auto-merge step across concurrent
+  // run completions. Each completion's merge work is chained onto this
+  // promise so two merges never race against each other in the caller's
+  // repo (each checks out the default branch and runs `git merge`). The
+  // outer `await mergeQueue` in `drainOrEscalate` ensures `--once` does
+  // not exit before in-flight merges finish.
+  let mergeQueue: Promise<void> = Promise.resolve();
+  const enqueueAutoMerge = (work: () => Promise<void>): void => {
+    mergeQueue = mergeQueue.then(work, () => work().catch(() => undefined));
+  };
+
+  const mergeFn = input.mergeRunFn ?? mergeRun;
+  const markFn = input.markBriefDoneFn ?? markBriefDone;
+
+  const performAutoMerge = async (change: string, runId: string | undefined): Promise<void> => {
+    if (!store) return;
+    let row: StoredRun | null = null;
+    try {
+      if (runId) row = await store.getRun(runId);
+    } catch {
+      row = null;
+    }
+    if (!row) {
+      const ev: AutorunEvent = {
+        kind: "auto-merge-failed",
+        ts: now(),
+        change,
+        ...(runId ? { runId } : {}),
+        reason: "other",
+        detail: "could not load run row from store",
+      };
+      emit(ev);
+      renderer?.onEvent(ev);
+      return;
+    }
+    if (row.branchName === null) {
+      // In-place mode runs intentionally have no branch — the runner
+      // already marked the brief done, so there's nothing for autorun to
+      // do here. Discriminate via the worktree path: in-place runs share
+      // the caller's cwd; legacy/pre-migration rows do not.
+      if (row.worktreePath === cwd) return;
+      const ev: AutorunEvent = {
+        kind: "auto-merge-failed",
+        ts: now(),
+        change,
+        ...(runId ? { runId } : {}),
+        reason: "null-branch-name",
+      };
+      emit(ev);
+      renderer?.onEvent(ev);
+      return;
+    }
+
+    const mergeOpts: MergeRunOptions = {
+      cwd,
+      ...(resolved.ffOnly ? { ffOnly: true } : {}),
+    };
+    let outcome: MergeOutcome;
+    try {
+      outcome = await mergeFn(row, mergeOpts);
+    } catch (err) {
+      const ev: AutorunEvent = {
+        kind: "auto-merge-failed",
+        ts: now(),
+        change,
+        ...(runId ? { runId } : {}),
+        reason: "other",
+        detail: (err as Error).message,
+      };
+      emit(ev);
+      renderer?.onEvent(ev);
+      return;
+    }
+
+    if (!outcome.ok) {
+      const ev: AutorunEvent = {
+        kind: "auto-merge-failed",
+        ts: now(),
+        change,
+        ...(runId ? { runId } : {}),
+        reason: outcome.reason,
+        ...(outcome.message ? { detail: outcome.message } : {}),
+      };
+      emit(ev);
+      renderer?.onEvent(ev);
+      return;
+    }
+
+    // Success — mark the brief done against the caller's cwd so the move
+    // lands on the freshly-merged default branch (the brief that drives
+    // autorun's poll loop lives in the caller's `inputs/`, not the
+    // worktree's). The runner's mark-done block was suppressed precisely
+    // so this wrapper-owned call can fire here.
+    try {
+      const mdr = await markFn({ change, runCwd: cwd });
+      if (mdr.warning) {
+        io.stderr.write(`${mdr.warning}\n`);
+      }
+    } catch (err) {
+      io.stderr.write(`mark-done: unexpected error: ${(err as Error).message}\n`);
+    }
+  };
 
   // Build the default per-change lockfile liveness probe. The probe reads
   // the lockfile under `~/.minifac/locks/<repo-hash>-<change>-<factory>.lock`
@@ -418,6 +567,15 @@ export async function autorunAction(input: AutorunActionInput): Promise<number> 
         emit(ev);
         renderer?.onEvent(ev);
         renderer?.setInFlight(scheduler.inFlightCount());
+        // Auto-merge step: serialized through `mergeQueue`. Only fires on a
+        // factory-success completion when auto-merge is enabled. The
+        // `auto-merge-failed` event SHALL appear AFTER the `completed`
+        // event for the same change (per the `auto-mode` capability's
+        // "Autorun auto-merge-failed event" requirement) — the queue
+        // ensures that ordering even under `--max-concurrent N > 1`.
+        if (!resolved.noAutoMerge && event.status === "succeeded") {
+          enqueueAutoMerge(() => performAutoMerge(event.change, event.runId));
+        }
       },
       onError(change, err) {
         const ev: AutorunEvent = {
@@ -626,6 +784,12 @@ export async function autorunAction(input: AutorunActionInput): Promise<number> 
       scheduler.killAllInFlight();
     }
     await scheduler.drain();
+    // After all in-flight runs settle, in-flight auto-merge work may
+    // still be chained on `mergeQueue` because completions enqueue merge
+    // work in the scheduler's onCompleted callback. Awaiting `mergeQueue`
+    // ensures `--once` (and quit-driven exits) don't return before
+    // merges and mark-done calls finish.
+    await mergeQueue.catch(() => undefined);
   }
 }
 

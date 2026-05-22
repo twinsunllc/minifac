@@ -849,6 +849,14 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
     .option("--force", "On first SIGINT/SIGTERM, kill in-flight child executors instead of waiting")
     .option("--raw", "Force raw line-prefixed / JSON output even when stdout is a TTY")
     .option("--tui", "Force the interactive autorun TUI even when stdout is not a TTY")
+    .option(
+      "--no-auto-merge",
+      "Disable autorun's post-success merge step; revert to the manual two-step flow",
+    )
+    .option(
+      "--ff-only",
+      "Forbid the merge-commit fallback in autorun's auto-merge step (no-op when --no-auto-merge is set)",
+    )
     .action(
       async (opts: {
         watch?: string;
@@ -862,6 +870,8 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
         force?: boolean;
         raw?: boolean;
         tui?: boolean;
+        autoMerge?: boolean;
+        ffOnly?: boolean;
       }) => {
         const cwd = io.runCwd ?? process.cwd();
 
@@ -899,6 +909,13 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
         }
         const interval =
           opts.interval !== undefined ? Number.parseInt(opts.interval, 10) : undefined;
+        // Commander negatable flag: `opts.autoMerge` defaults to true and
+        // becomes false when the user passes `--no-auto-merge`.
+        const noAutoMerge = opts.autoMerge === false;
+        const ffOnly = opts.ffOnly === true;
+        if (noAutoMerge && ffOnly) {
+          io.stderr.write("--ff-only has no effect when --no-auto-merge is supplied\n");
+        }
         exitCode = await autorunAction({
           options: {
             ...(opts.watch !== undefined ? { watch: opts.watch } : {}),
@@ -912,6 +929,8 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
             ...(opts.force !== undefined ? { force: opts.force } : {}),
             ...(opts.raw !== undefined ? { raw: opts.raw } : {}),
             ...(opts.tui !== undefined ? { tui: opts.tui } : {}),
+            ...(noAutoMerge ? { noAutoMerge: true } : {}),
+            ...(ffOnly ? { ffOnly: true } : {}),
             outputMode,
           },
           cwd,
