@@ -170,7 +170,8 @@ Runtime:
 
 - Fresh git worktree per run at `~/.minifac/worktrees/`
 - Run-scoped branches: `run/<change>-<slug>`
-- Two-pane interactive TUI by default (`--raw` for pipes / CI)
+- Two-pane interactive TUI by default for both `minifac run` and
+  `minifac autorun` (`--raw` for pipes / CI)
 - Structured event log persisted to SQLite, replayable after
   the fact
 - Claude executor with streaming output and sentinel-based

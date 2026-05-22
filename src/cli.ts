@@ -27,6 +27,7 @@ import { runFactory } from "./runner/run.js";
 import { type DaemonHandle, startDaemon } from "./serve/server.js";
 import { openDefaultRunStore } from "./storage/open.js";
 import type { RunStore } from "./storage/run-store.js";
+import type { createInkAutorunRenderer } from "./tui/autorun-renderer.js";
 import { type InkRunRenderer, createInkRunRenderer } from "./tui/renderer.js";
 import { WorktreeConfigError, loadWorktreeConfig } from "./worktree/config.js";
 import { GitError, gitRevParseHead, gitWorktreeAdd } from "./worktree/git.js";
@@ -56,6 +57,8 @@ export interface CliIO {
   openRunStore?: (cwd: string) => Promise<RunStore>;
   /** Optional override of the TUI renderer factory (tests). */
   createTuiRenderer?: typeof createInkRunRenderer;
+  /** Optional override of the autorun TUI renderer factory (tests). */
+  createAutorunTuiRenderer?: typeof createInkAutorunRenderer;
   /** Optional override of the run-mode picker (tests). */
   pickOutputMode?: typeof pickOutputMode;
 }
@@ -766,6 +769,8 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
     .option("--dry-run", "Run a single poll cycle, print decisions, invoke no runs")
     .option("--json", "Emit log lines as one JSON object per line")
     .option("--force", "On first SIGINT/SIGTERM, kill in-flight child executors instead of waiting")
+    .option("--raw", "Force raw line-prefixed / JSON output even when stdout is a TTY")
+    .option("--tui", "Force the interactive autorun TUI even when stdout is not a TTY")
     .action(
       async (opts: {
         watch?: string;
@@ -776,8 +781,32 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
         dryRun?: boolean;
         json?: boolean;
         force?: boolean;
+        raw?: boolean;
+        tui?: boolean;
       }) => {
         const cwd = io.runCwd ?? process.cwd();
+
+        if (opts.raw && opts.tui) {
+          io.stderr.write("--raw and --tui are mutually exclusive\n");
+          exitCode = 1;
+          return;
+        }
+        if (opts.tui && opts.json) {
+          io.stderr.write("--tui and --json are mutually exclusive\n");
+          exitCode = 1;
+          return;
+        }
+        // --json on a TTY without --tui ⇒ implicit raw (the JSON contract wins).
+        const effectiveTui = opts.tui;
+        const effectiveRaw = opts.raw || (opts.json === true && !effectiveTui);
+        const outputMode = (io.pickOutputMode ?? pickOutputMode)(
+          {
+            ...(effectiveRaw ? { raw: true } : {}),
+            ...(effectiveTui ? { tui: true } : {}),
+          },
+          io,
+        );
+
         const maxConcurrent =
           opts.maxConcurrent !== undefined ? Number.parseInt(opts.maxConcurrent, 10) : undefined;
         const interval =
@@ -792,10 +821,16 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
             ...(opts.dryRun !== undefined ? { dryRun: opts.dryRun } : {}),
             ...(opts.json !== undefined ? { json: opts.json } : {}),
             ...(opts.force !== undefined ? { force: opts.force } : {}),
+            ...(opts.raw !== undefined ? { raw: opts.raw } : {}),
+            ...(opts.tui !== undefined ? { tui: opts.tui } : {}),
+            outputMode,
           },
           cwd,
           io: { stdout: io.stdout, stderr: io.stderr },
           ...(io.openRunStore ? { openRunStore: io.openRunStore } : {}),
+          ...(io.createAutorunTuiRenderer
+            ? { createAutorunTuiRenderer: io.createAutorunTuiRenderer }
+            : {}),
         });
       },
     );

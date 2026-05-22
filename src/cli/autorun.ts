@@ -3,8 +3,11 @@ import { readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { type Brief, BriefLoadError, loadBrief } from "../brief/loader.js";
 import type { ExecutorRegistry } from "../executor/registry.js";
+import type { EmittedEvent } from "../executor/types.js";
+import { loadFactory } from "../factory/loader.js";
 import { openDefaultRunStore } from "../storage/open.js";
 import type { RunStore } from "../storage/run-store.js";
+import { type InkAutorunRenderer, createInkAutorunRenderer } from "../tui/autorun-renderer.js";
 import { type AutorunFilter, AutorunFilterError, parseAutorunFilter } from "./autorun-filter.js";
 import {
   type AutorunRunFactory,
@@ -13,6 +16,7 @@ import {
   type SchedulerDecision,
   type SkipReason,
 } from "./autorun-scheduler.js";
+import { resolveFactoryByName } from "./resolve.js";
 import { runBriefAutomated } from "./run-brief.js";
 
 export interface AutorunIO {
@@ -29,6 +33,13 @@ export interface AutorunOptions {
   dryRun?: boolean;
   json?: boolean;
   force?: boolean;
+  raw?: boolean;
+  tui?: boolean;
+  /** Pre-resolved output mode from `pickOutputMode`. When omitted, the
+   *  action falls back to raw. The CLI layer is responsible for picking
+   *  the mode (and for refusing `--raw` + `--tui` / `--tui` + `--json`
+   *  before reaching this point). */
+  outputMode?: "raw" | "tui";
 }
 
 export interface AutorunActionInput {
@@ -46,6 +57,8 @@ export interface AutorunActionInput {
   buildRegistry?: () => ExecutorRegistry;
   /** Allow the test harness to override `Date.now()` semantics in logs. */
   now?: () => number;
+  /** Inject the autorun TUI renderer factory (tests). */
+  createAutorunTuiRenderer?: typeof createInkAutorunRenderer;
 }
 
 interface ResolvedOptions {
@@ -58,6 +71,7 @@ interface ResolvedOptions {
   dryRun: boolean;
   json: boolean;
   force: boolean;
+  outputMode: "raw" | "tui";
 }
 
 interface AutorunEventBase {
@@ -242,6 +256,7 @@ function validateOptions(
       dryRun: options.dryRun === true,
       json: options.json === true,
       force: options.force === true,
+      outputMode: options.outputMode ?? "raw",
     },
   };
 }
@@ -259,6 +274,7 @@ function buildDefaultRunFactory(
       ...(store ? { store } : {}),
       abortSignal: ac.signal,
       ...(buildRegistry ? { buildRegistry } : {}),
+      ...(args.onRunEvent ? { onEvent: args.onRunEvent } : {}),
     }).then((result) => ({
       status: result.status,
       runId: result.runId,
@@ -268,10 +284,6 @@ function buildDefaultRunFactory(
       promise,
       child: {
         kill(_signal?: NodeJS.Signals) {
-          // The default factory has no spawned child handle to SIGTERM —
-          // the runner runs in-process. Aborting the AbortController is the
-          // closest analogue; the runner short-circuits on its next yielded
-          // event.
           ac.abort();
         },
       },
@@ -308,7 +320,16 @@ export async function autorunAction(input: AutorunActionInput): Promise<number> 
   const logger = makeLogger(io, resolved.json);
   const now = input.now ?? (() => Date.now());
 
-  logger.log({
+  // When the TUI is mounted, the human/JSON logger is suppressed (per the
+  // `auto-mode` capability's "Autorun output mode selection" requirement).
+  // After the user presses `r` (raw-switch), `suppressLog` flips back to
+  // false so subsequent autorun events resume the existing log format.
+  let suppressLog = resolved.outputMode === "tui";
+  const emit = (event: AutorunEvent): void => {
+    if (!suppressLog) logger.log(event);
+  };
+
+  emit({
     kind: "startup",
     ts: now(),
     options: {
@@ -324,6 +345,11 @@ export async function autorunAction(input: AutorunActionInput): Promise<number> 
 
   const runFactory = input.runFactory ?? buildDefaultRunFactory(cwd, store, input.buildRegistry);
 
+  // TUI renderer (when active). Bound below so the scheduler callbacks can
+  // forward events to it.
+  let renderer: InkAutorunRenderer | null = null;
+  const initByChange = new Map<string, import("../tui/reducer.js").RunStateInit>();
+
   const scheduler = new Scheduler({
     runFactory,
     runStore: store,
@@ -332,29 +358,40 @@ export async function autorunAction(input: AutorunActionInput): Promise<number> 
     maxConcurrent: resolved.maxConcurrent,
     callbacks: {
       onStarted(event) {
-        logger.log({
+        const ev: AutorunEvent = {
           kind: "started",
           ts: now(),
           change: event.change,
           ...(event.runId ? { runId: event.runId } : {}),
-        });
+        };
+        emit(ev);
+        renderer?.onEvent(ev);
+        renderer?.setInFlight(scheduler.inFlightCount());
       },
       onCompleted(event) {
-        logger.log({
+        const ev: AutorunEvent = {
           kind: "completed",
           ts: now(),
           change: event.change,
           status: event.status,
           ...(event.runId ? { runId: event.runId } : {}),
           ...(event.reason ? { reason: event.reason } : {}),
-        });
+        };
+        emit(ev);
+        renderer?.onEvent(ev);
+        renderer?.setInFlight(scheduler.inFlightCount());
       },
       onError(change, err) {
-        logger.log({
+        const ev: AutorunEvent = {
           kind: "info",
           ts: now(),
           message: `run error for ${change}: ${err.message}`,
-        });
+        };
+        emit(ev);
+        renderer?.onEvent(ev);
+      },
+      onRunEvent(change, entry) {
+        renderer?.onRunEvent(change, entry);
       },
     },
   });
@@ -362,6 +399,40 @@ export async function autorunAction(input: AutorunActionInput): Promise<number> 
   let stopRequested = false;
   let forceRequested = resolved.force;
   let wakeUp: (() => void) | undefined;
+
+  // Mount the autorun TUI when output mode is `tui`.
+  if (resolved.outputMode === "tui") {
+    const createRenderer = input.createAutorunTuiRenderer ?? createInkAutorunRenderer;
+    renderer = createRenderer({
+      watchBasename: path.basename(resolved.watch),
+      maxConcurrent: resolved.maxConcurrent,
+      getInFlight: () => scheduler.inFlightCount(),
+      resolveRunInit: (change) => initByChange.get(change) ?? null,
+      onQuitRequested: () => {
+        stopRequested = true;
+        wakeUp?.();
+      },
+    });
+    renderer
+      .waitForExit()
+      .then(({ action, exitCode: rendererExit }) => {
+        if (action === "raw-switch") {
+          // Resume the human / JSON logger for the rest of the process
+          // lifetime. The autorun loop continues uninterrupted.
+          suppressLog = false;
+          renderer = null;
+        } else {
+          // quit ⇒ honor renderer's exit code (0 normal, 2 escalation).
+          stopRequested = true;
+          if (rendererExit === 2) {
+            forceRequested = true;
+            scheduler.killAllInFlight();
+          }
+          wakeUp?.();
+        }
+      })
+      .catch(() => undefined);
+  }
 
   const handleSignal = (): void => {
     const escalate = stopRequested || resolved.force;
@@ -379,24 +450,52 @@ export async function autorunAction(input: AutorunActionInput): Promise<number> 
 
   const pollOnce = async (dryRun: boolean): Promise<void> => {
     const briefs = await enumerateBriefs(resolved.watch, cwd, io);
-    logger.log({ kind: "poll-start", ts: now(), briefs: briefs.length });
+    const pollEv: AutorunEvent = { kind: "poll-start", ts: now(), briefs: briefs.length };
+    emit(pollEv);
+    renderer?.onEvent(pollEv);
     for (const b of briefs) {
       if (stopRequested && !dryRun) break;
       const decision = await scheduler.decide(b.brief, resolved.filter);
       if (dryRun) {
-        emitDryRunDecision(logger, now, decision);
+        emitDryRunDecision(
+          decision,
+          (e) => {
+            emit(e);
+            renderer?.onEvent(e);
+          },
+          now,
+        );
         continue;
       }
       if (decision.action === "schedule") {
+        // Pre-cache the factory's RunStateInit so the renderer can build
+        // an embedded `RunState` slot when the first run event arrives.
+        if (resolved.outputMode === "tui") {
+          try {
+            const fp = await resolveFactoryByName(decision.brief.frontmatter.factory, cwd);
+            const loaded = await loadFactory(fp, cwd);
+            initByChange.set(decision.brief.frontmatter.change, {
+              factory: { name: loaded.factory.name },
+              brief: { change: decision.brief.frontmatter.change },
+              nodeIds: Object.keys(loaded.factory.nodes),
+              branchName: null,
+            });
+          } catch {
+            // Best-effort. Brief row still updates from autorun-level
+            // events; the embedded view stays empty for this brief.
+          }
+        }
         scheduler.start(decision.brief);
       } else {
-        logger.log({
+        const ev: AutorunEvent = {
           kind: "skipped",
           ts: now(),
           change: decision.brief.frontmatter.change,
           reason: decision.reason,
           ...(decision.detail ? { detail: decision.detail } : {}),
-        });
+        };
+        emit(ev);
+        renderer?.onEvent(ev);
       }
     }
   };
@@ -417,7 +516,7 @@ export async function autorunAction(input: AutorunActionInput): Promise<number> 
       });
     } catch (err) {
       if (resolved.json) {
-        logger.log({
+        emit({
           kind: "info",
           ts: now(),
           message: `fs.watch unavailable: ${(err as Error).message}; polling only`,
@@ -467,6 +566,14 @@ export async function autorunAction(input: AutorunActionInput): Promise<number> 
     }
     if (watchDebounce) clearTimeout(watchDebounce);
     uninstallSignals();
+    if (renderer) {
+      try {
+        renderer.unmount();
+      } catch {
+        // best effort
+      }
+      renderer = null;
+    }
     try {
       await store.close();
     } catch {
@@ -485,19 +592,19 @@ export async function autorunAction(input: AutorunActionInput): Promise<number> 
 }
 
 function emitDryRunDecision(
-  logger: AutorunLogger,
-  now: () => number,
   decision: SchedulerDecision,
+  emit: (event: AutorunEvent) => void,
+  now: () => number,
 ): void {
   if (decision.action === "schedule") {
-    logger.log({
+    emit({
       kind: "dry-run-decision",
       ts: now(),
       change: decision.brief.frontmatter.change,
       action: "schedule",
     });
   } else {
-    logger.log({
+    emit({
       kind: "dry-run-decision",
       ts: now(),
       change: decision.brief.frontmatter.change,

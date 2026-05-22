@@ -111,6 +111,29 @@ One log line per scheduling event. Default human format:
 `event` field. Useful for shipping autorun events to a log
 aggregator or piping through `jq`.
 
+## Output mode: TUI vs. raw
+
+When `process.stdout.isTTY` is truthy, `minifac autorun` mounts an
+interactive TUI by default: a brief-list pane on the left (one row
+per brief with status glyph + change name), an embedded
+[[Run-TUI]] surface on the right for whichever brief you drill into,
+and a bordered header / hotkey bar. Hotkeys: `↑/↓` (or `j/k`) to
+move selection, `Enter` to drill into a brief, `Esc` to come back,
+`r` to switch to raw output for the rest of the autorun process,
+`q` to quit (drains in-flight runs; a second `q` while draining
+escalates).
+
+In a non-TTY (pipe, redirect, CI), autorun falls back to raw line
+output — today's behavior, byte-identical. `--raw` forces raw even
+on a TTY (the escape hatch for scripts that prefer to grep stderr).
+`--tui` forces the TUI even in a non-TTY (useful for tests). `--raw`
+and `--tui` together is a usage error; `--tui` and `--json` together
+is a usage error (the JSON output stream is a machine-readable
+contract that cannot coexist with a mounted TUI).
+
+`--json` on a TTY without `--tui` keeps emitting JSON on stdout (the
+JSON contract wins; no TUI is mounted).
+
 ## Relationship to `minifac run`
 
 Autorun and `minifac run` share the same *run primitive*: the function

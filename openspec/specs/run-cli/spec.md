@@ -1559,15 +1559,43 @@ requirement). The subcommand SHALL accept the following options:
   executor processes instead of waiting for them to settle (per
   the `auto-mode` capability's "Autorun signal handling"
   requirement).
+- `--raw` — force the existing raw line-prefixed / JSON output
+  even when stdout is a TTY. Mutually exclusive with `--tui`;
+  supplying both SHALL be a usage error.
+- `--tui` — force the interactive autorun TUI (per the
+  `autorun-tui` capability) even when stdout is not a TTY
+  (useful for tests). Mutually exclusive with `--raw` and
+  with `--json` (the JSON output stream is a machine-readable
+  contract that cannot coexist with a mounted TUI).
+
+Mode selection SHALL follow this precedence, evaluated in order
+(the same precedence the `run-cli` capability's "Event output
+format" requirement specifies for `minifac run`):
+
+1. `--raw` flag → raw mode (force, even on a TTY).
+2. `--tui` flag → TUI mode (force, even on a non-TTY).
+3. Else, if `--json` is supplied → raw mode (the JSON stream
+   wins; no TUI is mounted).
+4. Else, if `process.stdout.isTTY` is truthy → TUI mode (the
+   default for interactive invocations).
+5. Else → raw mode (the default for pipes, redirects, and CI).
+
+Supplying `--raw` together with `--tui` SHALL be a usage error
+(exit `1`) with a stderr message naming the conflict. Supplying
+`--tui` together with `--json` SHALL be a usage error
+(exit `1`) with a stderr message naming the conflict.
 
 The subcommand SHALL exit with:
 
 - `0` when the process exits cleanly after `--once`, `--dry-run`,
-  or a graceful shutdown that drained all in-flight runs.
+  a graceful shutdown that drained all in-flight runs, or a
+  TUI-driven `q` quit that drained all in-flight runs.
 - `1` for usage errors (missing watch directory, bad flag value,
-  invalid `--filter` expression).
-- `2` when a stop signal escalated to killing in-flight children
-  (second SIGINT, or first signal with `--force`).
+  invalid `--filter` expression, `--raw` + `--tui` together,
+  `--tui` + `--json` together).
+- `2` when a stop signal (or a second TUI-driven `q`) escalated
+  to killing in-flight children (second SIGINT, first signal
+  with `--force`, or `--force` with the first TUI quit).
 
 Other exit codes from the `run-cli` capability's "Exit codes"
 requirement (`2` from a node failure, `3` from budget exhaustion)
@@ -1655,4 +1683,54 @@ autorun process exit code; per-run failures are logged as
 - **THEN** the autorun process emits a `completed status=failed`
   event for `foo`, continues polling, and schedules `bar` on a
   later poll cycle
+
+#### Scenario: Interactive autorun defaults to TUI
+
+- **WHEN** the user invokes `minifac autorun` in a terminal where
+  `process.stdout.isTTY` is truthy and neither `--raw`, `--tui`,
+  nor `--json` is supplied
+- **THEN** the CLI mounts the autorun TUI per the `autorun-tui`
+  capability; the existing human-readable log lines are NOT
+  written to stdout while the TUI is mounted
+
+#### Scenario: Non-TTY autorun falls back to raw
+
+- **WHEN** the user invokes `minifac autorun > log` (so stdout
+  is not a TTY) and neither `--raw` nor `--tui` is supplied
+- **THEN** the CLI emits today's human-readable log lines and
+  does NOT mount the TUI
+
+#### Scenario: --raw forces raw mode in a TTY
+
+- **WHEN** the user invokes `minifac autorun --raw` from a TTY
+- **THEN** the CLI emits the existing human-readable log lines
+  and does NOT mount the TUI
+
+#### Scenario: --tui forces TUI mode in a non-TTY
+
+- **WHEN** the user invokes `minifac autorun --tui` with stdout
+  not a TTY (e.g. piped, used by tests)
+- **THEN** the CLI mounts the autorun TUI and renders into the
+  non-TTY surface (snapshotted by tests via ink's testing
+  utilities); the existing log lines are NOT written to stdout
+  while the TUI is mounted
+
+#### Scenario: --raw and --tui together is a usage error
+
+- **WHEN** the user invokes `minifac autorun --raw --tui`
+- **THEN** the CLI exits `1` with a stderr message naming the
+  flag conflict; no poll cycle runs and no TUI is mounted
+
+#### Scenario: --tui and --json together is a usage error
+
+- **WHEN** the user invokes `minifac autorun --tui --json`
+- **THEN** the CLI exits `1` with a stderr message naming the
+  flag conflict; no poll cycle runs and no TUI is mounted
+
+#### Scenario: --json on a TTY without --tui keeps emitting JSON
+
+- **WHEN** the user invokes `minifac autorun --json` from a TTY
+  and `--tui` is NOT supplied
+- **THEN** the CLI emits one JSON object per line on stdout (the
+  existing `--json` contract is preserved); no TUI is mounted
 
