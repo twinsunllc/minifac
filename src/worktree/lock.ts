@@ -16,7 +16,7 @@ export interface LockHandle {
   release(): Promise<void>;
 }
 
-function isLivePid(pid: number): boolean {
+export function isLivePid(pid: number): boolean {
   if (!Number.isInteger(pid) || pid <= 0) return false;
   try {
     // signal 0 checks for the existence of the process without sending one.
@@ -30,6 +30,40 @@ function isLivePid(pid: number): boolean {
     if (code === "EPERM") return true;
     return false;
   }
+}
+
+export type LockProbeResult = { orphaned: true } | { running: true; pid: number };
+
+/**
+ * Probe a per-key lockfile to classify it as orphaned (file missing OR PID
+ * dead) or running (PID live, or EPERM — the conservative branch). Used by
+ * the autorun scheduler to reconcile `runs.db` rows that say `running`
+ * after the owning runner was killed without a graceful exit.
+ *
+ * I/O errors other than ENOENT, and unparseable PID contents, are surfaced
+ * by throwing — callers route those to the conservative "running" skip
+ * path (see the auto-mode spec's "Probe error degrades to running-elsewhere
+ * skip" scenario).
+ */
+export async function probeLockLiveness(
+  lockPath: string,
+  isLive: (pid: number) => boolean = isLivePid,
+): Promise<LockProbeResult> {
+  let content: string;
+  try {
+    content = await readFile(lockPath, "utf8");
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") return { orphaned: true };
+    throw err;
+  }
+  const trimmed = content.trim();
+  const parsed = Number.parseInt(trimmed, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error(`unparseable PID in lockfile ${lockPath}: ${JSON.stringify(trimmed)}`);
+  }
+  if (isLive(parsed)) return { running: true, pid: parsed };
+  return { orphaned: true };
 }
 
 async function exclusiveCreate(lockPath: string, pid: number): Promise<boolean> {

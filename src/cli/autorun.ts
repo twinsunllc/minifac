@@ -8,6 +8,13 @@ import { loadFactory } from "../factory/loader.js";
 import { openDefaultRunStore } from "../storage/open.js";
 import type { RunStore } from "../storage/run-store.js";
 import { type InkAutorunRenderer, createInkAutorunRenderer } from "../tui/autorun-renderer.js";
+import { loadWorktreeConfig } from "../worktree/config.js";
+import { probeLockLiveness } from "../worktree/lock.js";
+import {
+  computeRepoHash,
+  lockPathForKey,
+  worktreeKeyForBrief,
+} from "../worktree/paths.js";
 import { type AutorunFilter, AutorunFilterError, parseAutorunFilter } from "./autorun-filter.js";
 import {
   type AutorunRunFactory,
@@ -345,6 +352,23 @@ export async function autorunAction(input: AutorunActionInput): Promise<number> 
 
   const runFactory = input.runFactory ?? buildDefaultRunFactory(cwd, store, input.buildRegistry);
 
+  // Build the default per-change lockfile liveness probe. The probe reads
+  // the lockfile under `~/.minifac/locks/<repo-hash>-<change>-<factory>.lock`
+  // and returns orphan/running per the `auto-mode` capability's "Autorun
+  // reconciles orphaned runs via per-change lockfile probe" requirement.
+  // Constructing the probe here (rather than per-decide) so we resolve
+  // `repoHash` once per autorun lifetime, not once per poll.
+  const worktreeConfig = await loadWorktreeConfig(cwd);
+  const repoHash = await computeRepoHash(cwd);
+  const probeChangeLiveness = async (
+    change: string,
+    factoryName: string,
+  ): Promise<import("../worktree/lock.js").LockProbeResult> => {
+    const key = worktreeKeyForBrief(repoHash, change, factoryName);
+    const lockPath = lockPathForKey(worktreeConfig, key);
+    return probeLockLiveness(lockPath);
+  };
+
   // TUI renderer (when active). Bound below so the scheduler callbacks can
   // forward events to it.
   let renderer: InkAutorunRenderer | null = null;
@@ -356,6 +380,7 @@ export async function autorunAction(input: AutorunActionInput): Promise<number> 
     inputsDir: resolved.watch,
     repoRoot: cwd,
     maxConcurrent: resolved.maxConcurrent,
+    probeChangeLiveness,
     callbacks: {
       onStarted(event) {
         const ev: AutorunEvent = {

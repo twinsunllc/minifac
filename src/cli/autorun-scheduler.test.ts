@@ -5,7 +5,12 @@ import { describe, expect, it } from "vitest";
 import { loadBrief } from "../brief/loader.js";
 import { SqliteRunStore } from "../storage/sqlite.js";
 import { parseAutorunFilter } from "./autorun-filter.js";
-import { type AutorunRunFactory, type RunFactoryResult, Scheduler } from "./autorun-scheduler.js";
+import {
+  type AutorunRunFactory,
+  type ProbeChangeLiveness,
+  type RunFactoryResult,
+  Scheduler,
+} from "./autorun-scheduler.js";
 
 async function makeRepo(): Promise<string> {
   return mkdtemp(path.join(tmpdir(), "minifac-scheduler-"));
@@ -199,7 +204,154 @@ describe("Scheduler.decide", () => {
     }
   });
 
-  it("returns skip:activity-running when the most recent run row is running", async () => {
+  it("returns skip:running-elsewhere when the probe reports a live PID for a running row", async () => {
+    const repo = await makeRepo();
+    await writeBrief(repo, "active", "foo");
+    const store = await freshStore();
+    try {
+      await store.createRun({
+        id: "run-1",
+        factoryPath: "x.yaml",
+        factoryName: "sdd",
+        change: "foo",
+        startedAt: Date.now(),
+      });
+      const brief = await loadBrief("foo", repo);
+      const probe: ProbeChangeLiveness = async () => ({ running: true, pid: 4242 });
+      const sched = new Scheduler({
+        runFactory: () => ({
+          promise: Promise.resolve({ status: "succeeded" as const }),
+        }),
+        runStore: store,
+        inputsDir: path.join(repo, "inputs"),
+        repoRoot: repo,
+        maxConcurrent: 1,
+        probeChangeLiveness: probe,
+      });
+      const d = await sched.decide(brief);
+      expect(d.action).toBe("skip");
+      if (d.action === "skip") expect(d.reason).toBe("running-elsewhere");
+      // Row was NOT reconciled.
+      const rows = await store.listRuns({ change: "foo", limit: 1 });
+      expect(rows[0]?.status).toBe("running");
+    } finally {
+      await store.close();
+    }
+  });
+
+  it("orphan reconciles the row to failed/orphaned and schedules the brief on the same poll", async () => {
+    const repo = await makeRepo();
+    await writeBrief(repo, "active", "foo");
+    const store = await freshStore();
+    try {
+      const startedAt = 1_000_000;
+      await store.createRun({
+        id: "run-1",
+        factoryPath: "x.yaml",
+        factoryName: "sdd",
+        change: "foo",
+        startedAt,
+      });
+      const brief = await loadBrief("foo", repo);
+      const probe: ProbeChangeLiveness = async () => ({ orphaned: true });
+      const sched = new Scheduler({
+        runFactory: () => ({
+          promise: Promise.resolve({ status: "succeeded" as const }),
+        }),
+        runStore: store,
+        inputsDir: path.join(repo, "inputs"),
+        repoRoot: repo,
+        maxConcurrent: 1,
+        probeChangeLiveness: probe,
+        now: () => 2_000_000,
+      });
+      const d = await sched.decide(brief);
+      expect(d.action).toBe("schedule");
+      const rows = await store.listRuns({ change: "foo", limit: 1 });
+      expect(rows[0]?.status).toBe("failed");
+      expect(rows[0]?.reason).toBe("orphaned");
+      expect(rows[0]?.endedAt).toBe(2_000_000);
+    } finally {
+      await store.close();
+    }
+  });
+
+  it("orphan reconciles even when the brief has an unsatisfied dep (skip:blocked)", async () => {
+    const repo = await makeRepo();
+    await writeBrief(repo, "active", "foo", ["bar"]);
+    await writeBrief(repo, "active", "bar"); // dep is active, not done
+    const store = await freshStore();
+    try {
+      await store.createRun({
+        id: "run-1",
+        factoryPath: "x.yaml",
+        factoryName: "sdd",
+        change: "foo",
+        startedAt: Date.now(),
+      });
+      const brief = await loadBrief("foo", repo);
+      const probe: ProbeChangeLiveness = async () => ({ orphaned: true });
+      const sched = new Scheduler({
+        runFactory: () => ({
+          promise: Promise.resolve({ status: "succeeded" as const }),
+        }),
+        runStore: store,
+        inputsDir: path.join(repo, "inputs"),
+        repoRoot: repo,
+        maxConcurrent: 1,
+        probeChangeLiveness: probe,
+      });
+      const d = await sched.decide(brief);
+      expect(d.action).toBe("skip");
+      if (d.action === "skip") expect(d.reason).toBe("blocked");
+      // The row WAS still reconciled.
+      const rows = await store.listRuns({ change: "foo", limit: 1 });
+      expect(rows[0]?.status).toBe("failed");
+      expect(rows[0]?.reason).toBe("orphaned");
+    } finally {
+      await store.close();
+    }
+  });
+
+  it("probe error skips with running-elsewhere and leaves the row untouched", async () => {
+    const repo = await makeRepo();
+    await writeBrief(repo, "active", "foo");
+    const store = await freshStore();
+    try {
+      await store.createRun({
+        id: "run-1",
+        factoryPath: "x.yaml",
+        factoryName: "sdd",
+        change: "foo",
+        startedAt: Date.now(),
+      });
+      const brief = await loadBrief("foo", repo);
+      const probe: ProbeChangeLiveness = async () => {
+        throw new Error("synthetic probe I/O error");
+      };
+      const sched = new Scheduler({
+        runFactory: () => ({
+          promise: Promise.resolve({ status: "succeeded" as const }),
+        }),
+        runStore: store,
+        inputsDir: path.join(repo, "inputs"),
+        repoRoot: repo,
+        maxConcurrent: 1,
+        probeChangeLiveness: probe,
+      });
+      const d = await sched.decide(brief);
+      expect(d.action).toBe("skip");
+      if (d.action === "skip") expect(d.reason).toBe("running-elsewhere");
+      const rows = await store.listRuns({ change: "foo", limit: 1 });
+      expect(rows[0]?.status).toBe("running");
+    } finally {
+      await store.close();
+    }
+  });
+
+  it("without an injected probe, a running row skips with running-elsewhere", async () => {
+    // Conservative default: no probe ⇒ we treat every running row as a
+    // legitimately busy run elsewhere.
     const repo = await makeRepo();
     await writeBrief(repo, "active", "foo");
     const store = await freshStore();
@@ -223,7 +375,7 @@ describe("Scheduler.decide", () => {
       });
       const d = await sched.decide(brief);
       expect(d.action).toBe("skip");
-      if (d.action === "skip") expect(d.reason).toBe("activity-running");
+      if (d.action === "skip") expect(d.reason).toBe("running-elsewhere");
     } finally {
       await store.close();
     }

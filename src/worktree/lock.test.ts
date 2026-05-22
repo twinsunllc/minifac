@@ -2,7 +2,7 @@ import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { LockHeldError, claimLock } from "./lock.js";
+import { LockHeldError, claimLock, probeLockLiveness } from "./lock.js";
 
 async function makeDir(): Promise<string> {
   return await mkdtemp(path.join(tmpdir(), "minifac-lock-"));
@@ -89,5 +89,48 @@ describe("claimLock", () => {
     const content = await readFile(lock, "utf8");
     expect(content).toBe(`${process.pid}\n`);
     await handle.release();
+  });
+});
+
+describe("probeLockLiveness", () => {
+  it("reports orphaned when the lockfile is missing", async () => {
+    const dir = await makeDir();
+    const lock = path.join(dir, "missing.lock");
+    const result = await probeLockLiveness(lock);
+    expect(result).toEqual({ orphaned: true });
+  });
+
+  it("reports running when the lockfile names a live PID", async () => {
+    const dir = await makeDir();
+    const lock = path.join(dir, "foo.lock");
+    await writeFile(lock, `${process.pid}\n`, "utf8");
+    const result = await probeLockLiveness(lock);
+    expect(result).toEqual({ running: true, pid: process.pid });
+  });
+
+  it("reports orphaned when the lockfile names a dead PID", async () => {
+    const dir = await makeDir();
+    const lock = path.join(dir, "foo.lock");
+    // 2^31 - 2 = a PID well beyond any plausible running process.
+    await writeFile(lock, "2147483646\n", "utf8");
+    const result = await probeLockLiveness(lock);
+    expect(result).toEqual({ orphaned: true });
+  });
+
+  it("throws on an unparseable PID", async () => {
+    const dir = await makeDir();
+    const lock = path.join(dir, "foo.lock");
+    await writeFile(lock, "garbage garbage\n", "utf8");
+    await expect(probeLockLiveness(lock)).rejects.toThrow(/unparseable PID/);
+  });
+
+  it("reports running when EPERM (mocked liveness check)", async () => {
+    const dir = await makeDir();
+    const lock = path.join(dir, "foo.lock");
+    await writeFile(lock, "424242\n", "utf8");
+    // The injected `isLive` mirrors the real `isLivePid`'s EPERM branch:
+    // EPERM means we cannot disprove liveness, so treat as live.
+    const result = await probeLockLiveness(lock, () => true);
+    expect(result).toEqual({ running: true, pid: 424242 });
   });
 });
