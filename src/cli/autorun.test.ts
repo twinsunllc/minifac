@@ -425,6 +425,129 @@ describe("autorunAction", () => {
     expect(err.text()).toMatch(/--watch/);
   });
 
+  it("rejects --max-failures -1 as a usage error", async () => {
+    const repo = await makeRepo();
+    const store = await freshStore();
+    const out = new BufferStream();
+    const err = new BufferStream();
+    const code = await autorunAction({
+      options: { maxFailures: -1, once: true },
+      cwd: repo,
+      io: { stdout: out, stderr: err },
+      runFactory: () => ({ promise: Promise.resolve({ status: "succeeded" as const }) }),
+      openRunStore: async () => store,
+    });
+    expect(code).toBe(1);
+    expect(err.text()).toMatch(/--max-failures/);
+    await store.close();
+  });
+
+  it("rejects --max-failures 1.5 (fractional) as a usage error", async () => {
+    const repo = await makeRepo();
+    const store = await freshStore();
+    const out = new BufferStream();
+    const err = new BufferStream();
+    const code = await autorunAction({
+      options: { maxFailures: 1.5, once: true },
+      cwd: repo,
+      io: { stdout: out, stderr: err },
+      runFactory: () => ({ promise: Promise.resolve({ status: "succeeded" as const }) }),
+      openRunStore: async () => store,
+    });
+    expect(code).toBe(1);
+    expect(err.text()).toMatch(/--max-failures/);
+    await store.close();
+  });
+
+  it("raw-mode failure-cap log line includes the recovery gesture", async () => {
+    const repo = await makeRepo();
+    await writeBrief(repo, "active", "foo");
+    const store = await freshStore();
+    // Factory that always fails.
+    const factory: AutorunRunFactory = () => ({
+      promise: Promise.resolve({
+        status: "failed" as const,
+        runId: "run-x",
+        reason: "node_failed",
+      }),
+    });
+    const out = new BufferStream();
+    const err = new BufferStream();
+    let signalHandler: (() => void) | undefined;
+    const codePromise = autorunAction({
+      options: { interval: 1, maxConcurrent: 1, maxFailures: 1 },
+      cwd: repo,
+      io: { stdout: out, stderr: err },
+      runFactory: factory,
+      openRunStore: async () => store,
+      installSignalHandlers: ({ onSignal }) => {
+        signalHandler = onSignal;
+        return () => {
+          signalHandler = undefined;
+        };
+      },
+    });
+    // Poll until the failure-cap line appears (or timeout).
+    const deadline = Date.now() + 4000;
+    while (!/skipped foo reason=failure-cap/.test(out.text()) && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    signalHandler?.();
+    await codePromise;
+    const text = out.text();
+    expect(text).toMatch(/skipped foo reason=failure-cap detail=1\/1/);
+    expect(text).toMatch(/restart autorun to retry/);
+  });
+
+  it("JSON-mode failure-cap event carries reason and detail", async () => {
+    const repo = await makeRepo();
+    await writeBrief(repo, "active", "foo");
+    const store = await freshStore();
+    const factory: AutorunRunFactory = () => ({
+      promise: Promise.resolve({
+        status: "failed" as const,
+        runId: "run-x",
+        reason: "node_failed",
+      }),
+    });
+    const out = new BufferStream();
+    const err = new BufferStream();
+    let signalHandler: (() => void) | undefined;
+    const codePromise = autorunAction({
+      options: { interval: 1, maxConcurrent: 1, maxFailures: 1, json: true },
+      cwd: repo,
+      io: { stdout: out, stderr: err },
+      runFactory: factory,
+      openRunStore: async () => store,
+      installSignalHandlers: ({ onSignal }) => {
+        signalHandler = onSignal;
+        return () => {
+          signalHandler = undefined;
+        };
+      },
+    });
+    const deadline = Date.now() + 4000;
+    while (Date.now() < deadline) {
+      if (
+        out
+          .lines()
+          .some((l) => l.includes('"event":"skipped"') && l.includes('"reason":"failure-cap"'))
+      ) {
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    signalHandler?.();
+    await codePromise;
+    const cap = out
+      .lines()
+      .map((l) => JSON.parse(l))
+      .find((o) => o.event === "skipped" && o.reason === "failure-cap");
+    expect(cap).toBeDefined();
+    expect(cap.change).toBe("foo");
+    expect(cap.detail).toBe("1/1");
+  });
+
   it("--json mode emits one JSON object per line", async () => {
     const repo = await makeRepo();
     await writeBrief(repo, "active", "foo");

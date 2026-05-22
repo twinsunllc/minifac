@@ -97,6 +97,7 @@ describe("Scheduler.decide", () => {
         inputsDir: path.join(repo, "inputs"),
         repoRoot: repo,
         maxConcurrent: 1,
+        maxFailures: 0,
       });
       const d = await sched.decide(brief);
       expect(d.action).toBe("schedule");
@@ -120,6 +121,7 @@ describe("Scheduler.decide", () => {
         inputsDir: path.join(repo, "inputs"),
         repoRoot: repo,
         maxConcurrent: 1,
+        maxFailures: 0,
       });
       const d = await sched.decide(brief);
       expect(d.action).toBe("skip");
@@ -144,6 +146,7 @@ describe("Scheduler.decide", () => {
         inputsDir: path.join(repo, "inputs"),
         repoRoot: repo,
         maxConcurrent: 1,
+        maxFailures: 0,
       });
       sched.start(briefFoo);
       const d = await sched.decide(briefBar);
@@ -170,6 +173,7 @@ describe("Scheduler.decide", () => {
         inputsDir: path.join(repo, "inputs"),
         repoRoot: repo,
         maxConcurrent: 1,
+        maxFailures: 0,
       });
       const d = await sched.decide(brief, parseAutorunFilter("feat-*"));
       expect(d.action).toBe("skip");
@@ -192,6 +196,7 @@ describe("Scheduler.decide", () => {
         inputsDir: path.join(repo, "inputs"),
         repoRoot: repo,
         maxConcurrent: 2,
+        maxFailures: 0,
       });
       sched.start(brief);
       const d = await sched.decide(brief);
@@ -372,6 +377,7 @@ describe("Scheduler.decide", () => {
         inputsDir: path.join(repo, "inputs"),
         repoRoot: repo,
         maxConcurrent: 1,
+        maxFailures: 0,
       });
       const d = await sched.decide(brief);
       expect(d.action).toBe("skip");
@@ -404,6 +410,7 @@ describe("Scheduler.decide", () => {
         inputsDir: path.join(repo, "inputs"),
         repoRoot: repo,
         maxConcurrent: 1,
+        maxFailures: 0,
       });
       const d = await sched.decide(brief);
       expect(d.action).toBe("skip");
@@ -428,6 +435,7 @@ describe("Scheduler.decide", () => {
         inputsDir: path.join(repo, "inputs"),
         repoRoot: repo,
         maxConcurrent: 1,
+        maxFailures: 0,
       });
       const d = await sched.decide(brief);
       expect(d.action).toBe("skip");
@@ -452,6 +460,7 @@ describe("Scheduler.decide", () => {
         inputsDir: path.join(repo, "inputs"),
         repoRoot: repo,
         maxConcurrent: 1,
+        maxFailures: 0,
       });
       const d = await sched.decide(brief);
       expect(d.action).toBe("skip");
@@ -479,6 +488,7 @@ describe("Scheduler.start / drain / killAllInFlight", () => {
         inputsDir: path.join(repo, "inputs"),
         repoRoot: repo,
         maxConcurrent: 1,
+        maxFailures: 0,
       });
       sched.start(brief);
       expect(sched.inFlightCount()).toBe(1);
@@ -507,6 +517,7 @@ describe("Scheduler.start / drain / killAllInFlight", () => {
         inputsDir: path.join(repo, "inputs"),
         repoRoot: repo,
         maxConcurrent: 2,
+        maxFailures: 0,
       });
       sched.start(briefFoo);
       sched.start(briefBar);
@@ -541,6 +552,7 @@ describe("Scheduler.start / drain / killAllInFlight", () => {
         inputsDir: path.join(repo, "inputs"),
         repoRoot: repo,
         maxConcurrent: 1,
+        maxFailures: 0,
       });
       sched.start(brief);
       sched.killAllInFlight();
@@ -548,6 +560,319 @@ describe("Scheduler.start / drain / killAllInFlight", () => {
       expect(sched.anyKilled()).toBe(true);
       ctrl.resolveLatest({ status: "failed", reason: "killed" });
       await sched.drain();
+    } finally {
+      await store.close();
+    }
+  });
+});
+
+describe("Scheduler failure-cap", () => {
+  // Helper: bring `change` to a state where its run row is `failed`
+  // and its in-flight slot is released, by start()ing it and resolving
+  // the controllable factory with a failure result.
+  async function failOnce(
+    sched: Scheduler,
+    ctrl: ControllableRun,
+    brief: Awaited<ReturnType<typeof loadBrief>>,
+    reason?: string,
+  ): Promise<void> {
+    sched.start(brief);
+    ctrl.resolveLatest(reason !== undefined ? { status: "failed", reason } : { status: "failed" });
+    await sched.drain();
+  }
+
+  it("counter increments on a failed dispatch with a recognized node-side reason", async () => {
+    const repo = await makeRepo();
+    await writeBrief(repo, "active", "foo");
+    const store = await freshStore();
+    try {
+      const brief = await loadBrief("foo", repo);
+      const ctrl = makeControllableRunFactory();
+      const sched = new Scheduler({
+        runFactory: ctrl.factory,
+        runStore: store,
+        inputsDir: path.join(repo, "inputs"),
+        repoRoot: repo,
+        maxConcurrent: 1,
+        maxFailures: 3,
+      });
+      for (const reason of [
+        "node_failed",
+        "graph_drained",
+        "budget_exhausted",
+        "sentinel_failed",
+      ]) {
+        const fresh = new Scheduler({
+          runFactory: ctrl.factory,
+          runStore: store,
+          inputsDir: path.join(repo, "inputs"),
+          repoRoot: repo,
+          maxConcurrent: 1,
+          maxFailures: 3,
+        });
+        await failOnce(fresh, ctrl, brief, reason);
+        expect(fresh.failureCount("foo")).toBe(1);
+      }
+      // Sanity: the original scheduler is still at zero.
+      expect(sched.failureCount("foo")).toBe(0);
+    } finally {
+      await store.close();
+    }
+  });
+
+  it("counter does NOT increment when result.reason === 'user_quit'", async () => {
+    const repo = await makeRepo();
+    await writeBrief(repo, "active", "foo");
+    const store = await freshStore();
+    try {
+      const brief = await loadBrief("foo", repo);
+      const ctrl = makeControllableRunFactory();
+      const sched = new Scheduler({
+        runFactory: ctrl.factory,
+        runStore: store,
+        inputsDir: path.join(repo, "inputs"),
+        repoRoot: repo,
+        maxConcurrent: 1,
+        maxFailures: 3,
+      });
+      await failOnce(sched, ctrl, brief, "user_quit");
+      expect(sched.failureCount("foo")).toBe(0);
+    } finally {
+      await store.close();
+    }
+  });
+
+  it("counter increments when result.reason is undefined", async () => {
+    const repo = await makeRepo();
+    await writeBrief(repo, "active", "foo");
+    const store = await freshStore();
+    try {
+      const brief = await loadBrief("foo", repo);
+      const ctrl = makeControllableRunFactory();
+      const sched = new Scheduler({
+        runFactory: ctrl.factory,
+        runStore: store,
+        inputsDir: path.join(repo, "inputs"),
+        repoRoot: repo,
+        maxConcurrent: 1,
+        maxFailures: 3,
+      });
+      await failOnce(sched, ctrl, brief);
+      expect(sched.failureCount("foo")).toBe(1);
+    } finally {
+      await store.close();
+    }
+  });
+
+  it("skips with reason=failure-cap and detail=N/N after maxFailures consecutive failures", async () => {
+    const repo = await makeRepo();
+    await writeBrief(repo, "active", "foo");
+    const store = await freshStore();
+    try {
+      const brief = await loadBrief("foo", repo);
+      const ctrl = makeControllableRunFactory();
+      const sched = new Scheduler({
+        runFactory: ctrl.factory,
+        runStore: store,
+        inputsDir: path.join(repo, "inputs"),
+        repoRoot: repo,
+        maxConcurrent: 1,
+        maxFailures: 3,
+      });
+      for (let i = 0; i < 3; i++) {
+        await failOnce(sched, ctrl, brief, "node_failed");
+      }
+      expect(sched.failureCount("foo")).toBe(3);
+      const d = await sched.decide(brief);
+      expect(d.action).toBe("skip");
+      if (d.action === "skip") {
+        expect(d.reason).toBe("failure-cap");
+        expect(d.detail).toBe("3/3");
+      }
+    } finally {
+      await store.close();
+    }
+  });
+
+  it("maxFailures: 0 disables the cap (no skip even after many failures)", async () => {
+    const repo = await makeRepo();
+    await writeBrief(repo, "active", "foo");
+    const store = await freshStore();
+    try {
+      const brief = await loadBrief("foo", repo);
+      const ctrl = makeControllableRunFactory();
+      const sched = new Scheduler({
+        runFactory: ctrl.factory,
+        runStore: store,
+        inputsDir: path.join(repo, "inputs"),
+        repoRoot: repo,
+        maxConcurrent: 1,
+        maxFailures: 0,
+      });
+      for (let i = 0; i < 10; i++) {
+        await failOnce(sched, ctrl, brief, "node_failed");
+      }
+      expect(sched.failureCount("foo")).toBe(10);
+      const d = await sched.decide(brief);
+      expect(d.action).toBe("schedule");
+    } finally {
+      await store.close();
+    }
+  });
+
+  it("maxFailures: 5 allows 5 failures, then caps on the 6th decide call", async () => {
+    const repo = await makeRepo();
+    await writeBrief(repo, "active", "foo");
+    const store = await freshStore();
+    try {
+      const brief = await loadBrief("foo", repo);
+      const ctrl = makeControllableRunFactory();
+      const sched = new Scheduler({
+        runFactory: ctrl.factory,
+        runStore: store,
+        inputsDir: path.join(repo, "inputs"),
+        repoRoot: repo,
+        maxConcurrent: 1,
+        maxFailures: 5,
+      });
+      for (let i = 0; i < 5; i++) {
+        const d = await sched.decide(brief);
+        expect(d.action).toBe("schedule");
+        await failOnce(sched, ctrl, brief, "node_failed");
+      }
+      const d = await sched.decide(brief);
+      expect(d.action).toBe("skip");
+      if (d.action === "skip") {
+        expect(d.reason).toBe("failure-cap");
+        expect(d.detail).toBe("5/5");
+      }
+    } finally {
+      await store.close();
+    }
+  });
+
+  it("per-change isolation: a cap on change A does not affect change B", async () => {
+    const repo = await makeRepo();
+    await writeBrief(repo, "active", "foo");
+    await writeBrief(repo, "active", "bar");
+    const store = await freshStore();
+    try {
+      const briefFoo = await loadBrief("foo", repo);
+      const briefBar = await loadBrief("bar", repo);
+      const ctrl = makeControllableRunFactory();
+      const sched = new Scheduler({
+        runFactory: ctrl.factory,
+        runStore: store,
+        inputsDir: path.join(repo, "inputs"),
+        repoRoot: repo,
+        maxConcurrent: 1,
+        maxFailures: 2,
+      });
+      await failOnce(sched, ctrl, briefFoo, "node_failed");
+      await failOnce(sched, ctrl, briefFoo, "node_failed");
+      const dFoo = await sched.decide(briefFoo);
+      expect(dFoo.action).toBe("skip");
+      if (dFoo.action === "skip") expect(dFoo.reason).toBe("failure-cap");
+      const dBar = await sched.decide(briefBar);
+      expect(dBar.action).toBe("schedule");
+    } finally {
+      await store.close();
+    }
+  });
+
+  it("precedence: a capped brief with unsatisfied deps surfaces as 'blocked', not 'failure-cap'", async () => {
+    const repo = await makeRepo();
+    await writeBrief(repo, "active", "foo", ["bar"]);
+    await writeBrief(repo, "active", "bar"); // dep active, not done
+    const store = await freshStore();
+    try {
+      const briefFoo = await loadBrief("foo", repo);
+      const ctrl = makeControllableRunFactory();
+      const sched = new Scheduler({
+        runFactory: ctrl.factory,
+        runStore: store,
+        inputsDir: path.join(repo, "inputs"),
+        repoRoot: repo,
+        maxConcurrent: 1,
+        maxFailures: 1,
+      });
+      // Manually warm the counter (no need to actually dispatch — the
+      // precondition order is what we're testing).
+      // Simulate one failure by start + fail.
+      // foo can't actually schedule here (blocked); use a back door:
+      // run the same brief in a maxFailures=0 scheduler is too noisy.
+      // Easier: bypass decide() and call start() directly.
+      sched.start(briefFoo);
+      ctrl.resolveLatest({ status: "failed", reason: "node_failed" });
+      await sched.drain();
+      expect(sched.failureCount("foo")).toBe(1);
+      const d = await sched.decide(briefFoo);
+      expect(d.action).toBe("skip");
+      if (d.action === "skip") expect(d.reason).toBe("blocked");
+    } finally {
+      await store.close();
+    }
+  });
+
+  it("precedence: a capped brief already in-flight surfaces as 'in-flight', not 'failure-cap'", async () => {
+    const repo = await makeRepo();
+    await writeBrief(repo, "active", "foo");
+    const store = await freshStore();
+    try {
+      const brief = await loadBrief("foo", repo);
+      const ctrl = makeControllableRunFactory();
+      const sched = new Scheduler({
+        runFactory: ctrl.factory,
+        runStore: store,
+        inputsDir: path.join(repo, "inputs"),
+        repoRoot: repo,
+        maxConcurrent: 2,
+        maxFailures: 1,
+      });
+      // First failure to bring foo to the cap.
+      await failOnce(sched, ctrl, brief, "node_failed");
+      expect(sched.failureCount("foo")).toBe(1);
+      // Force a second dispatch (bypass decide()) so foo is in-flight
+      // and capped simultaneously.
+      sched.start(brief);
+      const d = await sched.decide(brief);
+      expect(d.action).toBe("skip");
+      if (d.action === "skip") expect(d.reason).toBe("in-flight");
+      ctrl.resolveLatest({ status: "succeeded" });
+      await sched.drain();
+    } finally {
+      await store.close();
+    }
+  });
+
+  it("fresh Scheduler instance starts with an empty counter (restart-to-reset)", async () => {
+    const repo = await makeRepo();
+    await writeBrief(repo, "active", "foo");
+    const store = await freshStore();
+    try {
+      const brief = await loadBrief("foo", repo);
+      const ctrl = makeControllableRunFactory();
+      const sched1 = new Scheduler({
+        runFactory: ctrl.factory,
+        runStore: store,
+        inputsDir: path.join(repo, "inputs"),
+        repoRoot: repo,
+        maxConcurrent: 1,
+        maxFailures: 2,
+      });
+      await failOnce(sched1, ctrl, brief, "node_failed");
+      await failOnce(sched1, ctrl, brief, "node_failed");
+      expect(sched1.failureCount("foo")).toBe(2);
+      // A fresh Scheduler has no shared state.
+      const sched2 = new Scheduler({
+        runFactory: ctrl.factory,
+        runStore: store,
+        inputsDir: path.join(repo, "inputs"),
+        repoRoot: repo,
+        maxConcurrent: 1,
+        maxFailures: 2,
+      });
+      expect(sched2.failureCount("foo")).toBe(0);
     } finally {
       await store.close();
     }

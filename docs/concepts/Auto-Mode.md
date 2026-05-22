@@ -85,6 +85,43 @@ externally. [[Runs-DB]] handles concurrent writers via SQLite WAL.
 Briefs that would otherwise schedule but exceed the cap are skipped
 with reason `concurrency` and re-evaluated on the next poll.
 
+## Failure cap
+
+Autorun tracks **per-session** consecutive failures per `change` and
+stops scheduling a brief after the cap is reached:
+
+- `--max-failures <n>` controls the cap. **Default `3`.**
+- `--max-failures 0` disables the cap (the legacy indefinite-retry
+  behavior; choose this if you want autorun to keep hammering a brief
+  no matter how many times it fails).
+- The counter is purely in-memory. Restart autorun to reset it; there
+  is no persistent state, no time-based back-off, and no per-brief
+  override. A fresh `minifac autorun` process starts with an empty
+  counter.
+
+Which failure reasons count:
+
+- **Counted** — `node_failed`, `graph_drained`, `budget_exhausted`,
+  `sentinel_failed`, `missing_required_output`, and any unrecognized
+  `reason` (or missing `reason`). The safer default is to count
+  unfamiliar categorical strings rather than silently exempt them.
+- **Not counted** — `user_quit` (autorun process killed; the brief
+  itself didn't fail).
+- **Not counted** — orphan reconciliations. Flipping a stuck
+  `running` row to `failed`/`orphaned` does not bump the counter;
+  that row was never dispatched in this session.
+
+When the cap is hit, autorun emits `skipped reason=failure-cap` with
+a `detail` of `<count>/<max>` (e.g. `3/3`). The raw-mode log line
+appends the recovery gesture inline ("restart autorun to retry") so
+operators tailing logs see the action without a docs lookup.
+
+The cap check sits after the precondition reasons (`in-flight`,
+`filtered`, `running-elsewhere`, `done`, `blocked`,
+`activity-succeeded`) and before `concurrency`: a brief that's also
+blocked or already in-flight surfaces that reason, not
+`failure-cap`. A capped brief never consumes a concurrency slot.
+
 ## Signal handling
 
 - **First SIGINT/SIGTERM**: stop scheduling new runs, wait for

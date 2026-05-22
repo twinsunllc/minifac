@@ -7,6 +7,7 @@ import type { AutorunFilter } from "./autorun-filter.js";
 export type SkipReason =
   | "blocked"
   | "concurrency"
+  | "failure-cap"
   | "filtered"
   | "in-flight"
   | "running-elsewhere"
@@ -82,6 +83,10 @@ export interface SchedulerDeps {
   inputsDir: string;
   repoRoot: string;
   maxConcurrent: number;
+  /** Per-session failure cap per change. `0` disables the cap (legacy
+   *  indefinite-retry behavior). See `auto-mode` capability, "Autorun
+   *  per-session failure cap". */
+  maxFailures: number;
   callbacks?: SchedulerCallbacks;
   /** Probe the per-change lockfile for liveness when the most-recent
    *  `runs.db` row carries `status='running'`. The default (no probe)
@@ -106,10 +111,17 @@ interface InFlightEntry {
 export class Scheduler {
   private readonly deps: SchedulerDeps;
   private readonly inFlight = new Map<string, InFlightEntry>();
+  /** Per-session failure counter keyed by `change`. Increments in the
+   *  post-run handler when a dispatched run completes `failed` with a
+   *  non-`user_quit` reason. Consulted by `decide()` before the
+   *  concurrency check. Purely in-memory: restart autorun to reset. */
+  private readonly failureCounts = new Map<string, number>();
+  private readonly maxFailures: number;
   private killedAny = false;
 
   constructor(deps: SchedulerDeps) {
     this.deps = deps;
+    this.maxFailures = deps.maxFailures;
   }
 
   inFlightCount(): number {
@@ -118,6 +130,10 @@ export class Scheduler {
 
   anyKilled(): boolean {
     return this.killedAny;
+  }
+
+  failureCount(change: string): number {
+    return this.failureCounts.get(change) ?? 0;
   }
 
   async decide(brief: Brief, filter?: AutorunFilter): Promise<SchedulerDecision> {
@@ -213,6 +229,19 @@ export class Scheduler {
     if (state.activity === "succeeded") {
       return { action: "skip", reason: "activity-succeeded", brief };
     }
+    // Precedence: in-flight, filtered, running-elsewhere, done, blocked,
+    // activity-succeeded short-circuit above. Concurrency check runs
+    // after this. See `auto-mode` capability, "Autorun per-session
+    // failure cap".
+    const failureCount = this.failureCounts.get(change) ?? 0;
+    if (this.maxFailures > 0 && failureCount >= this.maxFailures) {
+      return {
+        action: "skip",
+        reason: "failure-cap",
+        brief,
+        detail: `${failureCount}/${this.maxFailures}`,
+      };
+    }
     if (this.inFlight.size >= this.deps.maxConcurrent) {
       return { action: "skip", reason: "concurrency", brief };
     }
@@ -245,6 +274,11 @@ export class Scheduler {
     started.promise.then(
       (result) => {
         this.inFlight.delete(change);
+        // Bump the failure counter before callbacks fire so any
+        // observer of the count sees the post-increment value.
+        if (result.status === "failed" && result.reason !== "user_quit") {
+          this.failureCounts.set(change, (this.failureCounts.get(change) ?? 0) + 1);
+        }
         this.deps.callbacks?.onCompleted?.({
           change,
           status: result.status,
@@ -254,6 +288,9 @@ export class Scheduler {
       },
       (err: Error) => {
         this.inFlight.delete(change);
+        // Thrown errors are brief-side failures; no `user_quit`
+        // synthesis on the throw path.
+        this.failureCounts.set(change, (this.failureCounts.get(change) ?? 0) + 1);
         this.deps.callbacks?.onError?.(change, err);
         this.deps.callbacks?.onCompleted?.({
           change,

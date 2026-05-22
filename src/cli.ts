@@ -840,6 +840,7 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
     .description("Poll inputs/ and run ready briefs. Long-running by default; use --once for CI.")
     .option("--watch <dir>", "Directory to poll (default <cwd>/inputs)")
     .option("--max-concurrent <n>", "Parallel run cap (default 1)", "1")
+    .option("--max-failures <n>", "Per-session failure cap per change; 0 disables", "3")
     .option("--interval <ms>", "Poll cadence in milliseconds (default 10000)", "10000")
     .option("--once", "Run a single poll cycle, wait for runs, then exit")
     .option("--filter <expr>", 'Glob (e.g. "feat-*") or /regex/ against the brief\'s change name')
@@ -852,6 +853,7 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
       async (opts: {
         watch?: string;
         maxConcurrent?: string;
+        maxFailures?: string;
         interval?: string;
         once?: boolean;
         filter?: string;
@@ -886,12 +888,22 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
 
         const maxConcurrent =
           opts.maxConcurrent !== undefined ? Number.parseInt(opts.maxConcurrent, 10) : undefined;
+        // Use a stricter parse for --max-failures so values like
+        // `3.5` or `abc` reject in validateOptions rather than being
+        // silently truncated. `parseInt` accepts `3.5` → `3`; rely on
+        // `Number()` + `Number.isInteger` for fractional rejection.
+        let maxFailures: number | undefined;
+        if (opts.maxFailures !== undefined) {
+          const raw = opts.maxFailures.trim();
+          maxFailures = raw === "" ? Number.NaN : Number(raw);
+        }
         const interval =
           opts.interval !== undefined ? Number.parseInt(opts.interval, 10) : undefined;
         exitCode = await autorunAction({
           options: {
             ...(opts.watch !== undefined ? { watch: opts.watch } : {}),
             ...(maxConcurrent !== undefined ? { maxConcurrent } : {}),
+            ...(maxFailures !== undefined ? { maxFailures } : {}),
             ...(interval !== undefined ? { interval } : {}),
             ...(opts.once !== undefined ? { once: opts.once } : {}),
             ...(opts.filter !== undefined ? { filter: opts.filter } : {}),
