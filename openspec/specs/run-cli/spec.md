@@ -1165,6 +1165,12 @@ run pre-dates per-run branch naming and that they may merge
 manually with `git merge <change>` if appropriate. The exit
 code SHALL be `1`.
 
+The CLI SHALL track which resolution path succeeded
+(`run-id-prefix` vs `change-name`) and SHALL pass that signal
+to the merge primitive so the post-merge mark-done step (see
+"Mark-done on successful change-by-name merge" below) fires
+only when appropriate.
+
 #### Merge sequence
 
 After successful resolution, the subcommand SHALL execute the
@@ -1182,13 +1188,15 @@ following in the caller's repo (cwd):
    is already on it).
 4. Attempt `git merge --ff-only <branchName>`.
    - On success: write a one-line stdout summary naming the
-     merged branch and the resulting HEAD SHA, exit `0`.
+     merged branch and the resulting HEAD SHA, then invoke
+     the mark-done step described below, then exit `0`.
    - On failure with `--ff-only` supplied: surface the git
      stderr verbatim, exit `1`.
    - On failure without `--ff-only`: proceed to step 5.
 5. Attempt `git merge --no-ff -m "Merge <branchName>"
    <branchName>`.
-   - On success: write the summary, exit `0`.
+   - On success: write the summary, invoke the mark-done
+     step described below, exit `0`.
    - On merge conflict: run `git merge --abort` to leave a
      clean tree, write a stderr message listing the
      conflicting paths (from `git diff --name-only
@@ -1198,9 +1206,40 @@ The subcommand SHALL NOT delete the run's branch after
 merging. The subcommand SHALL NOT run `git fetch` or any other
 network-touching git command.
 
+#### Mark-done on successful change-by-name merge
+
+When the resolution path was `change-name` (case 2 above) and
+the merge succeeded (fast-forward or merge-commit fallback),
+the subcommand SHALL invoke the mark-done helper (the same
+helper the runner uses, per the `brief-state` capability's
+"Runner marks brief done after terminal-success" requirement)
+against the caller's cwd to move
+`inputs/<change>.md` to `inputs/done/<change>.md` and commit
+the move. The helper's idempotent-skip rules SHALL apply: if
+the brief is already at `inputs/done/<change>.md` (the
+`--no-auto-merge` path, or a manual `minifac run` followed by
+`minifac merge`, or a redundant `minifac merge` invocation),
+the helper SHALL skip without warning.
+
+If the mark-done helper fails (e.g. the caller's cwd has
+uncommitted changes that block `git mv`, or a pre-commit hook
+rejects the commit), the subcommand SHALL write a single
+stderr warning line naming the failure but SHALL still exit
+`0` (the merge itself succeeded, which is the primary
+contract of `minifac merge`).
+
+When the resolution path was `run-id-prefix` (case 1 above),
+the subcommand SHALL NOT invoke the mark-done helper. The
+id-prefix path is reserved for operator scenarios (cherry-
+picking a non-latest run, merging a run whose brief has been
+deleted or renamed) where calling mark-done would surprise
+the operator who explicitly named a single run.
+
 #### Exit codes
 
-- `0` — merge succeeded (fast-forward or merge commit).
+- `0` — merge succeeded (fast-forward or merge commit),
+  regardless of whether the mark-done helper succeeded or
+  emitted a warning.
 - `1` — usage error (bad flag, ambiguous prefix, unknown
   arg), resolution refusal (no succeeded runs, null
   `branchName`), dirty working tree, merge failure (ff-only
@@ -1215,7 +1254,9 @@ network-touching git command.
 - **THEN** the CLI checks out the default branch, runs
   `git merge --ff-only run/foo-a7b3c1`, prints a one-line
   stdout summary naming the branch and the resulting HEAD,
-  and exits `0`
+  invokes the mark-done helper (moving
+  `inputs/foo.md` to `inputs/done/foo.md` and committing
+  the move), and exits `0`
 
 #### Scenario: Merge by change with multiple succeeded runs requires --pick
 
@@ -1224,7 +1265,7 @@ network-touching git command.
 - **THEN** the CLI exits `1` with a stderr message listing
   the matching runs (id-prefix, status, branchName,
   started-at) and suggesting `--pick` or passing a run id;
-  no merge is attempted
+  no merge is attempted and no mark-done is invoked
 
 #### Scenario: --pick drives a numbered prompt and merges the selection
 
@@ -1232,14 +1273,17 @@ network-touching git command.
   three matching succeeded runs and types `2` into the
   prompt followed by a newline
 - **THEN** the CLI merges the second listed run's branch into
-  the default branch and exits `0`
+  the default branch, invokes the mark-done helper for
+  `foo` (since the resolution path was change-name), and
+  exits `0`
 
 #### Scenario: --pick on empty input exits non-zero without merging
 
 - **WHEN** the user invokes `minifac merge foo --pick` and
   types EOF (or an empty line) at the prompt
 - **THEN** the CLI exits `1` with a stderr message indicating
-  no selection was made; no merge is attempted
+  no selection was made; no merge is attempted and no
+  mark-done is invoked
 
 #### Scenario: Merge by run-id prefix resolves to that run
 
@@ -1247,7 +1291,8 @@ network-touching git command.
   one run's id begins with `a7b3c1`
 - **THEN** the CLI resolves to that run's row and proceeds
   with the merge sequence regardless of whether any other
-  succeeded runs exist for the same change
+  succeeded runs exist for the same change; the mark-done
+  helper is NOT invoked (resolution path is run-id-prefix)
 
 #### Scenario: Ambiguous run-id prefix is a usage error
 
@@ -1270,7 +1315,8 @@ network-touching git command.
   the only run with `change = "foo"` has `status = "failed"`
   and a non-null `branchName`
 - **THEN** the CLI proceeds with the merge sequence using
-  that run's branch
+  that run's branch; on a successful merge the mark-done
+  helper is invoked (resolution path is still change-name)
 
 #### Scenario: Merge with conflicts aborts cleanly
 
@@ -1279,7 +1325,8 @@ network-touching git command.
   NOT supplied)
 - **THEN** the CLI runs `git merge --abort` so the working
   tree is clean, writes a stderr message listing the
-  conflicting paths, and exits `1`
+  conflicting paths, and exits `1`; the mark-done helper is
+  NOT invoked
 
 #### Scenario: --ff-only refuses fallback to merge commit
 
@@ -1288,7 +1335,8 @@ network-touching git command.
   beyond the run's base)
 - **THEN** the CLI surfaces the git stderr verbatim, does
   NOT attempt a merge commit, and exits `1`; the working
-  tree is left as before
+  tree is left as before; the mark-done helper is NOT
+  invoked
 
 #### Scenario: Dirty working tree refuses merge
 
@@ -1322,6 +1370,50 @@ network-touching git command.
   with no network
 - **THEN** the CLI completes (success or refusal) without
   attempting any network-touching git command
+
+#### Scenario: Successful change-by-name merge moves brief to done
+
+- **WHEN** the user invokes `minifac merge foo` against a
+  successful run whose brief is still at `inputs/foo.md`
+  (e.g. autorun's auto-merge previously failed, or
+  `--no-auto-merge` was used during autorun, or this was a
+  manual `minifac run`)
+- **THEN** the merge succeeds, the mark-done helper moves
+  the brief to `inputs/done/foo.md` and commits the move,
+  the subcommand writes the merge-success stdout summary,
+  and exits `0`. A subsequent autorun poll observes the
+  brief as `done` and unblocks any dependent briefs
+
+#### Scenario: Successful change-by-name merge is idempotent on already-done briefs
+
+- **WHEN** the user invokes `minifac merge foo` against a
+  successful run whose brief has already been moved to
+  `inputs/done/foo.md` (e.g. the autorun-driven mark-done
+  fired earlier on a previous successful merge attempt)
+- **THEN** the merge succeeds (a no-op or fast-forward), the
+  mark-done helper observes the brief is already in
+  `inputs/done/` and skips per its idempotent-skip rules,
+  no warning is emitted, and the subcommand exits `0`
+
+#### Scenario: Successful run-id-prefix merge does NOT mark done
+
+- **WHEN** the user invokes `minifac merge a7b3c1` (a
+  run-id-prefix resolution path) and the merge succeeds
+- **THEN** the subcommand writes the merge-success stdout
+  summary and exits `0`; the mark-done helper is NOT
+  invoked, the brief at `inputs/<change>.md` (if it exists)
+  stays put, and no commit is created beyond the merge
+  itself
+
+#### Scenario: Mark-done failure after successful merge warns but exits zero
+
+- **WHEN** the user invokes `minifac merge foo`, the merge
+  succeeds, and the subsequent mark-done helper invocation
+  fails (e.g. a pre-commit hook rejects the commit)
+- **THEN** the subcommand writes a single stderr warning
+  line naming the mark-done failure but exits `0` (the
+  merge itself succeeded, which is the primary contract of
+  `minifac merge`)
 
 ### Requirement: `minifac briefs` subcommand
 
@@ -1652,6 +1744,17 @@ requirement). The subcommand SHALL accept the following options:
   (useful for tests). Mutually exclusive with `--raw` and
   with `--json` (the JSON output stream is a machine-readable
   contract that cannot coexist with a mounted TUI).
+- `--no-auto-merge` — opt out of the auto-merge step on
+  successful runs (per the `auto-mode` capability's "Autorun
+  auto-merge flags" requirement). Default: the auto-merge step
+  is enabled.
+- `--ff-only` — forbid the merge-commit fallback in the
+  auto-merge step (per the `auto-mode` capability's "Autorun
+  auto-merge flags" requirement). Default: merge-commit
+  fallback is allowed. Supplying `--ff-only` together with
+  `--no-auto-merge` SHALL NOT be a usage error; the autorun
+  process SHALL emit a single startup-time stderr warning
+  line and proceed with auto-merge disabled.
 
 Mode selection SHALL follow this precedence, evaluated in order
 (the same precedence the `run-cli` capability's "Event output
@@ -1687,6 +1790,12 @@ requirement (`2` from a node failure, `3` from budget exhaustion)
 SHALL NOT propagate from individual autorun-scheduled runs to the
 autorun process exit code; per-run failures are logged as
 `completed status=failed` and the autorun process continues.
+Likewise, an `auto-merge-failed` event (per the `auto-mode`
+capability's "Autorun auto-merge-failed event" requirement)
+SHALL NOT change the autorun process exit code; the autorun
+process continues to schedule subsequent ready briefs (subject
+to the dependency-blockedness those briefs may now inherit
+from the unmerged predecessor).
 
 #### Scenario: `minifac autorun` polls inputs and schedules ready briefs
 
@@ -1818,6 +1927,37 @@ autorun process exit code; per-run failures are logged as
   and `--tui` is NOT supplied
 - **THEN** the CLI emits one JSON object per line on stdout (the
   existing `--json` contract is preserved); no TUI is mounted
+
+#### Scenario: --no-auto-merge restores pre-merge behavior
+
+- **WHEN** the user invokes `minifac autorun --no-auto-merge`
+  and a scheduled run completes `succeeded`
+- **THEN** the autorun process does NOT invoke the merge
+  primitive, the runner's mark-done post-step fires exactly
+  as it did before the auto-merge step was introduced, the
+  brief moves to `inputs/done/<change>.md`, and no
+  `auto-merge-failed` event is emitted
+
+#### Scenario: --ff-only propagates to the merge primitive
+
+- **WHEN** the user invokes `minifac autorun --ff-only`,
+  a scheduled run completes `succeeded`, and the merge
+  primitive's fast-forward attempt against the default
+  branch fails
+- **THEN** the merge primitive does NOT fall back to a
+  merge commit, an `auto-merge-failed` event fires with
+  `reason = "non-fast-forward"`, and the brief stays at
+  `inputs/<change>.md`
+
+#### Scenario: --no-auto-merge with --ff-only warns and proceeds
+
+- **WHEN** the user invokes `minifac autorun --no-auto-merge
+  --ff-only`
+- **THEN** the CLI writes a single stderr warning line
+  `--ff-only has no effect when --no-auto-merge is supplied`
+  at startup, then proceeds with the autorun loop with
+  auto-merge disabled (no usage error; exit code 0 / 2 /
+  signal-driven per the existing rules)
 
 ### Requirement: `minifac runs show <id> --outputs` flag
 

@@ -13,9 +13,11 @@ events:
 
 - **Autorun events**: the `AutorunEvent` shape produced by the
   autorun process (per the `auto-mode` capability's "Autorun
-  structured logging" requirement) — `poll-start`, `started`,
-  `skipped`, `completed`, `failed`, `dry-run-decision`,
-  `startup`, `info`.
+  structured logging" requirement and the additional
+  `auto-merge-failed` kind defined by the `auto-mode`
+  capability's "Autorun auto-merge-failed event" requirement)
+  — `poll-start`, `started`, `skipped`, `completed`, `failed`,
+  `dry-run-decision`, `startup`, `info`, `auto-merge-failed`.
 - **UI events**: synthetic events produced by user input —
   `select-brief-next`, `select-brief-prev`, `enter-brief`,
   `back-to-list`, `request-quit`, `confirm-quit`, `cancel-quit`,
@@ -31,12 +33,15 @@ The reducer's `BriefListState` SHALL track at minimum:
   appearance in a `poll-start` event's observed set wins).
 - Each `BriefRowState` SHALL carry: `change` (the brief's
   change slug), `status` (one of `queued`, `running`,
-  `succeeded`, `failed`, `skipped`), optional `runId` once a
-  `started` event has been observed, optional `skipReason` when
-  `status === "skipped"`, and an optional embedded per-run
-  state slot (the `RunState` shape from the `run-tui`
-  capability) populated for any brief whose run has produced
-  events.
+  `succeeded`, `failed`, `skipped`, `succeeded-but-unmerged`),
+  optional `runId` once a `started` event has been observed,
+  optional `skipReason` when `status === "skipped"`, optional
+  `autoMergeFailReason` when
+  `status === "succeeded-but-unmerged"` (carrying the
+  `auto-merge-failed` event's `reason` enum value), and an
+  optional embedded per-run state slot (the `RunState` shape
+  from the `run-tui` capability) populated for any brief whose
+  run has produced events.
 - `selectedBriefIndex: number` — index into `briefs`.
 - `focus: "brief-list" | "run-view"` — when `"brief-list"`,
   keyboard input drives brief selection; when `"run-view"`, the
@@ -61,20 +66,40 @@ old reason.
 The reducer SHALL treat `skipped` events as transitions out of
 `queued` (or out of a prior `skipped`) only. When a `skipped`
 event arrives for a `BriefRowState` whose current status is
-`running`, `succeeded`, or `failed`, the reducer SHALL leave
-the row unchanged: the `status` SHALL remain `running` /
-`succeeded` / `failed`, no `skipReason` SHALL be introduced, and
-the embedded `RunState` slot (if any) SHALL be preserved. The
-three states `running`, `succeeded`, and `failed` are owned by
-the `started` and `completed` events; `skipped` SHALL NOT
-override them. This rule applies regardless of the `skipped`
-event's `reason` (`in-flight`, `activity-running`,
+`running`, `succeeded`, `failed`, or `succeeded-but-unmerged`,
+the reducer SHALL leave the row unchanged: the `status` SHALL
+remain in its current state, no `skipReason` SHALL be
+introduced, and the embedded `RunState` slot (if any) SHALL be
+preserved. The states `running`, `succeeded`, `failed`, and
+`succeeded-but-unmerged` are owned by the `started`,
+`completed`, and `auto-merge-failed` events; `skipped` SHALL
+NOT override them. This rule applies regardless of the
+`skipped` event's `reason` (`in-flight`, `activity-running`,
 `activity-succeeded`, `activity-failed`, `blocked`, or any
 future reason string the scheduler emits to re-affirm an
-existing state on a poll cycle). The `dry-run-decision` handler
-SHALL retain its existing semantics and is NOT subject to this
-rule; dry-run decisions reflect hypothetical scheduling with no
-live run state to protect.
+existing state on a poll cycle). The `dry-run-decision`
+handler SHALL retain its existing semantics and is NOT subject
+to this rule; dry-run decisions reflect hypothetical scheduling
+with no live run state to protect.
+
+The reducer SHALL transition a brief to
+`succeeded-but-unmerged` only on an `auto-merge-failed` event
+whose `change` matches a row currently in status `succeeded`.
+The transition SHALL preserve `runId` (sourced from the
+preceding `completed` event), SHALL preserve the embedded
+`RunState` slot, SHALL set `autoMergeFailReason` to the
+event's `reason` value, and SHALL clear `skipReason` if
+present. An `auto-merge-failed` event whose `change` matches a
+row in `running`, `queued`, `failed`, `skipped`, or
+`succeeded-but-unmerged` (already-transitioned) SHALL leave
+the row's `status` unchanged but SHALL still update
+`autoMergeFailReason` if the row is
+`succeeded-but-unmerged` (so the latest reason wins). For a
+row in `running`, `queued`, `failed`, or `skipped`, the
+`auto-merge-failed` event arriving without a preceding
+`succeeded` is a protocol violation; the reducer SHALL leave
+the row unchanged and SHALL NOT crash (the raw logger still
+emits the event so the operator sees it in the log stream).
 
 #### Scenario: poll-start event records observed briefs
 
@@ -223,6 +248,40 @@ live run state to protect.
   (unchanged); a `request-quit` UI event is the only way to
   leave the brief-list
 
+#### Scenario: auto-merge-failed transitions succeeded to succeeded-but-unmerged
+
+- **WHEN** the reducer receives, in order, a `started` event
+  for change `foo`, a `completed` event for change `foo` with
+  `status: "succeeded"`, and an `auto-merge-failed` event for
+  change `foo` with `reason: "conflict"`
+- **THEN** the final state has the `foo` row with
+  `status = "succeeded-but-unmerged"`,
+  `autoMergeFailReason = "conflict"`, `runId` preserved from
+  the `completed` event, and the embedded `RunState` slot
+  preserved
+
+#### Scenario: auto-merge-failed without preceding succeeded is a no-op
+
+- **WHEN** the reducer receives an `auto-merge-failed` event
+  for change `foo` whose current row is in status `running`
+  (no preceding `completed` event has arrived)
+- **THEN** the row's `status` remains `running` and the row's
+  `autoMergeFailReason` remains `undefined`; the reducer does
+  not crash and does not transition the row to
+  `succeeded-but-unmerged`
+
+#### Scenario: subsequent auto-merge-failed updates the reason
+
+- **WHEN** the reducer is in a state where `foo` is
+  `succeeded-but-unmerged` with `autoMergeFailReason =
+  "conflict"` and receives a subsequent `auto-merge-failed`
+  event for `foo` with `reason: "dirty-working-tree"` (e.g.
+  the operator dirtied the tree and another autorun cycle
+  re-attempted)
+- **THEN** the row's `status` remains
+  `succeeded-but-unmerged` and `autoMergeFailReason` is
+  updated to `"dirty-working-tree"` (latest reason wins)
+
 ### Requirement: Brief status glyphs
 
 The `autorun-tui` capability SHALL render each brief row's status
@@ -233,8 +292,9 @@ brief-list pane SHALL render the SAME glyph and the SAME color
 the `run-tui` capability's status pane renders for the
 corresponding node status (per its "TUI layout" requirement),
 so that the visual vocabulary is identical between the two
-panes. The `skipped` brief status has no node analog and keeps
-its own brief-specific glyph and color.
+panes. The `skipped` and `succeeded-but-unmerged` brief statuses
+have no node analog and keep their own brief-specific glyph and
+color.
 
 The mapping SHALL be:
 
@@ -245,20 +305,30 @@ The mapping SHALL be:
 | `succeeded` | filled circle (`●` Unicode / `o` ASCII), green | run-tui status pane `succeeded` row |
 | `failed` | filled circle (`●` Unicode / `!` ASCII), red | run-tui status pane `failed` row |
 | `skipped` | `↷` Unicode / `~` ASCII, gray | brief-specific (no node analog) |
+| `succeeded-but-unmerged` | half circle (`◐` Unicode / `*` ASCII), yellow | brief-specific (no node analog) |
 
 When the runtime environment does not advertise a UTF-8 locale
 (per the `run-tui` capability's "TUI layout" requirement), the
 TUI SHALL substitute ASCII glyphs per the table above. The
 ASCII fallback policy SHALL be inherited from the `run-tui`
 capability's glyph table for the four shared states; the
-brief-specific `skipped` fallback (`~`) is the only autorun-
-owned ASCII glyph.
+brief-specific `skipped` (`~`) and `succeeded-but-unmerged`
+(`*`) ASCII glyphs are the only autorun-owned ASCII glyphs.
 
 The brief-list pane SHALL apply the status color to BOTH the
 glyph cell and the brief change-name cell on the row (matching
 the run-tui status pane's behavior of coloring both the glyph
 and the node id). A drift between glyph color and label color
 on either side SHALL be considered a regression.
+
+The brief-list pane SHALL render a `succeeded-but-unmerged`
+row with a trailing suffix carrying the
+`autoMergeFailReason` value when present, so the operator
+sees at a glance why the merge failed without drilling in.
+The suffix SHALL be formatted as ` (unmerged: <reason>)` in
+both Unicode and ASCII modes; the color of the suffix SHALL
+match the row color (yellow) per the dual-coloring rule
+above.
 
 #### Scenario: Queued brief renders with the dim queued glyph
 
@@ -296,6 +366,16 @@ on either side SHALL be considered a regression.
 - **THEN** the brief-list pane's row shows the skipped glyph
   (`↷` in Unicode, `~` in ASCII fallback), gray (brief-
   specific; no run-tui node analog)
+
+#### Scenario: succeeded-but-unmerged brief renders with the half-circle glyph
+
+- **WHEN** a brief's `status` is `succeeded-but-unmerged`
+  with `autoMergeFailReason = "conflict"`
+- **THEN** the brief-list pane's row shows the half-circle
+  glyph (`◐` in Unicode, `*` in ASCII fallback), yellow,
+  followed by the trailing suffix ` (unmerged: conflict)`;
+  both the glyph and the change-name and the suffix carry
+  the yellow color token
 
 #### Scenario: Brief-list and run-tui status pane glyphs match across shared statuses
 
