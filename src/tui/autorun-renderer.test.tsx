@@ -3,7 +3,7 @@ import { createInkAutorunRenderer } from "./autorun-renderer.js";
 
 describe("createInkAutorunRenderer", () => {
   it("renders into the provided stdout and resolves on programmatic raw-switch", async () => {
-    const stdout = Object.assign(new (require("stream").Writable)(), {
+    const stdout = Object.assign(new (require("node:stream").Writable)(), {
       isTTY: false,
       columns: 80,
       rows: 24,
@@ -23,7 +23,7 @@ describe("createInkAutorunRenderer", () => {
   });
 
   it("q with no in-flight runs resolves with action=quit and exitCode=0", async () => {
-    const stdout = Object.assign(new (require("stream").Writable)(), {
+    const stdout = Object.assign(new (require("node:stream").Writable)(), {
       isTTY: false,
       columns: 80,
       rows: 24,
@@ -47,7 +47,7 @@ describe("createInkAutorunRenderer", () => {
   });
 
   it("q with in-flight runs stays mounted; a second q escalates and exits 2", async () => {
-    const stdout = Object.assign(new (require("stream").Writable)(), {
+    const stdout = Object.assign(new (require("node:stream").Writable)(), {
       isTTY: false,
       columns: 80,
       rows: 24,

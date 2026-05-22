@@ -1,7 +1,7 @@
 import { render } from "ink-testing-library";
 import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
-import { AutorunHotkeyInput, type AutorunHandlers } from "./autorun-app.js";
+import { type AutorunHandlers, AutorunHotkeyInput } from "./autorun-app.js";
 import {
   type AutorunUIEvent,
   type BriefListState,

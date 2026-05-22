@@ -2,16 +2,12 @@ import { type FSWatcher, watch } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { type Brief, BriefLoadError, loadBrief } from "../brief/loader.js";
-import type { EmittedEvent } from "../executor/types.js";
 import type { ExecutorRegistry } from "../executor/registry.js";
+import type { EmittedEvent } from "../executor/types.js";
 import { loadFactory } from "../factory/loader.js";
-import { resolveFactoryByName } from "./resolve.js";
 import { openDefaultRunStore } from "../storage/open.js";
 import type { RunStore } from "../storage/run-store.js";
-import {
-  type InkAutorunRenderer,
-  createInkAutorunRenderer,
-} from "../tui/autorun-renderer.js";
+import { type InkAutorunRenderer, createInkAutorunRenderer } from "../tui/autorun-renderer.js";
 import { type AutorunFilter, AutorunFilterError, parseAutorunFilter } from "./autorun-filter.js";
 import {
   type AutorunRunFactory,
@@ -20,6 +16,7 @@ import {
   type SchedulerDecision,
   type SkipReason,
 } from "./autorun-scheduler.js";
+import { resolveFactoryByName } from "./resolve.js";
 import { runBriefAutomated } from "./run-brief.js";
 
 export interface AutorunIO {
@@ -460,10 +457,14 @@ export async function autorunAction(input: AutorunActionInput): Promise<number> 
       if (stopRequested && !dryRun) break;
       const decision = await scheduler.decide(b.brief, resolved.filter);
       if (dryRun) {
-        emitDryRunDecision(decision, (e) => {
-          emit(e);
-          renderer?.onEvent(e);
-        }, now);
+        emitDryRunDecision(
+          decision,
+          (e) => {
+            emit(e);
+            renderer?.onEvent(e);
+          },
+          now,
+        );
         continue;
       }
       if (decision.action === "schedule") {

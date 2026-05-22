@@ -27,7 +27,7 @@ import { runFactory } from "./runner/run.js";
 import { type DaemonHandle, startDaemon } from "./serve/server.js";
 import { openDefaultRunStore } from "./storage/open.js";
 import type { RunStore } from "./storage/run-store.js";
-import { createInkAutorunRenderer } from "./tui/autorun-renderer.js";
+import type { createInkAutorunRenderer } from "./tui/autorun-renderer.js";
 import { type InkRunRenderer, createInkRunRenderer } from "./tui/renderer.js";
 import { WorktreeConfigError, loadWorktreeConfig } from "./worktree/config.js";
 import { GitError, gitRevParseHead, gitWorktreeAdd } from "./worktree/git.js";

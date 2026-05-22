@@ -80,7 +80,10 @@ describe("autorunReducer", () => {
 
   it("dry-run-decision action=schedule routes to queued", () => {
     let s = createInitialBriefListState();
-    s = autorunReducer(s, ev({ kind: "dry-run-decision", ts: 0, change: "foo", action: "schedule" }));
+    s = autorunReducer(
+      s,
+      ev({ kind: "dry-run-decision", ts: 0, change: "foo", action: "schedule" }),
+    );
     expect(s.briefs[0]?.status).toBe("queued");
   });
 

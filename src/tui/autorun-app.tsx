@@ -6,7 +6,7 @@ import { BriefListPane } from "./brief-list-pane.js";
 import type { StatusGlyphs } from "./glyphs.js";
 import { HelpOverlay } from "./help-overlay.js";
 import { LogPane } from "./log-pane.js";
-import { type ReducerEvent, type RunState, type UIEvent } from "./reducer.js";
+import type { ReducerEvent, RunState, UIEvent } from "./reducer.js";
 import { StatusPane } from "./status-pane.js";
 
 export interface AutorunHandlers {
@@ -51,17 +51,11 @@ function HotkeyHint({
 }): ReactElement {
   if (state.quitConfirm) {
     return (
-      <Text color="yellow">
-        Draining in-flight runs ({inFlight}). Press q again to force-quit.
-      </Text>
+      <Text color="yellow">Draining in-flight runs ({inFlight}). Press q again to force-quit.</Text>
     );
   }
   if (state.focus === "brief-list") {
-    return (
-      <Text color="gray">
-        ↑/↓ select · Enter drill in · r raw · ? help · q quit
-      </Text>
-    );
+    return <Text color="gray">↑/↓ select · Enter drill in · r raw · ? help · q quit</Text>;
   }
   return (
     <Text color="gray">

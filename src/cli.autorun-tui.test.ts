@@ -4,14 +4,11 @@ import path from "node:path";
 import { Writable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runCli } from "./cli.js";
-import { SqliteRunStore } from "./storage/sqlite.js";
 import type { AutorunEvent } from "./cli/autorun.js";
 import type { EmittedEvent } from "./executor/types.js";
-import type {
-  AutorunRendererExitInfo,
-  InkAutorunRenderer,
-} from "./tui/autorun-renderer.js";
+import { SqliteRunStore } from "./storage/sqlite.js";
 import type { BriefListState } from "./tui/autorun-reducer.js";
+import type { AutorunRendererExitInfo, InkAutorunRenderer } from "./tui/autorun-renderer.js";
 
 class BufferStream extends Writable {
   chunks: string[] = [];
@@ -37,9 +34,7 @@ interface FakeAutorunRenderer {
   resolveExit: (info: AutorunRendererExitInfo) => void;
 }
 
-function makeFakeAutorunRenderer(
-  exitOnFirstStarted = true,
-): FakeAutorunRenderer {
+function makeFakeAutorunRenderer(exitOnFirstStarted = true): FakeAutorunRenderer {
   const autorunEvents: AutorunEvent[] = [];
   const runEvents: Array<{ change: string; entry: EmittedEvent }> = [];
   let resolveExit: ((value: AutorunRendererExitInfo) => void) | null = null;
@@ -189,19 +184,16 @@ describe("runCli — autorun output mode selection", () => {
     const out = new BufferStream({ isTTY: true });
     const err = new BufferStream();
     let rendererBuilt = false;
-    const code = await runCli(
-      ["autorun", "--raw", "--tui", "--watch", path.join(repo, "inputs")],
-      {
-        stdout: out,
-        stderr: err,
-        runCwd: repo,
-        createAutorunTuiRenderer: () => {
-          rendererBuilt = true;
-          return makeFakeAutorunRenderer().renderer;
-        },
-        openRunStore: async () => freshStore(),
+    const code = await runCli(["autorun", "--raw", "--tui", "--watch", path.join(repo, "inputs")], {
+      stdout: out,
+      stderr: err,
+      runCwd: repo,
+      createAutorunTuiRenderer: () => {
+        rendererBuilt = true;
+        return makeFakeAutorunRenderer().renderer;
       },
-    );
+      openRunStore: async () => freshStore(),
+    });
     expect(code).toBe(1);
     expect(err.text()).toMatch(/--raw and --tui are mutually exclusive/);
     expect(rendererBuilt).toBe(false);
@@ -252,7 +244,10 @@ describe("runCli — autorun output mode selection", () => {
     expect(code).toBe(0);
     expect(rendererBuilt).toBe(false);
     // JSON shape: each line parses as JSON.
-    const lines = out.text().split("\n").filter((l) => l.length > 0);
+    const lines = out
+      .text()
+      .split("\n")
+      .filter((l) => l.length > 0);
     expect(lines.length).toBeGreaterThan(0);
     for (const line of lines) {
       // Should not throw.
