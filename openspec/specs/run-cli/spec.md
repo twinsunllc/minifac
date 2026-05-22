@@ -1624,6 +1624,12 @@ requirement). The subcommand SHALL accept the following options:
   CLI SHALL exit `1` with a stderr message naming the path.
 - `--max-concurrent <n>` — the parallel-run cap. Default `1`.
   SHALL be a positive integer; zero or negative is a usage error.
+- `--max-failures <n>` — per-session failure cap per change.
+  Default `3`. SHALL be a non-negative integer; negative,
+  fractional, or non-numeric values are a usage error. A value of
+  `0` disables the cap (legacy indefinite-retry behavior). The
+  cap is enforced by the `auto-mode` capability's "Autorun
+  per-session failure cap" requirement.
 - `--interval <ms>` — the poll cadence in milliseconds. Default
   `10000`. SHALL be a positive integer; zero or negative is a
   usage error.
@@ -1738,6 +1744,21 @@ autorun process exit code; per-run failures are logged as
   "/[unterminated/"`
 - **THEN** the CLI writes a stderr message naming the flag and the
   regex parse error, and exits `1`
+
+#### Scenario: Bad `--max-failures` value is a usage error
+
+- **WHEN** the user invokes `minifac autorun --max-failures -1`
+- **THEN** the CLI writes a stderr message naming the flag and the
+  non-negative-integer requirement, and exits `1`
+
+#### Scenario: `--max-failures 0` disables the cap
+
+- **WHEN** the user invokes `minifac autorun --max-failures 0`
+  against a repo whose `inputs/` contains a brief that fails
+  repeatedly
+- **THEN** the autorun process keeps scheduling that brief on
+  every poll cycle (legacy indefinite-retry behavior); no
+  `skipped reason=failure-cap` event is ever emitted
 
 #### Scenario: SIGINT drains in-flight runs and exits zero
 
