@@ -31,6 +31,11 @@ belong in git. See [[0012-Where-State-Lives]].
   emitted_at
 - **node_executions**: run_id, node_id, iteration, status, started_at,
   ended_at, exit_code, sentinel_status
+- **node_outputs** (schema v3): run_id, node_id, iteration,
+  output_key, output_type, path, size, mtime — an index of declared
+  [[Outputs]] produced per node iteration. Contents stay on disk
+  under `~/.minifac/outputs/<run-id>/<node-id>/<iteration>/`; the row
+  records location + metadata only.
 
 Exact schema lives in the implementation (the
 `run-history-persistence` proposal). Treat the above as an indication

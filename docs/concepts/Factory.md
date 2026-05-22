@@ -73,9 +73,20 @@ Recognized namespaces:
   fields: `change`, `body`, `factory`, `base_branch`, `model`. Optional
   fields substitute the empty string when absent; unknown identifiers
   pass through verbatim.
-- `run.*` — sourced from the [[Run]]. Today the only resolved field is
-  `run.cwd`, which expands to the path of the [[Worktree]] minifac
-  created for this run (or `process.cwd()` under `--in-place`).
+- `run.*` — sourced from the [[Run]]. Two resolved fields:
+  - `run.cwd` — path of the [[Worktree]] minifac created for this run
+    (or `process.cwd()` under `--in-place`).
+  - `run.outputs_dir` — absolute path of the per-node-per-iteration
+    outputs directory under `~/.minifac/outputs/<run-id>/<node-id>/<iteration>/`.
+    The runner creates this directory before dispatch (mkdirp) so the
+    executor can write declared [[Outputs]] to it without race. See
+    [[Outputs]] for the rest of the contract.
+- `priorResults.<node-id>.outputs.<key>[:read]` — sourced from the
+  latest iteration of `<node-id>`'s [[Outputs]]. The no-suffix form
+  substitutes the absolute filesystem path; the `:read` suffix inlines
+  the file's contents (64 KB cap; throws on oversize or directory
+  outputs). Missing prior result or missing key substitutes the empty
+  string.
 - `inputs.*` — sourced from the per-node inputs map produced by step
   inlining. Only present on nodes that were inlined from a [[Step]] via
   `uses:`. Strings substitute verbatim; numbers/booleans via
@@ -175,6 +186,24 @@ it and inlines the step's `executor` and `with`, discarding any
 | `cwd` | string | no | — | Working directory for this node. Accepts `{{ run.cwd }}` and `{{ brief.* }}` template tokens. If omitted the runner's default cwd applies. |
 | `terminal` | boolean | no | `false` | When `true`, a successful exit from this node ends the run. Use on the last node in a forward-flow path. |
 | `max_iterations` | positive integer | no | — | Maximum times this node may be dispatched across the entire run (counting all edge traversals). Absent means unlimited, subject to `max_traversals` on inbound edges. |
+| `outputs` | map (string → [[#Output fields\|output]]) | no | — | Declared outputs the node produces (typed JSON values, files, or directories under the per-iteration outputs directory). Keys match the same identifier grammar as step input keys. See [[Outputs]] for the full contract. |
+
+### Output fields
+
+Each entry under a node's `outputs:` map is a discriminated union on
+`type:` — one of `"value"`, `"file"`, or `"directory"`. Common fields
+across all three: `required` (boolean, default `false`) and
+`description` (optional string). Per-type fields:
+
+| Type | Extra fields | Storage location | Validation |
+|---|---|---|---|
+| `value` | `shape` (reserved; ignored today) | `<outputs_dir>/<key>.json` (model-written) | Must exist and parse as JSON when `required: true`. |
+| `file` | `filename` (string, no path separators) | `<outputs_dir>/<filename>` or globbed `<key>.*` when filename omitted | Required → exactly one file must match. |
+| `directory` | (none) | `<outputs_dir>/<key>/` | Required → directory exists and contains ≥1 file. |
+
+See [[Outputs]] for the runtime contract, template-access syntax, and
+the operator surfaces (`runs show --outputs`, `runs cat`,
+`prune --outputs`).
 
 ### `with:` fields (claude executor)
 

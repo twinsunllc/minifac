@@ -17,7 +17,11 @@ import {
   resolveFactoryByName,
   resolveRunArg,
 } from "./cli/resolve.js";
-import { listAction as runsListAction, showAction as runsShowAction } from "./cli/runs.js";
+import {
+  catAction as runsCatAction,
+  listAction as runsListAction,
+  showAction as runsShowAction,
+} from "./cli/runs.js";
 import { stepsAction } from "./cli/steps.js";
 import { ClaudeExecutor } from "./executor/claude.js";
 import { ExecutorRegistry } from "./executor/registry.js";
@@ -44,6 +48,7 @@ import {
   worktreeKeyForFactory,
 } from "./worktree/paths.js";
 import { type PruneOptions, parseOlderThan, pruneWorktrees } from "./worktree/prune.js";
+import { pruneOutputs } from "./outputs/prune.js";
 
 export interface CliIO {
   stdout: NodeJS.WritableStream & { isTTY?: boolean };
@@ -606,12 +611,17 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
       "Override the age cutoff. Format: <int><m|h|d>, e.g. 7d, 12h, 30m",
     )
     .option("--failed", "Also remove worktrees from failed runs")
+    .option(
+      "--outputs",
+      "Also prune per-run output directories under ${MINIFAC_HOME}/outputs/",
+    )
     .action(
       async (opts: {
         all?: boolean;
         merged?: boolean;
         olderThan?: string;
         failed?: boolean;
+        outputs?: boolean;
       }) => {
         const cwd = io.runCwd ?? process.cwd();
         try {
@@ -665,6 +675,38 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
           );
           for (const e of counts.errors) {
             io.stderr.write(`Failed to remove ${e.dir}: ${e.message}\n`);
+          }
+
+          // Additive outputs prune.
+          if (opts.outputs) {
+            let outStore: RunStore | undefined;
+            try {
+              outStore = await (io.openRunStore ?? openDefaultRunStore)(cwd);
+            } catch {
+              outStore = undefined;
+            }
+            let outCounts: Awaited<ReturnType<typeof pruneOutputs>>;
+            try {
+              outCounts = await pruneOutputs({
+                options,
+                ...(outStore !== undefined ? { store: outStore } : {}),
+                stderr: io.stderr,
+              });
+            } finally {
+              if (outStore) {
+                try {
+                  await outStore.close();
+                } catch {
+                  // best effort
+                }
+              }
+            }
+            io.stdout.write(
+              `Pruned outputs: merged-old=${outCounts.removed["merged-old"]}, unmerged-old=${outCounts.removed["unmerged-old"]}, fresh=${outCounts.removed.fresh}, failed=${outCounts.removed.failed}\n`,
+            );
+            for (const e of outCounts.errors) {
+              io.stderr.write(`Failed to remove outputs ${e.dir}: ${e.message}\n`);
+            }
           }
           exitCode = 0;
         } catch (err) {
@@ -720,7 +762,39 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
     .description("Print the persisted event log for one run (id or unambiguous prefix).")
     .option("--follow", "Tail an active run via short-interval polling")
     .option("--json", "Emit NDJSON, one event per line")
-    .action(async (id: string, opts: { follow?: boolean; json?: boolean }) => {
+    .option("--outputs", "Append the tree of produced outputs after the event log")
+    .action(
+      async (id: string, opts: { follow?: boolean; json?: boolean; outputs?: boolean }) => {
+        const cwd = io.runCwd ?? process.cwd();
+        let store: RunStore | undefined;
+        try {
+          store = await (io.openRunStore ?? openDefaultRunStore)(cwd);
+        } catch (err) {
+          io.stderr.write(`Could not open run history store: ${(err as Error).message}\n`);
+          exitCode = 1;
+          return;
+        }
+        try {
+          exitCode = await runsShowAction({
+            idOrPrefix: id,
+            ...(opts.follow !== undefined ? { follow: opts.follow } : {}),
+            ...(opts.json !== undefined ? { json: opts.json } : {}),
+            ...(opts.outputs !== undefined ? { outputs: opts.outputs } : {}),
+            store,
+            io: { stdout: io.stdout, stderr: io.stderr },
+          });
+        } finally {
+          await store.close();
+        }
+      },
+    );
+
+  runsCmd
+    .command("cat <id> <selector>")
+    .description(
+      "Print one produced output to stdout. Selector: <node-id>[:<iter>]/<output-key>[/<filename>]",
+    )
+    .action(async (id: string, selector: string) => {
       const cwd = io.runCwd ?? process.cwd();
       let store: RunStore | undefined;
       try {
@@ -731,10 +805,9 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
         return;
       }
       try {
-        exitCode = await runsShowAction({
+        exitCode = await runsCatAction({
           idOrPrefix: id,
-          ...(opts.follow !== undefined ? { follow: opts.follow } : {}),
-          ...(opts.json !== undefined ? { json: opts.json } : {}),
+          selector,
           store,
           io: { stdout: io.stdout, stderr: io.stderr },
         });
