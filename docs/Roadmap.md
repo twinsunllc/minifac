@@ -88,6 +88,14 @@ enforces this beyond explicit `depends_on` fields.
   after N consecutive failures of the same change. Restart of
   autorun resets the counter. Prevents a broken brief from
   hammering the loop indefinitely.
+- [ ] **`brief-cleanliness-gate`** —
+  [[0033-Brief-Cleanliness-Gate]]. Autorun skips briefs whose
+  `inputs/<change>.md` is uncommitted (untracked / modified /
+  staged) with new skip reason `unclean`. One-shot
+  `minifac run` warns + pauses 3s; new `--require-clean` flag
+  makes it a hard error. Closes the silent divergence between
+  working-tree brief content and what the run worktree's ref
+  checkout sees.
 
 ## Open-source readiness (chore tier)
 
