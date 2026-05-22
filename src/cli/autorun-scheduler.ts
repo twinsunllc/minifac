@@ -17,10 +17,7 @@ export type SkipReason =
  *  either a real in-flight run (some live PID still holds the lock) or an
  *  orphan (lockfile missing OR PID dead). See `auto-mode` capability,
  *  "Autorun reconciles orphaned runs via per-change lockfile probe". */
-export type ProbeChangeLiveness = (
-  change: string,
-  factoryName: string,
-) => Promise<LockProbeResult>;
+export type ProbeChangeLiveness = (change: string, factoryName: string) => Promise<LockProbeResult>;
 
 export type SchedulerDecision =
   | { action: "schedule"; brief: Brief }

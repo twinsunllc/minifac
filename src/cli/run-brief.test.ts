@@ -6,13 +6,13 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { loadBrief } from "../brief/loader.js";
 import { ExecutorRegistry } from "../executor/registry.js";
 import type { NodeEvent, NodeExecutor, ResolvedNode, RunContext } from "../executor/types.js";
-import { SqliteRunStore } from "../storage/sqlite.js";
 import type {
   FinalizeRunInput,
   RecordNodeEndInput,
   RunId,
   RunStore,
 } from "../storage/run-store.js";
+import { SqliteRunStore } from "../storage/sqlite.js";
 import type { LockHandle } from "../worktree/lock.js";
 import { claimLock } from "../worktree/lock.js";
 import { runBriefAutomated } from "./run-brief.js";

@@ -10,11 +10,7 @@ import type { RunStore } from "../storage/run-store.js";
 import { type InkAutorunRenderer, createInkAutorunRenderer } from "../tui/autorun-renderer.js";
 import { loadWorktreeConfig } from "../worktree/config.js";
 import { probeLockLiveness } from "../worktree/lock.js";
-import {
-  computeRepoHash,
-  lockPathForKey,
-  worktreeKeyForBrief,
-} from "../worktree/paths.js";
+import { computeRepoHash, lockPathForKey, worktreeKeyForBrief } from "../worktree/paths.js";
 import { type AutorunFilter, AutorunFilterError, parseAutorunFilter } from "./autorun-filter.js";
 import {
   type AutorunRunFactory,
