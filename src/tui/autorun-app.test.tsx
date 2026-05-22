@@ -230,6 +230,17 @@ describe("AutorunApp", () => {
     // regression to two columns would surface in CI as a snapshot diff.
     // Regions, left to right: brief list (24) | nodes pane (24) | log pane (flex).
     expect(frame).toMatchSnapshot();
+
+    // Snapshot-independent invariant: the drilled-in body row MUST contain
+    // exactly two vertical-rule glyphs (briefs|nodes and nodes|events). If a
+    // future snapshot regeneration captures a one-rule (two-column) bug, this
+    // assertion still fails.
+    const bodyLine =
+      lines.find((l) => l.includes("propose") && l.includes("alpha")) ??
+      lines.find((l) => l.includes("propose")) ??
+      "";
+    const interiorRuleCount = (bodyLine.match(/│/g)?.length ?? 0) - 2;
+    expect(interiorRuleCount).toBe(2);
   });
 
   it("drilled-in right region mirrors RunApp body for the same RunState", () => {

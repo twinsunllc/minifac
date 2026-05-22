@@ -1,5 +1,5 @@
 import { render } from "ink";
-import { type ReactElement, useEffect, useState } from "react";
+import { type ReactElement, useEffect, useRef, useState } from "react";
 import type { AutorunEvent } from "../cli/autorun.js";
 import type { EmittedEvent } from "../executor/types.js";
 import { AutorunApp } from "./autorun-app.js";
@@ -76,6 +76,8 @@ function RendererRoot({
 }): ReactElement {
   const [state, setState] = useState<BriefListState>(() => initialState);
   const [inFlight, setInFlight] = useState<number>(0);
+  const stateRef = useRef(state);
+  stateRef.current = state;
 
   const dispatchAutorun = (event: AutorunUIEvent): void => {
     setState((prev) => autorunReducer(prev, event));
@@ -91,6 +93,11 @@ function RendererRoot({
     });
   };
 
+  // Bind the bridge once at mount. The bridge functions close over the
+  // stable `setState`/`setInFlight` setters (and the always-fresh
+  // `stateRef`) so they do not need to be re-bound per render. Binding
+  // once also avoids the cleanup/setup race in test environments where
+  // React 19 strict mode double-invokes effects.
   useEffect(() => {
     bridgeRef.current = {
       onEvent: (event) => {
@@ -114,21 +121,42 @@ function RendererRoot({
           return { ...prev, briefs };
         });
       },
-      getState: () => state,
+      getState: () => stateRef.current,
       setInFlight: (n) => setInFlight(n),
     };
     return () => {
       bridgeRef.current = null;
     };
-  });
+    // biome-ignore lint/correctness/useExhaustiveDependencies: bind once
+  }, []);
 
-  // Tick the spinner ~10 fps while any brief is running.
+  // Tick the spinner ~10 fps while any brief is running. Also tick the
+  // currently-selected brief's embedded RunState (same 100ms clock,
+  // same runReducer path `minifac run` uses) whenever one of its nodes
+  // is in a running-ish status — that keeps the per-node spinner in the
+  // drilled-in status pane animating. Guards live inside the setState
+  // callbacks so they read the latest state rather than the initial
+  // closure.
   // biome-ignore lint/correctness/useExhaustiveDependencies: deliberate
   useEffect(() => {
     const handle = setInterval(() => {
-      if (state.briefs.some((b) => b.status === "running")) {
-        dispatchAutorun({ kind: "tick" });
-      }
+      setState((prev) => {
+        if (!prev.briefs.some((b) => b.status === "running")) return prev;
+        return autorunReducer(prev, { kind: "tick" });
+      });
+      setState((prev) => {
+        const row = prev.briefs[prev.selectedBriefIndex];
+        if (!row?.runState) return prev;
+        if (
+          !row.runState.nodes.some((n) => n.status === "running" || n.status === "retrying")
+        ) {
+          return prev;
+        }
+        const nextRun = runReducer(row.runState, { kind: "tick" });
+        const briefs = prev.briefs.slice();
+        briefs[prev.selectedBriefIndex] = { ...row, runState: nextRun };
+        return { ...prev, briefs };
+      });
     }, 100);
     return () => clearInterval(handle);
   }, []);
