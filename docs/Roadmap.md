@@ -22,13 +22,7 @@ briefs supply intent, [[Studio]] eventually provides inspection
 
 ## In-flight
 
-- **`node-outputs-mcp`** — implementation in progress.
-  Per-run inline MCP server exposing typed
-  `mcp__minifac__report_<key>` tools derived from each dispatching
-  node's `value` outputs. Bridges into the same on-disk paths the
-  v1 filesystem transport used, with a `supportsMcp` capability
-  flag on the executor interface for fallback. See
-  [[0029-Node-Outputs-MCP]].
+(none — repo is in a clean state, ready to tag v0.1.0)
 
 ## Briefs queued ready-to-run
 
@@ -36,43 +30,6 @@ These have ADRs + brief markdown committed; just need a `minifac
 run <change>` to start. Listed roughly in suggested order; nothing
 enforces this beyond explicit `depends_on` fields.
 
-- [ ] **`bundle-builtins`** — [[0030-Bundle-Builtins]].
-  Pre-publish blocker. Ship `examples/` in the tarball and
-  teach the resolver to find `minifac:*` references in the
-  installed package directory. Today `npx minifac init
-  --with-sdd && npx minifac run …` is aspirational — the
-  README quickstart doesn't actually work against a fresh
-  npm install. Fixes that. Also documents the
-  eventual resolver chain in [[Reference]].
-- [ ] **`cli-symlink-main-guard`** —
-  [[0023-CLI-Symlink-Main-Guard]]. One-line fix: the `isMain`
-  guard in `src/cli.ts` compares `import.meta.url` (realpath)
-  against `process.argv[1]` (symlink path), so `npm link` /
-  `npx minifac` invocations silently no-op. Switch to a
-  realpath comparison. Hard prerequisite for the
-  open-source-readiness install-path story.
-- [ ] **`vitest-3-upgrade`** — [[0025-Vitest-3-Upgrade]].
-  Bump vitest 2.x → 3.x to clear 5 moderate-severity audit
-  findings in the dev `vite`/`esbuild` chain. Mostly mechanical;
-  watch for the new default `threads` pool affecting
-  isolation-sensitive tests.
-- [ ] **`node-outputs`** — [[0027-Node-Outputs]]. Per-node
-  `outputs:` declaration in factory schema, with three types
-  (`value`, `file`, `directory`); storage at
-  `~/.minifac/outputs/<run-id>/<node-id>/<iteration>/` outside
-  the worktree; post-execution validation with
-  `missing_required_output` failure reason; template
-  substitution via `{{ priorResults.<id>.outputs.<key> }}`;
-  CLI surfaces for inspection and pruning. v1 uses filesystem
-  JSON transport for `value` outputs. Unblocks fan-in shapes
-  like the proposed `code-review.yaml` example.
-- [ ] **`node-outputs-nudge`** — [[0028-Node-Outputs-Nudge]].
-  Single-turn recovery loop when required outputs missing
-  after a `succeeded` sentinel. Default budget 1, opt-out
-  with `output_nudge_budget: 0`. Sentinel-failed nodes never
-  nudged. `depends_on: [node-outputs]`.
-- (moved to **In-flight**) **`node-outputs-mcp`** —
-  [[0029-Node-Outputs-MCP]]. Implementation in progress.
 - [ ] **`callback-status-signaling`** *(design-pending — see
   [[Open-Questions]] § "Callback intervention surface")* —
   [[0017-Callback-Status-Signaling]]. Originally proposed as a
@@ -82,63 +39,84 @@ enforces this beyond explicit `depends_on` fields.
   intervention surface only, and it needs a re-scoped design
   before the brief is runnable. **Blocked from autorun via a
   sentinel `depends_on` entry; clear the dep when the design lands.**
-- [ ] **`autorun-failure-backoff`** —
-  [[0031-Autorun-Failure-Backoff]]. Per-session failure cap on
-  `minifac autorun` (default 3); skip with `failure-cap` reason
-  after N consecutive failures of the same change. Restart of
-  autorun resets the counter. Prevents a broken brief from
-  hammering the loop indefinitely.
-- [ ] **`brief-cleanliness-gate`** —
-  [[0033-Brief-Cleanliness-Gate]]. Autorun skips briefs whose
-  `inputs/<change>.md` is uncommitted (untracked / modified /
-  staged) with new skip reason `unclean`. One-shot
-  `minifac run` warns + pauses 3s; new `--require-clean` flag
-  makes it a hard error. Closes the silent divergence between
-  working-tree brief content and what the run worktree's ref
-  checkout sees.
 
 ## Open-source readiness (chore tier)
 
-Concrete prerequisites for actually open-sourcing, mostly
-non-architectural. Mostly done outside the factory — the work is
-files, not behavior. The factory is reserved for the install-path
-fix ([[cli-symlink-main-guard]]) and possibly the examples library.
+Concrete prerequisites for actually open-sourcing the engine.
+Mostly done outside the factory — the work is files, not behavior.
 
 - [x] **LICENSE** — MIT (Jami Couch, 2026)
-- [x] **CHANGELOG.md** — Keep-a-Changelog format, scaffolded with
-      a TBD 0.1.0 entry
+- [x] **CHANGELOG.md** — Keep-a-Changelog format, 0.1.0 entry
+      reflects the full shipped feature surface
 - [x] **CONTRIBUTING.md** — short dev-loop guide + SDD pointer +
-      `pinact` discipline note
+      `pinact` + dependency-cooldown discipline notes
 - [x] **package.json polish** — license, repository, homepage,
       bugs, keywords, author, version bumped to 0.1.0
 - [x] **CI for the repo itself** — `.github/workflows/`:
-      `ci.yml` (build/test/lint), `dependency-review.yml` (PR
-      gate), `security.yml` (nightly `npm audit`),
-      `codeql.yml` (JS/TS static analysis). All actions
-      SHA-pinned per [[0024-CI-Security-Policy]].
-- [ ] **`cli-symlink-main-guard` shipped** — hard prerequisite
-      for the install path. Brief queued; tiny dogfood.
-- [ ] **Polished user-facing README** — current README is
-      honest internal docs; needs a top section that's
-      first-30-seconds compelling. Describe what minifac *is*
-      and who it's for; resist the urge to enumerate
-      competitors (best-in-class OSS READMEs don't).
-- [ ] **Install path** — `npm publish` for the engine; document
-      `npx minifac` as the canonical invocation. Blocked on
-      cli-symlink-main-guard.
+      `ci.yml` (build/test/lint, **matrix on Node 22 + 24**),
+      `dependency-review.yml` (PR gate), `security.yml` (nightly
+      `npm audit`), `codeql.yml` (JS/TS static analysis),
+      `release.yml` (tag-triggered npm publish with OIDC trusted
+      publisher + provenance). All actions SHA-pinned per
+      [[0024-CI-Security-Policy]].
+- [x] **`.npmrc`** — `min-release-age=3` enforces the 3-day
+      supply-chain cooldown locally at resolve time, complementing
+      the CI lockfile gate (`scripts/check-dep-freshness.mjs`).
+- [x] **`.nvmrc`** — Node 24 (Active LTS) for fresh contributors;
+      `engines.node` floor stays at 22 (Maintenance LTS).
+- [x] **Polished user-facing README** — first-30-seconds
+      compelling, leads with `npx minifac run hello` smoke test,
+      consolidates feature inventory into CHANGELOG.
+- [x] **Install path proof** — `cli-symlink-main-guard` +
+      `bundle-builtins` shipped; smoke-tested end-to-end via
+      `npm pack` + fresh install in `/tmp`. `npx minifac` works.
+- [ ] **First `npm publish`** — one-shot manual publish from a
+      trusted machine for v0.1.0 (per [[0026-Release-Pipeline]]),
+      then tag-triggered automation takes over via `release.yml`.
+- [ ] **Flip repo public** — toggle visibility on GitHub once
+      v0.1.0 is published to npm.
 - [ ] **Public-friendly examples** beyond the SDD loop (e.g.,
-      `examples/factories/spec-drift-watch.yaml`,
-      `dependency-bump.yaml`, `code-review.yaml`). Unblocked
-      now that reusable-steps has landed; probably worth its
-      own brief.
-- [ ] *(maybe skip)* A "why minifac" pitch document. The
-      README's intro should carry this work. If after the
-      README rewrite there's still material that doesn't fit,
-      a separate pitch doc can be carved out — but the README
-      is the primary surface.
+      `examples/factories/code-review.yaml`,
+      `dependency-bump.yaml`). Unblocked now that node-outputs
+      has landed; probably worth its own brief. v0.2 candidate.
 
 ## Already landed (newest first)
 
+- ✅ `brief-cleanliness-gate` — autorun unconditionally skips
+  uncommitted briefs with `unclean` skip reason; one-shot
+  `minifac run` warns + pauses 3s, opt-in `--require-clean` for
+  strict use; recursive ancestor check; non-git degrade. See
+  [[0033-Brief-Cleanliness-Gate]].
+- ✅ `node-outputs-mcp` — per-run inline MCP server exposing
+  typed `mcp__minifac__report_<key>` tools per node's declared
+  `value` outputs; `supportsMcp` capability flag with filesystem
+  fallback. See [[0029-Node-Outputs-MCP]].
+- ✅ `node-outputs-nudge` — single-turn recovery loop when
+  required outputs missing after `succeeded` sentinel; default
+  budget 1. See [[0028-Node-Outputs-Nudge]].
+- ✅ `node-outputs` — per-node `outputs:` declaration with three
+  types (`value`, `file`, `directory`); storage outside the
+  worktree; post-execution validation; template substitution.
+  See [[0027-Node-Outputs]].
+- ✅ `autorun-failure-backoff` — per-session failure cap on
+  `minifac autorun` (default 3); restart-to-reset.
+  See [[0031-Autorun-Failure-Backoff]].
+- ✅ `autorun-auto-merge` — autorun merges run-scoped branches on
+  successful completion, halts on conflict.
+- ✅ `autorun-orphan-recovery` — autorun reconciles `running` rows
+  in `runs.db` via lockfile probe; killed-runner cleanup.
+- ✅ `autorun-tui` + `autorun-tui-fixes` + `autorun-tui-fixes-2`
+  + `autorun-tui-skip-no-clobber` — TUI for `minifac autorun`
+  showing per-brief embedded run state, scheduling decisions,
+  and skip reasons.
+- ✅ `bundle-builtins` — ship `examples/` in the npm tarball;
+  resolver finds `minifac:*` references in the installed
+  package directory. See [[0030-Bundle-Builtins]].
+- ✅ `cli-symlink-main-guard` — realpath-aware `isMain` guard;
+  `npm link` / `npx minifac` now work. See
+  [[0023-CLI-Symlink-Main-Guard]].
+- ✅ `vitest-3-upgrade` — vitest 2.x → 3.x; cleared 5 moderate
+  audit findings. See [[0025-Vitest-3-Upgrade]].
 - ✅ `auto-mode` — long-running `minifac autorun` polls
   `inputs/` for ready briefs and schedules them; depends_on
   resolution drives the queue order
