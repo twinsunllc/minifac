@@ -8,11 +8,11 @@ agent + tool nodes — on a fresh git worktree. The output is a
 branch with passing tests, ready to merge.
 
 ```bash
-npx minifac init --with-sdd           # scaffold inputs/, .minifac/, and an sdd factory
-npx minifac run hello                 # one-node smoke test — confirms install works
-npx minifac brief add-rate-limiting   # interactive Q&A → inputs/add-rate-limiting.md
-npx minifac run   add-rate-limiting   # propose → apply → verify → archive
-npx minifac merge add-rate-limiting   # fast-forward into main
+npx @twinsunllc/minifac init --with-sdd           # scaffold inputs/, .minifac/, and an sdd factory
+npx @twinsunllc/minifac run hello                 # one-node smoke test — confirms install works
+npx @twinsunllc/minifac brief add-rate-limiting   # interactive Q&A → inputs/add-rate-limiting.md
+npx @twinsunllc/minifac run   add-rate-limiting   # propose → apply → verify → archive
+npx @twinsunllc/minifac merge add-rate-limiting   # fast-forward into main
 ```
 
 A factory you don't have to write is included: `sdd` walks Claude
@@ -136,10 +136,10 @@ or per-node `uses:` references to reusable steps.
 
 ```bash
 # Use directly without installing
-npx minifac run hello
+npx @twinsunllc/minifac run hello
 
 # Install globally
-npm install -g minifac
+npm install -g @twinsunllc/minifac
 minifac --version
 ```
 

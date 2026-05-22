@@ -65,8 +65,8 @@ Mostly done outside the factory — the work is files, not behavior.
 - [x] **`.nvmrc`** — Node 24 (Active LTS) for fresh contributors;
       `engines.node` floor stays at 22 (Maintenance LTS).
 - [x] **Polished user-facing README** — first-30-seconds
-      compelling, leads with `npx minifac run hello` smoke test,
-      consolidates feature inventory into CHANGELOG.
+      compelling, leads with a smoke test, consolidates feature
+      inventory into CHANGELOG.
 - [x] **Install path proof** — `cli-symlink-main-guard` +
       `bundle-builtins` shipped; smoke-tested end-to-end via
       `npm pack` + fresh install in `/tmp`. `npx minifac` works.
