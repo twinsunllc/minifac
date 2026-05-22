@@ -50,17 +50,64 @@ for the policy and the rationale.
 
 ## Dependency cooldown
 
-CI rejects any package in `package-lock.json` published less than
-3 days ago (`npm run check:dep-freshness`). This is supply-chain
-hygiene — the nx postinstall worm and several typosquats were
-caught and yanked within 24–72 hours of publish. The cooldown
-forces malicious versions through that detection window before
-we ever execute their postinstall hooks.
+Supply-chain hygiene — the nx postinstall worm and several
+typosquats were caught and yanked within 24–72 hours of publish.
+A 3-day cooldown forces malicious versions through that detection
+window before we ever execute their postinstall hooks.
+
+We enforce this in two places:
+
+1. **Local resolve-time gate** via `.npmrc`:
+   ```
+   min-release-age=3
+   ```
+   `npm install` and `npm update` skip any package version
+   published less than 3 days ago, picking an older one instead.
+2. **Lockfile gate in CI** via `scripts/check-dep-freshness.mjs`
+   (runs before `npm ci`). Catches lockfiles that were committed
+   with freshly-published versions.
 
 If you bump a dep and CI is red on freshness, just wait. For a
 genuine same-day emergency (e.g., a CVE that needs an immediate
 patch), set `MIN_DEP_AGE_DAYS=0` in the workflow with the
 rationale in the PR description.
+
+### Expected `.npmrc` warning noise
+
+Every `npm` command currently prints two lines like:
+
+```
+npm warn Unknown project config "min-release-age". This will stop working in the next major version of npm.
+npm warn Unknown user config "min-release-age". This will stop working in the next major version of npm.
+```
+
+This is **expected and harmless.** `min-release-age` is a real,
+working npm config — npm just hasn't registered it in its
+config-schema definitions yet, so npm 11.x treats it as
+"unknown" and the boilerplate warning fires. The "will stop
+working in the next major version" text is auto-generated and
+misleading; the feature is staying. See
+[npm/cli#9199](https://github.com/npm/cli/issues/9199).
+
+### Known incompatibilities
+
+`min-release-age` is a new feature in npm 11.x and has two
+unresolved bugs that we don't trip today but you should know
+about if you're touching dependencies:
+
+- **Tilde version ranges** — adding a `~x.y.z` range to
+  `package.json` while `.npmrc` has `min-release-age` set will
+  cause `npm install` to fail with `--min-release-age cannot
+  be provided when using --before`
+  ([npm/cli#9005](https://github.com/npm/cli/issues/9005)).
+  All our current deps use `^`, so we don't hit this. Stick to
+  `^` until the upstream bug is fixed.
+- **Git / GitHub URL dependencies** — `git:` or `github:`
+  protocol deps combined with `min-release-age` make
+  `npm install` fail with `git dep preparation failed`
+  ([npm/cli#9291](https://github.com/npm/cli/issues/9291)). We
+  have none. Prefer npm-registry deps; if a git dep is the only
+  option, expect to drop `.npmrc` or work around it.
 
 ## Reporting issues
 
