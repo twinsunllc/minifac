@@ -1,29 +1,23 @@
 # minifac
 
-A miniature factory. Directed (possibly cyclic) graphs of agent + tool nodes,
-defined in YAML, executed by a small daemon with a live web viewer.
+**Structured AI workflows for your codebase.**
 
-## Why this exists
+Write a one-page brief describing what should change. minifac
+dispatches it through a *factory* — a small directed graph of
+agent + tool nodes — on a fresh git worktree. The output is a
+branch with passing tests, ready to merge.
 
-There's a lot of good work in agent orchestration today — visual
-workflow builders for non-developers, programmatic graph
-frameworks for code-defined pipelines, declarative multi-agent
-platforms spanning whole domains. minifac picks a narrow,
-focused position: **structured, repo-rooted agent workflows
-scoped to a single codebase**, with a small core, plain naming,
-and spec-driven development from day one. Three rules:
+```bash
+npx minifac init --with-sdd           # scaffold inputs/, .minifac/, and an sdd factory
+npx minifac brief add-rate-limiting   # interactive Q&A → inputs/add-rate-limiting.md
+npx minifac run   add-rate-limiting   # propose → apply → verify → archive
+npx minifac merge add-rate-limiting   # fast-forward into main
+```
 
-1. **Small core.** A graph runner, a streaming executor, a viewer. Nothing else
-   is "core."
-2. **Rational names.** Things are named after what they do. No anthropomorphic
-   metaphors, no proprietary jargon.
-3. **Spec-driven from day one.** Every behavior change goes through
-   propose → apply → verify → archive, using [OpenSpec](https://github.com/Fission-AI/OpenSpec).
-
-## Workflow: SDD (Spec-Driven Development)
-
-minifac is built using SDD, and ships a canonical SDD factory you can run
-against any repo:
+A factory you don't have to write is included: `sdd` walks Claude
+through propose → apply → verify → archive on each brief, looping
+back from verify to apply on failed checks until the gate passes
+or a budget is exhausted.
 
 ```
 propose ──▶ apply ──▶ verify ──┬──▶ archive
@@ -31,274 +25,213 @@ propose ──▶ apply ──▶ verify ──┬──▶ archive
    └────── (cycle on failure) ──┘
 ```
 
-- **propose** — produce a change proposal (design, tasks, spec deltas)
-- **apply** — implement the proposed change
-- **verify** — run checks; if they fail, route back to propose with feedback
-- **archive** — fold the change into the canonical spec
+## How it feels
 
-Cycles are bounded; human-in-the-loop gates only engage when the loop budget
-is exhausted or a node flags an intractable problem.
+A brief is a single markdown file you'd be comfortable handing
+to a colleague:
 
-## What's in the box (planned v0)
-
-- `minifac run <thing>` — kick off a run from the CLI by brief path,
-  brief name (`inputs/<name>.md`), or factory name (`examples/<name>.yaml`)
-- `minifac serve [dir]` — local daemon that watches a directory for factory
-  YAML, exposes a live web viewer at `http://127.0.0.1:4280` for picking a
-  factory, kicking off a run, and tailing node events over SSE
-  (localhost-only, no auth)
-- Factory schema (YAML): typed nodes, directed edges (cycles allowed),
-  per-node executor (`claude` by default; pluggable for codex / opencode / etc.),
-  top-level `brief: required | optional | none`
-- Brief schema (markdown + YAML frontmatter): per-change input authored
-  at `inputs/<change>.md`; substituted into factory prompts via
-  `{{ brief.change }}` and `{{ brief.body }}` tokens
-- Pluggable storage with [beads](https://github.com/steveyegge/beads) (work items)
-  and [Dolt](https://www.dolthub.com/) (run history) as the default impl.
-  SQLite-only fallback for environments without either.
-- Two example factories:
-  - `hello.yaml` — single-node, learn-the-schema example (brief-less)
-  - `sdd.yaml` — the propose/apply/verify/archive loop (brief-driven)
-
-## Run the example
-
-```
-npm install
-npm run build
-node dist/cli.js run hello
-```
-
-This invokes `examples/hello.yaml` by name. The factory declares
-`brief: none`, so no brief is needed. `examples/hello.yaml` defines a
-single `claude` node, so the `claude` CLI must be on `$PATH`.
-
-In an interactive terminal `minifac run` opens an inline TUI (status
-pane + log pane + hotkey bar — see [`docs/concepts/Run-TUI.md`](docs/concepts/Run-TUI.md)).
-For pipes, redirects, and CI it falls back to line-prefixed raw
-output. Pass `--raw` to force the raw output even in a TTY (the
-form scripts and CI should rely on); `--tui` forces the TUI in a
-non-TTY. The run exits with code `0` on success, `1` on
-load/validation errors, `2` on node failure, and `3` on budget
-exhaustion.
-
-To run the SDD loop on a real change, author a brief and invoke it by
-name:
-
-```
-# Author inputs/my-change.md (see examples/sample-brief.md for the shape).
-node dist/cli.js run my-change
-```
-
-The brief can be authored a few ways: walk through the question
-schema interactively with `node dist/cli.js brief my-change` (or
-`/brief my-change` in Claude Code, which uses the `brief-authoring`
-skill), pass `--from answers.yaml` for scripted input, or hand-edit
-`inputs/my-change.md` in your editor.
-
-The CLI looks for `inputs/my-change.md`, resolves its `factory:` field
-(usually `sdd`) to `examples/sdd.yaml`, creates a fresh git worktree
-at `~/.minifac/worktrees/run-my-change-<slug>/` (where `<slug>` is
-the first 6 hex chars of the run id), cuts a branch
-`run/my-change-<slug>` from `base_branch`, and runs the factory
-inside it with the brief in scope. The runner substitutes
-`{{ brief.change }}`, `{{ brief.body }}`, and `{{ run.cwd }}` (the
-worktree path) into each node's prompt and `cwd` before dispatch.
-Ship the result with `minifac merge my-change` (fast-forwards by
-default; falls back to a merge commit when the default branch has
-advanced). Reclaim disk with `minifac prune` once your branches
-have merged; it deletes both the directory and the per-run branch.
-See [`examples/sdd.md`](examples/sdd.md) for the full per-node
-contract and [`examples/sample-brief.md`](examples/sample-brief.md)
-for the brief template.
-
-Pass `--in-place` (or set `mode: in-place` in the brief frontmatter)
-to skip worktree creation and run in the current cwd — useful for CI
-or read-only factories.
-
-For a long-running companion to `minifac run`, use `minifac autorun`:
-it polls `inputs/` for ready briefs and schedules them as they appear,
-using the same primitive `minifac run` does. See
-[`docs/concepts/Auto-Mode.md`](docs/concepts/Auto-Mode.md) for the
-poll loop, concurrency cap, signal handling, `--once` (CI), and
-`--dry-run` (rehearsal) details.
-
-### Dependent briefs
-
-A brief MAY declare `depends_on: [<other-change>]` in its frontmatter
-to make another brief's completion a precondition:
-
-```yaml
+```markdown
 ---
-change: api-routes
+change: add-rate-limiting
 factory: sdd
-depends_on:
-  - api-schema
+base_branch: main
 ---
+
+## Background
+
+We're getting hit with 401-retry storms from a misbehaving client.
+The retry loop is uncapped on our side too.
+
+## What to do
+
+Add a token-bucket rate limiter to the /v1/auth endpoint. Default
+budget: 10 req/sec per IP, 600 req/hour. Limits configurable via
+env vars (RATE_LIMIT_*). Tests cover the default budget, the env
+override, and the 429 response shape.
+
+## Acceptance criteria
+
+- `npm test` passes
+- `RATE_LIMIT_PER_SECOND=1 curl ... -X POST ... ` returns 429 on
+  the second request within the same second
 ```
 
-A dep is satisfied when its file lives in `inputs/done/<name>.md`
-(strictly merged, not "the factory ran successfully on this
-machine"). `minifac run api-routes` refuses to start while
-`inputs/api-schema.md` is still active, naming the unsatisfied dep on
-stderr. Pass `--force` to override (cycles are never bypassed). On a
-successful brief-driven run, minifac itself runs `git mv
-inputs/<change>.md inputs/done/<change>.md` + a commit inside the
-worktree so dependents downstream see the dep satisfied as soon as
-the run lands. Use `minifac briefs` (or `--ready`) to see what's
-queued, blocked, and ready to pick up.
+`minifac run add-rate-limiting` then:
 
-Every run — under `minifac run` or `minifac serve` — is persisted to
-`~/.minifac/runs.db` (configurable). List recent runs with `minifac runs`
-and replay one with `minifac runs show <id>`; see
-[`minifac runs`](#minifac-runs--inspect-history) below.
+1. Creates `~/.minifac/worktrees/run-add-rate-limiting-<slug>/`
+   from `main`
+2. Cuts a branch `run/add-rate-limiting-<slug>`
+3. Runs `sdd`: **propose** writes a change spec, **apply**
+   implements it, **verify** runs your test/build/lint gates,
+   **archive** folds the spec into the canonical record
+4. If verify fails, routes back to apply with the failure
+   message in context (bounded retries)
+5. On success, marks the brief done (moves `inputs/add-rate-limiting.md`
+   → `inputs/done/`) and leaves you a branch to merge
 
-Alternatively, use `minifac serve` for a live web viewer of the same run
-(see the [`minifac serve`](#minifac-serve--web-viewer) section below).
+Every run is structured: typed input, typed output, persisted
+event log under `~/.minifac/runs.db`. You can replay, audit, and
+compare runs after the fact.
 
-## `minifac serve` — web viewer
+## Three rules
 
-`minifac serve` starts a local daemon that watches a directory for
-factory YAML files and exposes a small web viewer. It uses the same
-loader and runner as `minifac run`, so any factory that runs in the
-terminal will run identically under the daemon.
+1. **Small core.** A graph runner, a streaming executor, a viewer.
+   One TypeScript package, one SQLite file. That's the substrate.
+2. **Plain naming.** A node is a node, not a "worker" or "agent
+   persona." A factory is a factory. No metaphor-shaped
+   vocabulary to learn.
+3. **Spec-driven from day one.** Every behavior change in minifac
+   itself goes through the same `sdd` factory it ships. Dogfood
+   is the test.
 
-```
-node dist/cli.js serve examples/
-# minifac serve listening on http://127.0.0.1:4280 (watching examples/)
-```
-
-Then open <http://127.0.0.1:4280/> in a browser. You'll see:
-
-- a list of factories discovered in the watched directory,
-- the selected factory's graph (nodes + edges, with the verify→apply
-  retry edge styled as a back-edge),
-- a "Start run" button that POSTs to `/api/runs` and opens a live
-  Server-Sent Events stream of node events,
-- per-node status indicators that turn green on `succeeded` and red on
-  `failed` as the runner reports them.
-
-**Security posture:** the daemon binds `127.0.0.1` by default and
-**refuses any non-loopback `--host`**. There is no authentication,
-TLS, or audit log. It is intended for single-user local use. If you
-need to expose minifac on a network interface, that lives behind a
-separate proposal (we'll add auth before we add wider binding).
-
-**v0 scope:** the viewer can list factories, render the graph, start a
-run, and tail its events. There is no in-browser YAML editing and no
-pause/resume/cancel/retry-from-node controls — each is a future proposal
-when justified.
-
-Run state is persisted to `~/.minifac/runs.db` (a SQLite file), so the
-viewer's "Recent runs" list survives daemon restarts and prior runs are
-replayable in the event-tail pane. Set `runs_db:` in
-`~/.minifac/config.yaml` (or in a per-repo `.minifac/config.yaml`) to
-move the file elsewhere; `MINIFAC_HOME` overrides the whole machine-state
-root.
-
-Flags:
-
-- `--port <number>` (default `4280`)
-- `--host <string>` (default `127.0.0.1`; loopback-only)
-- positional directory (default `.`)
-
-Point it at `examples/` to dogfood with `hello.yaml` and `sdd.yaml`;
-see [examples/sdd.md](examples/sdd.md) for the SDD factory's per-node
-contract.
-
-### sdd.yaml — the propose/apply/verify/archive loop
-
-`examples/sdd.yaml` is the canonical SDD factory: four `claude` nodes
-wired into the propose → apply → verify → archive loop, with verify
-looping back to apply on failure (bounded at three retries). It is
-**brief-driven**: you don't edit the YAML per change. Instead:
-
-1. Author a brief at `inputs/<change>.md` with `change:` and
-   `factory: sdd` in the frontmatter and the change intent in the
-   body. See [examples/sample-brief.md](examples/sample-brief.md).
-2. Set every node's `cwd` in `examples/sdd.yaml` to the absolute path
-   of the target repo (an OpenSpec-equipped repo with verify commands
-   like `npm test`, `npm run build`, `npm run check`).
-3. Invoke `node dist/cli.js run <change>`.
-
-See [examples/sdd.md](examples/sdd.md) for the full per-node contract,
-the brief-driven workflow, and known friction points.
-
-## Reusable steps
-
-A node's behavior can be inlined directly (`executor:` + `with:`) or
-referenced from a published **step** via `uses:`. Steps are reusable,
-typed-input units of behavior that ship under `examples/steps/<name>.yaml`
-(built-in) or `.minifac/steps/<name>.yaml` (per-repo custom):
+## What a factory looks like
 
 ```yaml
+name: sdd
+brief: required
+
 nodes:
   propose:
     uses: minifac:openspec-propose
-    inputs:
-      change: "{{ brief.change }}"
-      brief_body: "{{ brief.body }}"
+    inputs: { change: "{{ brief.change }}", brief_body: "{{ brief.body }}" }
     cwd: "{{ run.cwd }}"
+  apply:
+    uses: minifac:openspec-apply
+    inputs: { change: "{{ brief.change }}" }
+    cwd: "{{ run.cwd }}"
+  verify:
+    uses: minifac:openspec-verify
+    inputs: { change: "{{ brief.change }}" }
+    cwd: "{{ run.cwd }}"
+  archive:
+    uses: minifac:openspec-archive
+    inputs: { change: "{{ brief.change }}" }
+    cwd: "{{ run.cwd }}"
+    terminal: true
+
+edges:
+  - { from: propose, to: apply }
+  - { from: apply,   to: verify }
+  - { from: verify,  to: archive }
+  - { from: verify,  to: apply, when: on_failure, max_traversals: 3 }
 ```
 
-Steps are the per-node composition story; `extends:` is the
-whole-factory composition story (override one node at a layer). The
-two compose: a derived factory can replace just one node's body with
-a `uses:` reference to a published step, leaving the rest of the base
-factory intact. See `docs/concepts/Factory.md` → "Steps" and
-`docs/concepts/Step.md` for the deep dive, and `minifac steps` to list
-the steps your cwd currently exposes.
+You mostly won't write factories. The bundled `sdd` factory
+handles the propose/apply/verify/archive shape; per-repo
+customization happens via `extends:` (override one node) or
+per-node `uses:` references to reusable steps.
 
-## `minifac runs` — inspect history
+## Install
 
-Every run is persisted to `~/.minifac/runs.db` (a SQLite file; the path
-is configurable via `runs_db:` in `~/.minifac/config.yaml` or per-repo
-`.minifac/config.yaml`). Two read-only subcommands query it from the
-terminal:
+```bash
+# Use directly without installing
+npx minifac run hello
 
-```
-# List the 20 most recent runs (table output).
-node dist/cli.js runs
-
-# Filter and emit JSON for piping.
-node dist/cli.js runs --factory sdd --status failed --limit 50 --json
-
-# Replay one run's event log (id or unambiguous prefix).
-node dist/cli.js runs show <id>
-
-# Tail an in-flight run by polling the store.
-node dist/cli.js runs show <id> --follow
+# Install globally
+npm install -g minifac
+minifac --version
 ```
 
-`runs` exits `0` even when zero runs match, `1` on usage errors (bad
-`--status` value, non-positive `--limit`, unknown / ambiguous id), or
-on a fatal storage error.
+Requires Node 22+. The bundled `sdd` factory dispatches the
+`claude` CLI; install Claude Code separately and make sure
+`claude` is on `$PATH`.
 
-## Contributing / SDD workflow
+### From source
 
-Every non-trivial change in this repo goes through the OpenSpec workflow:
+```bash
+git clone https://github.com/twinsunllc/minifac
+cd minifac
+npm install
+node dist/cli.js run hello
+```
 
-1. `/opsx:propose "<idea>"` — write the proposal, design, tasks, and any
-   spec deltas under `openspec/changes/<change-name>/`.
-2. `/opsx:apply <change-name>` — work through the tasks, keep
-   `tasks.md` in sync with reality, and run the verify gate (`npm test`,
-   `npm run build`, `npm run check`).
-3. `/opsx:archive <change-name>` — fold the change into the canonical
-   spec under `openspec/specs/`.
+Use `npm link` to put your local build on `$PATH`.
 
-Smaller fixes (docs, typos, formatting) can skip the dance; everything
-that changes behavior or schema goes through it.
+## What's in 0.1
+
+CLI:
+
+- `minifac init [--with-sdd]` — bootstrap `inputs/`, `.minifac/`,
+  and (optionally) a starter SDD factory in the current repo
+- `minifac run <change>` — execute a factory against a brief
+- `minifac brief <change>` — interactive brief authoring
+- `minifac autorun` — long-running daemon that polls `inputs/`
+  and runs ready briefs as they appear
+- `minifac serve [dir]` — local web viewer at
+  `http://127.0.0.1:4280` (localhost-only, no auth)
+- `minifac runs [show <id>]` — query the run history persisted
+  to `~/.minifac/runs.db`
+- `minifac merge <change|run-id>` — ship a finished run's branch
+- `minifac briefs` — see what's queued, blocked, ready
+- `minifac prune` — reclaim disk from finished worktrees
+- `minifac steps` — list reusable steps in scope
+
+Runtime:
+
+- Fresh git worktree per run at `~/.minifac/worktrees/`
+- Run-scoped branches: `run/<change>-<slug>`
+- Two-pane interactive TUI by default (`--raw` for pipes / CI)
+- Structured event log persisted to SQLite, replayable after
+  the fact
+- Claude executor with streaming output and sentinel-based
+  success/failure signaling
+- Bundled `hello.yaml` (one-node smoke test) and `sdd.yaml` (the
+  spec-driven loop)
+
+## Going deeper
+
+- **[`docs/concepts/`](docs/concepts/)** — Factory, Brief,
+  Worktree, Executor, Runner, Sentinel, Cycle, Run, SDD-Loop,
+  Runs-DB, Auto-Mode, Run-TUI, Step
+- **[`docs/decisions/`](docs/decisions/)** — append-only
+  architectural decisions (currently 0001 → 0026): the why
+  behind each call and what was rejected
+- **[`docs/Roadmap.md`](docs/Roadmap.md)** — what's queued,
+  in-flight, deferred
+- **[`examples/sdd.md`](examples/sdd.md)** — the full SDD
+  factory's per-node contract
+
+### Selected features worth knowing about
+
+- **Dependent briefs.** A brief can declare
+  `depends_on: [other-change]`. `minifac run` refuses to start
+  while a dep is unmerged; `minifac briefs --ready` shows
+  what's unblocked.
+- **Reusable steps.** Nodes can `uses:` a published step
+  (`examples/steps/<name>.yaml` or per-repo
+  `.minifac/steps/<name>.yaml`) instead of inlining their body.
+  Steps are typed-input, versioned units of behavior.
+- **Factory composition via `extends:`.** Derive a factory by
+  overriding one node and keeping the rest. Combines with
+  reusable steps.
+- **A/B factory comparison.** `--factory <name>` overrides the
+  brief's declared factory; the per-(change, factory) lockfile
+  lets you race two factories on the same brief.
+- **Worktree mode is the default.** `--in-place` opts out for
+  CI or read-only factories that don't need isolation.
 
 ## Status
 
-Pre-zero. The first openspec change proposal defines the v0 architecture.
-See `openspec/changes/` for active proposals and `openspec/specs/` for the
-canonical spec.
+**v0.1 — first public release.** The core is real (graph
+runner, SDD factory, daemon + viewer, brief authoring, autorun,
+TUI, run-scoped branches + merge verb, dependent briefs,
+reusable steps). Expect rough edges. Please file issues at
+[github.com/twinsunllc/minifac/issues](https://github.com/twinsunllc/minifac/issues).
 
-## Workflow commands (Claude Code)
+## Contributing
 
-This repo is set up with OpenSpec's Claude Code integration. Use:
+See [CONTRIBUTING.md](CONTRIBUTING.md). The short version:
+minifac uses spec-driven development on itself, so most behavior
+changes go through `minifac run <change>` against the bundled
+SDD factory. Docs / typos / formatting can skip the dance.
 
-- `/opsx:propose "<idea>"` — open a new change proposal
-- `/opsx:apply` — implement an approved proposal
-- `/opsx:archive` — fold a completed change into the canonical spec
-- `/opsx:explore` — explore the current spec and changes
+GitHub Actions are SHA-pinned per
+[`docs/decisions/0024-CI-Security-Policy.md`](docs/decisions/0024-CI-Security-Policy.md);
+update with
+[`pinact`](https://github.com/suzuki-shunsuke/pinact). CI
+rejects deps published less than 3 days ago — supply-chain
+hygiene.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
