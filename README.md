@@ -9,6 +9,7 @@ branch with passing tests, ready to merge.
 
 ```bash
 npx minifac init --with-sdd           # scaffold inputs/, .minifac/, and an sdd factory
+npx minifac run hello                 # one-node smoke test — confirms install works
 npx minifac brief add-rate-limiting   # interactive Q&A → inputs/add-rate-limiting.md
 npx minifac run   add-rate-limiting   # propose → apply → verify → archive
 npx minifac merge add-rate-limiting   # fast-forward into main
@@ -17,7 +18,9 @@ npx minifac merge add-rate-limiting   # fast-forward into main
 A factory you don't have to write is included: `sdd` walks Claude
 through propose → apply → verify → archive on each brief, looping
 back from verify to apply on failed checks until the gate passes
-or a budget is exhausted.
+or a budget is exhausted. Run `minifac autorun` to leave a daemon
+polling `inputs/` and dispatching ready briefs as they appear —
+queue work in the morning, come back to merge-ready branches.
 
 ```
 propose ──▶ apply ──▶ verify ──┬──▶ archive
@@ -120,10 +123,14 @@ edges:
   - { from: archive, to: check-merge }
 ```
 
-You mostly won't write factories. The bundled `sdd` factory
-handles the propose/apply/verify/archive shape; per-repo
-customization happens via `extends:` (override one node) or
-per-node `uses:` references to reusable steps.
+Factories are first-class and small enough to write yourself.
+The bundled `sdd` factory handles the propose/apply/verify/archive
+shape and is a good starting template, but the real leverage is
+authoring factories that match your team's workflow — a release-prep
+factory, a doc-drift watcher, a triage-then-dispatch pipeline. The
+schema is intentionally narrow (nodes + edges + a few knobs), and
+per-repo customization composes via `extends:` (override one node)
+or per-node `uses:` references to reusable steps.
 
 ## Install
 
@@ -146,51 +153,23 @@ Requires Node 22+. The bundled `sdd` factory dispatches the
 git clone https://github.com/twinsunllc/minifac
 cd minifac
 npm install
+npm run build
 node dist/cli.js run hello
 ```
 
 Use `npm link` to put your local build on `$PATH`.
 
-## What's in 0.1
-
-CLI:
-
-- `minifac init [--with-sdd]` — bootstrap `inputs/`, `.minifac/`,
-  and (optionally) a starter SDD factory in the current repo
-- `minifac run <change>` — execute a factory against a brief
-- `minifac brief <change>` — interactive brief authoring
-- `minifac autorun` — long-running daemon that polls `inputs/`
-  and runs ready briefs as they appear
-- `minifac serve [dir]` — local web viewer at
-  `http://127.0.0.1:4280` (localhost-only, no auth)
-- `minifac runs [show <id>]` — query the run history persisted
-  to `~/.minifac/runs.db`
-- `minifac merge <change|run-id>` — ship a finished run's branch
-- `minifac briefs` — see what's queued, blocked, ready
-- `minifac prune` — reclaim disk from finished worktrees
-- `minifac steps` — list reusable steps in scope
-
-Runtime:
-
-- Fresh git worktree per run at `~/.minifac/worktrees/`
-- Run-scoped branches: `run/<change>-<slug>`
-- Two-pane interactive TUI by default for both `minifac run` and
-  `minifac autorun` (`--raw` for pipes / CI)
-- Structured event log persisted to SQLite, replayable after
-  the fact
-- Claude executor with streaming output and sentinel-based
-  success/failure signaling
-- Bundled `hello.yaml` (one-node smoke test) and `sdd.yaml` (the
-  spec-driven loop)
-
 ## Going deeper
 
+- **[`CHANGELOG.md`](CHANGELOG.md)** — what shipped in each
+  release
+- **[`docs/CLI.md`](docs/CLI.md)** — full command reference
 - **[`docs/concepts/`](docs/concepts/)** — Factory, Brief,
   Worktree, Executor, Runner, Sentinel, Cycle, Run, SDD-Loop,
   Runs-DB, Auto-Mode, Run-TUI, Step
 - **[`docs/decisions/`](docs/decisions/)** — append-only
-  architectural decisions (currently 0001 → 0026): the why
-  behind each call and what was rejected
+  architectural decisions: the why behind each call and what
+  was rejected
 - **[`docs/Roadmap.md`](docs/Roadmap.md)** — what's queued,
   in-flight, deferred
 - **[`examples/sdd.md`](examples/sdd.md)** — the full SDD
