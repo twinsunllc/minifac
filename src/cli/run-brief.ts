@@ -9,7 +9,7 @@ import type { RunStore } from "../storage/run-store.js";
 import { loadWorktreeConfig } from "../worktree/config.js";
 import { gitRevParseHead, gitWorktreeAdd } from "../worktree/git.js";
 import { appendFailedRun } from "../worktree/journal.js";
-import { LockHeldError, claimLock } from "../worktree/lock.js";
+import { type LockHandle, LockHeldError, claimLock } from "../worktree/lock.js";
 import {
   computeRepoHash,
   lockPathForKey,
@@ -31,6 +31,10 @@ export interface RunBriefAutomatedArgs {
   /** Optional per-event sink. The autorun TUI threads this through so the
    *  embedded run view reflects live executor output. */
   onEvent?: (entry: import("../executor/types.js").EmittedEvent) => void;
+  /** @internal Test seam. Default = real `claimLock`. Used by ordering
+   *  tests to observe when the lockfile `release` is invoked relative to
+   *  the run store's `finalizeRun` resolution. */
+  claimLockFn?: (lockPath: string) => Promise<LockHandle>;
 }
 
 export interface RunBriefAutomatedResult {
@@ -96,9 +100,9 @@ export async function runBriefAutomated(
   }
 
   const lockPath = lockPathForKey(config, key);
-  let lock: Awaited<ReturnType<typeof claimLock>> | undefined;
+  let lock: LockHandle | undefined;
   try {
-    lock = await claimLock(lockPath);
+    lock = await (args.claimLockFn ?? claimLock)(lockPath);
   } catch (err) {
     if (err instanceof LockHeldError) {
       return {
@@ -167,6 +171,13 @@ export async function runBriefAutomated(
       worktreePath: runCwd,
     };
   } finally {
+    // Ordering invariant: `runFactory` awaits `store.finalizeRun` before
+    // returning (per `runner/run.ts`'s comment at the finalize call). By
+    // releasing the lock here in `finally`, we guarantee that the
+    // terminal `runs.db` row write resolves BEFORE the lockfile is
+    // unlinked. The autorun orphan probe relies on this ordering — see
+    // `worktree-management` "Runner finalizes runs.db status before
+    // releasing the per-change lockfile".
     try {
       await lock.release();
     } catch {

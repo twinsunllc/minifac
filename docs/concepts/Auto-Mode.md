@@ -40,9 +40,9 @@ A brief is *ready* iff ALL of:
 - Its `doneness` is `active` (file lives at `inputs/<change>.md`, not
   `inputs/done/`).
 - Every entry in `depends_on` resolves to `doneness === "done"`.
-- Its `activity` is `none` or `failed` (a `running` or `succeeded`
-  most-recent run row excludes the brief from this poll's candidate
-  set).
+- Its `activity` is `none` or `failed` (a `succeeded` most-recent run
+  row excludes the brief; a `running` row triggers the orphan probe —
+  see below).
 - Autorun is not already running this `change` locally.
 - The user-supplied `--filter` (if any) matches the `change`.
 
@@ -50,6 +50,29 @@ A blocked brief is logged with reason `blocked` every poll; it stays
 in the candidate set until something changes. A succeeded brief
 naturally drops out once the runner's mark-done post-step moves it to
 `inputs/done/`.
+
+## Orphan reconciliation
+
+A `runs.db` row stuck at `status='running'` after a killed runner
+(force-quit, SIGKILL, crash, terminal close) used to block a brief
+forever. Autorun now probes the per-change lockfile under
+`~/.minifac/locks/<repo-hash>-<change>-<factory>.lock` whenever it
+would otherwise skip for a `running` row:
+
+- **Lockfile missing OR PID dead** ⇒ orphan. Autorun flips the row to
+  `status='failed'`, `reason='orphaned'`, populates `ended_at`, then
+  evaluates the brief through the rest of the readiness chain on the
+  same poll cycle.
+- **Lockfile present and PID live** (or `EPERM` — the conservative
+  branch) ⇒ a real run is in flight elsewhere (another autorun
+  instance, a manual `minifac run`, the daemon). Autorun skips with
+  reason `running-elsewhere` and leaves the row untouched.
+
+The probe relies on the runner's exit-ordering invariant: the
+terminal `runs.db` row write completes BEFORE the lockfile is
+unlinked, so a graceful exit cannot produce the orphan signature
+("lock missing + row=running"). See the `worktree-management`
+capability for the spec.
 
 ## Concurrency
 

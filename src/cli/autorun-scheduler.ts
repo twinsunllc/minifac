@@ -1,6 +1,7 @@
 import type { Brief } from "../brief/loader.js";
 import { BriefCycleError, computeBriefState } from "../brief/state.js";
 import type { RunStatus, RunStore } from "../storage/run-store.js";
+import type { LockProbeResult } from "../worktree/lock.js";
 import type { AutorunFilter } from "./autorun-filter.js";
 
 export type SkipReason =
@@ -8,9 +9,15 @@ export type SkipReason =
   | "concurrency"
   | "filtered"
   | "in-flight"
-  | "activity-running"
+  | "running-elsewhere"
   | "activity-succeeded"
   | "done";
+
+/** Probe the per-change lockfile to classify a row that says `running` as
+ *  either a real in-flight run (some live PID still holds the lock) or an
+ *  orphan (lockfile missing OR PID dead). See `auto-mode` capability,
+ *  "Autorun reconciles orphaned runs via per-change lockfile probe". */
+export type ProbeChangeLiveness = (change: string, factoryName: string) => Promise<LockProbeResult>;
 
 export type SchedulerDecision =
   | { action: "schedule"; brief: Brief }
@@ -76,6 +83,17 @@ export interface SchedulerDeps {
   repoRoot: string;
   maxConcurrent: number;
   callbacks?: SchedulerCallbacks;
+  /** Probe the per-change lockfile for liveness when the most-recent
+   *  `runs.db` row carries `status='running'`. The default (no probe)
+   *  treats every running row as a legitimately busy run elsewhere and
+   *  skips with `running-elsewhere`; the real CLI plugs in a probe that
+   *  reads the lockfile under `~/.minifac/locks/`. See `auto-mode`
+   *  capability, "Autorun reconciles orphaned runs via per-change
+   *  lockfile probe". */
+  probeChangeLiveness?: ProbeChangeLiveness;
+  /** Override `Date.now()` for tests that need a deterministic
+   *  `ended_at` value when reconciling an orphan. */
+  now?: () => number;
 }
 
 interface InFlightEntry {
@@ -140,6 +158,47 @@ export class Scheduler {
       throw err;
     }
 
+    // Orphan reconciliation: when the most-recent `runs.db` row says
+    // `running`, the row may reflect a killed runner whose lockfile is
+    // gone or whose PID is dead. Probe the per-change lockfile to decide
+    // — see the `auto-mode` capability's "Autorun reconciles orphaned
+    // runs via per-change lockfile probe" requirement. Run this BEFORE
+    // doneness/blocked so the row flips even on a brief that is
+    // ultimately ineligible to schedule this cycle (the orphan still
+    // needs reaping so future polls aren't stuck either).
+    if (state.activity === "running") {
+      let probe: LockProbeResult | undefined;
+      try {
+        probe = this.deps.probeChangeLiveness
+          ? await this.deps.probeChangeLiveness(change, brief.frontmatter.factory)
+          : undefined;
+      } catch {
+        // I/O failure during probe → conservative: skip without touching
+        // the row. The scheduler retries next poll.
+        return { action: "skip", reason: "running-elsewhere", brief };
+      }
+      if (!probe || "running" in probe) {
+        return { action: "skip", reason: "running-elsewhere", brief };
+      }
+      // Orphan: flip the running row to failed/orphaned. Best-effort —
+      // a finalize rejection falls back to the conservative skip path.
+      if (state.mostRecentRunId !== undefined) {
+        try {
+          const now = this.deps.now ? this.deps.now() : Date.now();
+          await this.deps.runStore.finalizeRun(state.mostRecentRunId, {
+            status: "failed",
+            reason: "orphaned",
+            endedAt: now,
+          });
+        } catch {
+          return { action: "skip", reason: "running-elsewhere", brief };
+        }
+      }
+      // Fall through to the remaining readiness checks. `state.activity`
+      // is now stale (the row is `failed`), but every remaining check
+      // either ignores activity or matches the new "not running" state.
+    }
+
     if (state.doneness === "done") {
       return { action: "skip", reason: "done", brief };
     }
@@ -150,9 +209,6 @@ export class Scheduler {
         brief,
         ...(state.blockedReason ? { detail: state.blockedReason } : {}),
       };
-    }
-    if (state.activity === "running") {
-      return { action: "skip", reason: "activity-running", brief };
     }
     if (state.activity === "succeeded") {
       return { action: "skip", reason: "activity-succeeded", brief };

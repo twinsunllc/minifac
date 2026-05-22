@@ -500,6 +500,13 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
 
   if (store) {
     try {
+      // Invariant: `finalizeRun` MUST resolve before the caller releases the
+      // per-change lockfile. See `worktree-management` capability,
+      // "Runner finalizes runs.db status before releasing the per-change
+      // lockfile" — the orphan-probe in `auto-mode` relies on it. Callers
+      // (e.g. `runBriefAutomated`) hold the lock for the whole life of
+      // `runFactory` and unlink in `finally`, so awaiting here is what
+      // makes the ordering load-bearing.
       await store.finalizeRun(runId, {
         status: result.status,
         reason: result.reason,
