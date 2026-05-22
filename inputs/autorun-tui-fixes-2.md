@@ -83,6 +83,30 @@ glyph next to the active node stays static.
   body row (one between briefs and nodes, one between nodes and
   log), so this class of regression can't pass review again by
   someone approving a wrong snapshot.
+- **Brief-list glyphs and colors match the run-TUI node row.** The
+  brief-list pane (`src/tui/brief-list-pane.tsx`) and the run-TUI
+  status pane (`src/tui/status-pane.tsx`) should render visually
+  identically for the shared states:
+  - queued ↔ pending → open circle (`○` / `.`), gray
+  - running → animated spinner (`⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏` / `|/-\`), yellow
+  - succeeded → filled circle (`●` / `o`), green
+  - failed → filled circle (`●` / `!`), red
+
+  Brief-specific `skipped` keeps its own glyph (`↷` / `~`, gray) —
+  no analog exists on the node side.
+
+  The current `colorFor` in `brief-list-pane.tsx:13-26` and
+  `colorForStatus` in `status-pane.tsx:7-22` already agree on
+  colors for the shared states; the running-row branch already
+  routes through the shared `<Spinner>`. Audit and confirm there's
+  no remaining drift (glyph selection, spacing, marker width,
+  color application to the row label vs. glyph) — fix anything
+  that does drift.
+- **Side-by-side parity test.** Add a test that renders one row at
+  each shared status through both `BriefListPane` and the
+  per-node rendering used by `StatusPane`, and asserts the glyph
+  + color tokens match. The test should fail if anyone later
+  tweaks one without the other.
 
 ## Out of scope
 
@@ -107,4 +131,11 @@ glyph next to the active node stays static.
   and now contains two vertical rules in each body row.
 - A new test asserts the two-vertical-rule invariant on the
   drilled-in body, independent of the snapshot.
+- Brief-list rows for queued, running, succeeded, and failed
+  briefs use the same glyphs and colors as the corresponding
+  node-row states in the run-TUI status pane. `skipped` keeps
+  its own brief-specific glyph and color.
+- A parity test asserts glyph + color equivalence between
+  brief-list rows and run-TUI node rows across the four shared
+  states; the test fails if one side drifts.
 - All existing tests still pass; `npm run build` is clean.
