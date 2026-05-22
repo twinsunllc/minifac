@@ -154,6 +154,73 @@ termination.
 
 Binding decision: `docs/decisions/0029-Node-Outputs-MCP.md`.
 
+## Nudge recovery
+
+When the model finishes a turn with `MINIFAC_STATUS: succeeded` but a
+declared `required: true` output is missing or unparseable, the runner
+SHOULD hand it one more turn to recover before failing the node. This
+is the [[Sentinel]]-side equivalent of the graph-level recovery edge:
+graph cycles handle substantive failures; the nudge handles protocol
+mistakes (forgot a tool call, forgot a `Write`).
+
+The runner fires a nudge when ALL of the following hold:
+
+- The dispatching executor's `supportsNudge` capability flag is
+  `true` (the Claude executor sets it; other executors that can't
+  accept post-`result` user messages on stdin opt out).
+- The node's `output_nudge_budget` is greater than zero.
+- The sentinel for the just-completed turn reports `succeeded`.
+- The post-execution validator finds at least one required output
+  missing or unparseable.
+
+When the loop fires, the runner emits two events on the executor's
+event stream (so the TUI, web viewer, and `runs.db` replay render
+runner interventions distinctly from model output):
+
+- `system / runner-action` — operator-visible note
+  `"Required outputs missing, nudging (budget remaining: N)..."`.
+- `user / runner-nudge` — the synthetic user-message string itself.
+
+The nudge message names each missing output by key, type, and the
+expected absolute filesystem path, then asks the model to produce
+the outputs and emit `MINIFAC_STATUS: succeeded` (or `failed` with a
+`REASON`).
+
+```yaml
+nodes:
+  security-review:
+    executor: claude
+    outputs:
+      findings: { type: value, required: true }
+    output_nudge_budget: 1   # default
+```
+
+`output_nudge_budget` is a non-negative integer (default `1`).
+Setting `0` opts the node out of nudging cleanly — missing outputs
+fail the node on the first validation pass, same as before the
+loop existed. Per-node only; no factory-level default. The budget is
+per-node-iteration: a graph-level recovery edge that re-dispatches
+the same node gets a fresh budget on the new iteration.
+
+When the stdin write fails (EPIPE, the executor exited between
+`result` and the runner's reply, OS-level write error), the runner
+records the node as `failed` with reason `missing_required_output`
+and a `missing_outputs_detail` suffix identifying the stdin failure
+(e.g. `"nudge stdin write failed: EPIPE"`). The failed write does
+NOT count as a consumed nudge — the model never received it. The
+graph-level retry edge owns recovery from broken-pipe failures, not
+the in-turn loop.
+
+Each `NodeResult` records a `nudges_used: number` field counting how
+many nudges the runner spent on the dispatch (default `0`). The
+field is non-zero only when the runner actually wrote one or more
+nudge messages; it persists through the run-storage layer's
+`NodeResult` JSON column without a schema migration.
+
+Binding decision: `docs/decisions/0028-Node-Outputs-Nudge.md`. See
+[[Decisions/0027-Node-Outputs]] for the validation contract this
+softens.
+
 ## v1 trade-offs
 
 - The `:read` cap is 64 KB. Oversize throws rather than truncates so
@@ -166,4 +233,6 @@ Binding decision: `docs/decisions/0029-Node-Outputs-MCP.md`.
 Cross-references: [[Factory]] (the `outputs:` schema slot), [[Run]]
 (the run-id namespacing), [[Runs-DB]] (the `node_outputs` table and
 the index lifecycle), [[Worktree]] (where outputs do **not** live —
-they're separate, run-scoped, persistent across worktree pruning).
+they're separate, run-scoped, persistent across worktree pruning),
+[[0027-Node-Outputs]] (the validation contract), and
+[[0028-Node-Outputs-Nudge]] (the nudge-loop softening).

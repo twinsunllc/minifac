@@ -65,6 +65,11 @@ export const NodeSchema = z
     uses: z.string().min(1).optional(),
     inputs: z.record(z.unknown()).optional(),
     outputs: OutputsMapSchema.optional(),
+    // Per-node in-turn nudge budget for missing-required-output recovery.
+    // The runner reads this after the outputs validator finds an
+    // unsatisfied required output; `0` opts the node out of nudging
+    // entirely. See `docs/decisions/0028-Node-Outputs-Nudge.md`.
+    output_nudge_budget: z.number().int().nonnegative().optional().default(1),
   })
   .strict();
 
@@ -108,8 +113,18 @@ export const FactorySchema = z
   .strict();
 
 export type FactoryLayer = z.infer<typeof FactoryLayerSchema>;
-export type Factory = z.infer<typeof FactorySchema>;
-export type FactoryNode = z.infer<typeof NodeSchema>;
+type _FactoryInferred = z.infer<typeof FactorySchema>;
+type _NodeInferred = z.infer<typeof NodeSchema>;
+// `output_nudge_budget` is `.default(1)` at the schema layer, so parsed
+// nodes always carry the field. Exposing the type as optional here keeps
+// hand-built node literals (in tests / fixtures) ergonomic; the runner
+// still applies `?? 1` defensively at read sites.
+export type FactoryNode = Omit<_NodeInferred, "output_nudge_budget"> & {
+  output_nudge_budget?: number;
+};
+export type Factory = Omit<_FactoryInferred, "nodes"> & {
+  nodes: Record<string, FactoryNode>;
+};
 export type FactoryEdge = z.infer<typeof EdgeSchema>;
 export type OutputDef = z.infer<typeof OutputDefSchema>;
 export type OutputValueDef = z.infer<typeof OutputValueSchema>;

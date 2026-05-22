@@ -270,16 +270,67 @@ export function buildCliArgs(w: ClaudeWith, mcpConfigPath?: string): string[] {
   return args;
 }
 
+/**
+ * Build the stream-json user-message frame the runner writes to the
+ * executor's stdin between turns (the post-execution nudge loop). The
+ * frame omits the priorResults preamble — the model already has all
+ * preceding context from earlier turns. See ADR-0028.
+ */
+export function buildStreamJsonUserMessage(msg: string): string {
+  const envelope = { type: "user", message: { role: "user", content: msg } };
+  return `${JSON.stringify(envelope)}\n`;
+}
+
 export class ClaudeExecutor implements NodeExecutor {
   readonly type = "claude";
   readonly supportsMcp = true;
+  readonly supportsNudge = true;
 
   private readonly spawn: SpawnLike;
   private readonly binary: string;
+  // Per-dispatch stdin handle. The runner calls `writeUserMessage(msg)`
+  // between turns; the method routes to this handle. Cleared when
+  // `closeInput()` is called or the child exits.
+  private activeStdin: NodeJS.WritableStream | null = null;
 
   constructor(options: ClaudeExecutorOptions = {}) {
     this.spawn = options.spawn ?? (nodeSpawn as unknown as SpawnLike);
     this.binary = options.binary ?? "claude";
+  }
+
+  /**
+   * Frame `msg` as a stream-json user-message event and write it to the
+   * dispatching child's stdin. Used by the runner's post-execution nudge
+   * loop (per the `graph-runner` capability's "Post-execution nudge loop"
+   * requirement). Rejects on stdin write failure (EPIPE, EBADF, OS error)
+   * so the runner can record the broken-pipe failure path.
+   */
+  async writeUserMessage(msg: string): Promise<void> {
+    const stdin = this.activeStdin;
+    if (!stdin) {
+      throw new Error("writeUserMessage called with no active stdin");
+    }
+    const frame = buildStreamJsonUserMessage(msg);
+    await new Promise<void>((resolve, reject) => {
+      stdin.write(frame, (err) => {
+        if (err) reject(err);
+        else resolve();
+      });
+    });
+  }
+
+  /** Close the dispatching child's stdin. The runner calls this once it
+   * has decided no further nudges will be sent so the model can finalize
+   * its session. */
+  closeInput(): void {
+    const stdin = this.activeStdin;
+    if (!stdin) return;
+    this.activeStdin = null;
+    try {
+      stdin.end();
+    } catch {
+      /* ignore; surfaced via child error/exit */
+    }
   }
 
   async *run(node: ResolvedNode, ctx: RunContext): AsyncIterable<NodeEvent> {
@@ -346,16 +397,21 @@ export class ClaudeExecutor implements NodeExecutor {
       }
     });
 
-    // Write stdin synchronously then close it. Suppress EPIPE if the child
-    // already exited (e.g. spawn ENOENT).
+    // Write stdin synchronously. The runner owns when to close it via
+    // `closeInput()`: for nodes that don't need the nudge loop (or after
+    // the loop has decided no more nudges will be sent), the runner
+    // closes immediately so the child can finalize. Keeping stdin open
+    // across turns lets the runner write additional user messages via
+    // `writeUserMessage(msg)` between `result` events without re-spawning.
+    // Suppress EPIPE if the child already exited (e.g. spawn ENOENT).
     const payload = buildStreamJsonInput(ctx.priorResults, effectivePrompt);
+    this.activeStdin = child.stdin ?? null;
     if (child.stdin) {
       child.stdin.on("error", () => {
         /* ignore; surfaced via child error/exit */
       });
       try {
         child.stdin.write(payload);
-        child.stdin.end();
       } catch {
         /* ignore; surfaced via child error/exit */
       }
@@ -421,6 +477,7 @@ export class ClaudeExecutor implements NodeExecutor {
     bindLineStream(child.stderr, "stderr");
 
     child.on("exit", (code) => {
+      this.activeStdin = null;
       if (terminalEmitted) return;
       queue.push({ kind: "done", code });
       terminalEmitted = true;

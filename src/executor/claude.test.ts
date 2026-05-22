@@ -108,6 +108,7 @@ describe("buildStreamJsonInput", () => {
           startedAt: 0,
           endedAt: 12,
           outputs: null,
+          nudges_used: 0,
         },
         {
           nodeId: "v",
@@ -117,12 +118,13 @@ describe("buildStreamJsonInput", () => {
           startedAt: 13,
           endedAt: 20,
           outputs: null,
+          nudges_used: 0,
         },
       ],
       "prompt here",
     );
     expect(out).toMatchInlineSnapshot(`
-      "{"type":"user","message":{"role":"user","content":"[{\\"nodeId\\":\\"a\\",\\"iteration\\":1,\\"status\\":\\"succeeded\\",\\"reason\\":null,\\"startedAt\\":0,\\"endedAt\\":12,\\"outputs\\":null},{\\"nodeId\\":\\"v\\",\\"iteration\\":1,\\"status\\":\\"failed\\",\\"reason\\":\\"verify hit error\\",\\"startedAt\\":13,\\"endedAt\\":20,\\"outputs\\":null}]\\n\\n---\\n\\nprompt here"}}
+      "{"type":"user","message":{"role":"user","content":"[{\\"nodeId\\":\\"a\\",\\"iteration\\":1,\\"status\\":\\"succeeded\\",\\"reason\\":null,\\"startedAt\\":0,\\"endedAt\\":12,\\"outputs\\":null,\\"nudges_used\\":0},{\\"nodeId\\":\\"v\\",\\"iteration\\":1,\\"status\\":\\"failed\\",\\"reason\\":\\"verify hit error\\",\\"startedAt\\":13,\\"endedAt\\":20,\\"outputs\\":null,\\"nudges_used\\":0}]\\n\\n---\\n\\nprompt here"}}
       "
     `);
   });
@@ -250,6 +252,7 @@ describe("ClaudeExecutor", () => {
           startedAt: 0,
           endedAt: 1,
           outputs: null,
+          nudges_used: 0,
         },
       ],
     });

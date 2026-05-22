@@ -20,7 +20,13 @@ export type RunId = string;
 
 export type RunStatus = "running" | "succeeded" | "failed";
 
-export type StoredEventKind = "stdout" | "stderr" | "status" | "run_end";
+export type StoredEventKind =
+  | "stdout"
+  | "stderr"
+  | "status"
+  | "run_end"
+  | "runner-action"
+  | "runner-nudge";
 
 export interface CreateRunInput {
   id: RunId;

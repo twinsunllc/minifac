@@ -7,7 +7,18 @@ export type NodeEvent =
       kind: "status";
       status: "started" | "succeeded" | "failed";
       meta?: unknown;
-    };
+    }
+  // Runner-originated event: a one-line operator-visible narration of an
+  // intervention the runner is performing on the executor's behalf
+  // (e.g. nudging a missing-output protocol mistake). The event rides the
+  // executor's event stream so downstream consumers see one ordered
+  // timeline; the runner is the source, not the executor.
+  | { kind: "runner-action"; line: string }
+  // Runner-originated event: a synthetic user-message string the runner
+  // is about to write to the executor's stdin (e.g. a nudge message).
+  // Exposed on the event stream so observers see the same payload the
+  // model receives.
+  | { kind: "runner-nudge"; message: string };
 
 /**
  * One entry per completed node execution. The runner accumulates these in
@@ -23,6 +34,14 @@ export interface NodeResult {
   startedAt: number;
   endedAt: number;
   outputs: NodeOutputIndex | null;
+  /** Count of in-turn nudge messages the runner wrote to the executor's
+   * stdin during this node iteration (per the `graph-runner` capability's
+   * "Post-execution nudge loop" requirement). `0` for nodes that never
+   * entered the nudge loop (sentinel-failed, outputs-valid-first-try,
+   * no `outputs:` declared, budget zero, non-nudge-capable executor).
+   * Only incremented on successful stdin write — a failed write does
+   * not consume a nudge because the model never received it. */
+  nudges_used: number;
 }
 
 /**
@@ -69,5 +88,22 @@ export interface NodeExecutor {
    * the `node-executor` capability's "Executor `supportsMcp` capability
    * flag" requirement. */
   readonly supportsMcp: boolean;
+  /** Whether the executor's underlying runtime can accept post-`result`
+   * user messages on stdin (i.e. the runner can write an additional
+   * stream-json user-message event after a `result` event lands and the
+   * executor will produce a new turn of events). When `true`, the runner
+   * enters the post-execution nudge loop on missing-required-output
+   * detection (per ADR-0028 and the `graph-runner` capability's
+   * "Post-execution nudge loop" requirement). When `false`, the runner
+   * skips the loop entirely; the schema-accepted `output_nudge_budget`
+   * has no runtime effect on those executors. */
+  readonly supportsNudge: boolean;
   run(node: ResolvedNode, ctx: RunContext): AsyncIterable<NodeEvent>;
+  /** When `supportsNudge` is `true`, the runner calls this method to
+   * frame `msg` as a stream-json user-message event and write it to
+   * the executor's stdin between `result` events. The returned promise
+   * SHALL reject on stdin write failure (EPIPE, EBADF, OS error) so the
+   * runner can record the broken-pipe failure path. When
+   * `supportsNudge` is `false`, the method MAY be omitted. */
+  writeUserMessage?(msg: string): Promise<void>;
 }

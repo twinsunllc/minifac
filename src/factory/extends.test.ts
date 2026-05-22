@@ -357,6 +357,50 @@ nodes:
     );
   });
 
+  it("extends preserves output_nudge_budget via replace-at-node-level semantics", async () => {
+    const repo = await makeRepo();
+    await writeAt(
+      repo,
+      "examples/budgets.yaml",
+      `name: base
+nodes:
+  security-review:
+    executor: claude
+    with: { prompt: review }
+    outputs:
+      findings: { type: value, required: true }
+    output_nudge_budget: 2
+  apply:
+    executor: claude
+    terminal: true
+    with: { prompt: apply }
+edges:
+  - from: security-review
+    to: apply
+`,
+    );
+    // Base alone: budget round-trips.
+    const baseLoaded = await loadFactory(path.join(repo, "examples/budgets.yaml"), repo);
+    expect(baseLoaded.factory.nodes["security-review"]?.output_nudge_budget).toBe(2);
+
+    // Derived overrides the node wholesale — its own budget wins (0 here).
+    const derived = await writeAt(
+      repo,
+      ".minifac/factories/derived.yaml",
+      `extends: minifac:budgets
+nodes:
+  security-review:
+    executor: claude
+    with: { prompt: review-derived }
+    outputs:
+      findings: { type: value, required: true }
+    output_nudge_budget: 0
+`,
+    );
+    const loaded = await loadFactory(derived, repo);
+    expect(loaded.factory.nodes["security-review"]?.output_nudge_budget).toBe(0);
+  });
+
   it("derived layer override replaces the node wholesale (including outputs)", async () => {
     const repo = await makeRepo();
     await writeAt(

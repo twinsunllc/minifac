@@ -99,6 +99,10 @@ function makeRawOnEvent(io: CliIO): (entry: EmittedEvent) => void {
       io.stdout.write(`${prefix} ${e.line}\n`);
     } else if (e.kind === "stderr") {
       io.stderr.write(`${prefix} ${e.line}\n`);
+    } else if (e.kind === "runner-action") {
+      io.stderr.write(`[runner] ${entry.nodeId} iter=${entry.iteration}: ${e.line}\n`);
+    } else if (e.kind === "runner-nudge") {
+      io.stderr.write(`[nudge] ${entry.nodeId} iter=${entry.iteration}: ${e.message}\n`);
     } else {
       io.stderr.write(`[status] ${entry.nodeId} iter=${entry.iteration}: ${e.status}\n`);
     }
