@@ -5,7 +5,10 @@ import type {
   CreateRunInput,
   FinalizeRunInput,
   GetEventsOptions,
+  GetNodeOutputsFilter,
   ListRunsFilter,
+  NodeOutputIndex,
+  NodeOutputRow,
   RecordNodeEndInput,
   RunStore,
   StoredEvent,
@@ -66,6 +69,15 @@ class MemStore implements RunStore {
     _iteration: number,
     _end: RecordNodeEndInput,
   ): Promise<void> {}
+  async recordNodeOutputs(
+    _runId: string,
+    _nodeId: string,
+    _iteration: number,
+    _outputs: NodeOutputIndex,
+  ): Promise<void> {}
+  async getNodeOutputs(_runId: string, _filter?: GetNodeOutputsFilter): Promise<NodeOutputRow[]> {
+    return [];
+  }
   async finalizeRun(_runId: string, _input: FinalizeRunInput): Promise<void> {}
   async getRun(runId: string): Promise<StoredRun | null> {
     return this.rows.find((r) => r.id === runId) ?? null;

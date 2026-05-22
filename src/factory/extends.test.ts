@@ -297,4 +297,42 @@ nodes:
     );
     await expect(loadFactory(derived, repo)).rejects.toThrowError(/extends/);
   });
+
+  it("derived layer override replaces the node wholesale (including outputs)", async () => {
+    const repo = await makeRepo();
+    await writeAt(
+      repo,
+      "examples/with-outputs.yaml",
+      `name: base
+nodes:
+  propose:
+    executor: claude
+    with: { prompt: original-propose }
+    outputs:
+      findings: { type: value, required: true }
+  apply:
+    executor: claude
+    terminal: true
+    with: { prompt: original-apply }
+edges:
+  - from: propose
+    to: apply
+`,
+    );
+    const derived = await writeAt(
+      repo,
+      ".minifac/factories/derived.yaml",
+      `extends: minifac:with-outputs
+nodes:
+  propose:
+    executor: claude
+    with: { prompt: overridden-propose }
+`,
+    );
+    const loaded = await loadFactory(derived, repo);
+    // Whole-node replace: derived's propose has no outputs, so the
+    // base's outputs are gone.
+    expect(loaded.factory.nodes.propose?.outputs).toBeUndefined();
+    expect(loaded.factory.nodes.propose?.with?.prompt).toBe("overridden-propose");
+  });
 });

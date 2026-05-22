@@ -442,3 +442,307 @@ describe("minifac runs show <id> (showAction)", () => {
     }
   });
 });
+
+import { mkdir, writeFile } from "node:fs/promises";
+import { catAction, formatBytes, parseSelector } from "./runs.js";
+
+async function seedOutputs(
+  store: SqliteRunStore,
+  runId: string,
+  outputsRoot: string,
+): Promise<void> {
+  // Per-iteration directory layout matches the runtime's choice.
+  const proposeDir = path.join(outputsRoot, runId, "propose", "1");
+  await mkdir(proposeDir, { recursive: true });
+  const findingsPath = path.join(proposeDir, "findings.json");
+  await writeFile(findingsPath, JSON.stringify({ a: 1, b: 2 }));
+  await store.recordNodeOutputs(runId, "propose", 1, {
+    findings: {
+      type: "value",
+      path: findingsPath,
+      size: 13,
+      mtime: 1700000000000,
+    },
+  });
+}
+
+describe("formatBytes", () => {
+  it("formats bytes/KB/MB", () => {
+    expect(formatBytes(412)).toBe("412 B");
+    expect(formatBytes(18 * 1024 + 200)).toMatch(/^[0-9]+\.[0-9] KB$/);
+    expect(formatBytes(1.1 * 1024 * 1024)).toMatch(/^1\.1 MB$/);
+  });
+});
+
+describe("parseSelector", () => {
+  it("parses node/key", () => {
+    const r = parseSelector("propose/findings");
+    expect(r).toEqual({ nodeId: "propose", outputKey: "findings" });
+  });
+  it("parses node:iter/key", () => {
+    const r = parseSelector("verify:2/results");
+    expect(r).toEqual({ nodeId: "verify", iteration: 2, outputKey: "results" });
+  });
+  it("parses directory filename selector", () => {
+    const r = parseSelector("verify/logs/run.log");
+    expect(r).toEqual({ nodeId: "verify", outputKey: "logs", filename: "run.log" });
+  });
+  it("rejects malformed selector (no slash)", () => {
+    expect("error" in (parseSelector("foo") as object)).toBe(true);
+  });
+  it("rejects invalid iteration", () => {
+    expect("error" in (parseSelector("verify:abc/x") as object)).toBe(true);
+  });
+});
+
+describe("runs show --outputs", () => {
+  it("appends the outputs tree after the event log", async () => {
+    const store = await freshStore();
+    const outputsRoot = await mkdtemp(path.join(tmpdir(), "minifac-out-show-"));
+    try {
+      await seed(store);
+      await seedOutputs(store, "aaaa1111-2222-3333-4444-555555555555", outputsRoot);
+      const out = new BufferStream();
+      const err = new BufferStream();
+      const code = await showAction({
+        idOrPrefix: "aaaa",
+        outputs: true,
+        store,
+        io: { stdout: out, stderr: err },
+      });
+      expect(code).toBe(0);
+      const text = out.text();
+      expect(text).toContain("Outputs for run aaaa1111-2222-3333-4444-555555555555:");
+      expect(text).toContain("propose (iter 1):");
+      expect(text).toMatch(/findings \(value/);
+    } finally {
+      await store.close();
+    }
+  });
+
+  it("prints (none) when no outputs recorded", async () => {
+    const store = await freshStore();
+    try {
+      await seed(store);
+      const out = new BufferStream();
+      const err = new BufferStream();
+      const code = await showAction({
+        idOrPrefix: "aaaa",
+        outputs: true,
+        store,
+        io: { stdout: out, stderr: err },
+      });
+      expect(code).toBe(0);
+      expect(out.text()).toMatch(/Outputs for run .+:\n {2}\(none\)/);
+    } finally {
+      await store.close();
+    }
+  });
+
+  it("--outputs --json emits a trailing {type:outputs} line", async () => {
+    const store = await freshStore();
+    const outputsRoot = await mkdtemp(path.join(tmpdir(), "minifac-out-show-json-"));
+    try {
+      await seed(store);
+      await seedOutputs(store, "aaaa1111-2222-3333-4444-555555555555", outputsRoot);
+      const out = new BufferStream();
+      const err = new BufferStream();
+      await showAction({
+        idOrPrefix: "aaaa",
+        outputs: true,
+        json: true,
+        store,
+        io: { stdout: out, stderr: err },
+      });
+      const lines = out
+        .text()
+        .split("\n")
+        .filter((l) => l.length > 0);
+      const last = JSON.parse(lines[lines.length - 1] as string);
+      expect(last.type).toBe("outputs");
+      expect(Array.isArray(last.rows)).toBe(true);
+      expect(last.rows.length).toBe(1);
+    } finally {
+      await store.close();
+    }
+  });
+});
+
+describe("runs cat", () => {
+  it("prints the raw value file contents", async () => {
+    const store = await freshStore();
+    const outputsRoot = await mkdtemp(path.join(tmpdir(), "minifac-out-cat-"));
+    try {
+      await seed(store);
+      await seedOutputs(store, "aaaa1111-2222-3333-4444-555555555555", outputsRoot);
+      const out = new BufferStream();
+      const err = new BufferStream();
+      const code = await catAction({
+        idOrPrefix: "aaaa",
+        selector: "propose/findings",
+        store,
+        io: { stdout: out, stderr: err },
+      });
+      expect(code).toBe(0);
+      expect(out.text()).toBe(JSON.stringify({ a: 1, b: 2 }));
+    } finally {
+      await store.close();
+    }
+  });
+
+  it("malformed selector exits 1", async () => {
+    const store = await freshStore();
+    try {
+      await seed(store);
+      const out = new BufferStream();
+      const err = new BufferStream();
+      const code = await catAction({
+        idOrPrefix: "aaaa",
+        selector: "not-a-selector",
+        store,
+        io: { stdout: out, stderr: err },
+      });
+      expect(code).toBe(1);
+      expect(err.text()).toMatch(/Usage error/);
+    } finally {
+      await store.close();
+    }
+  });
+
+  it("unknown node exits 1", async () => {
+    const store = await freshStore();
+    try {
+      await seed(store);
+      const out = new BufferStream();
+      const err = new BufferStream();
+      const code = await catAction({
+        idOrPrefix: "aaaa",
+        selector: "nonexistent/findings",
+        store,
+        io: { stdout: out, stderr: err },
+      });
+      expect(code).toBe(1);
+      expect(err.text()).toMatch(/nonexistent/);
+    } finally {
+      await store.close();
+    }
+  });
+
+  it("rejects `..` traversal in directory filename", async () => {
+    const store = await freshStore();
+    const outputsRoot = await mkdtemp(path.join(tmpdir(), "minifac-out-cat-trav-"));
+    try {
+      await seed(store);
+      // Seed a directory output.
+      const runId = "aaaa1111-2222-3333-4444-555555555555";
+      const logsDir = path.join(outputsRoot, runId, "verify", "1", "logs");
+      await mkdir(logsDir, { recursive: true });
+      await writeFile(path.join(logsDir, "run.log"), "hello");
+      await store.recordNodeOutputs(runId, "verify", 1, {
+        logs: { type: "directory", path: logsDir, size: 5, mtime: 1 },
+      });
+      const out = new BufferStream();
+      const err = new BufferStream();
+      const code = await catAction({
+        idOrPrefix: "aaaa",
+        selector: "verify/logs/../etc/passwd",
+        store,
+        io: { stdout: out, stderr: err },
+      });
+      expect(code).toBe(1);
+      expect(err.text()).toMatch(/traversal/);
+    } finally {
+      await store.close();
+    }
+  });
+
+  it("directory selector without filename lists files", async () => {
+    const store = await freshStore();
+    const outputsRoot = await mkdtemp(path.join(tmpdir(), "minifac-out-cat-dir-"));
+    try {
+      await seed(store);
+      const runId = "aaaa1111-2222-3333-4444-555555555555";
+      const logsDir = path.join(outputsRoot, runId, "verify", "1", "logs");
+      await mkdir(logsDir, { recursive: true });
+      await writeFile(path.join(logsDir, "a.log"), "aaaa");
+      await writeFile(path.join(logsDir, "b.log"), "bbbb");
+      await store.recordNodeOutputs(runId, "verify", 1, {
+        logs: { type: "directory", path: logsDir, size: 8, mtime: 1 },
+      });
+      const out = new BufferStream();
+      const err = new BufferStream();
+      const code = await catAction({
+        idOrPrefix: "aaaa",
+        selector: "verify/logs",
+        store,
+        io: { stdout: out, stderr: err },
+      });
+      expect(code).toBe(0);
+      expect(out.text()).toContain("a.log");
+      expect(out.text()).toContain("b.log");
+    } finally {
+      await store.close();
+    }
+  });
+
+  it("explicit iteration selector picks that iteration", async () => {
+    const store = await freshStore();
+    const outputsRoot = await mkdtemp(path.join(tmpdir(), "minifac-out-cat-iter-"));
+    try {
+      await seed(store);
+      const runId = "aaaa1111-2222-3333-4444-555555555555";
+      const dir1 = path.join(outputsRoot, runId, "verify", "1");
+      const dir2 = path.join(outputsRoot, runId, "verify", "2");
+      await mkdir(dir1, { recursive: true });
+      await mkdir(dir2, { recursive: true });
+      await writeFile(path.join(dir1, "results.json"), '"iter1"');
+      await writeFile(path.join(dir2, "results.json"), '"iter2"');
+      await store.recordNodeOutputs(runId, "verify", 1, {
+        results: { type: "value", path: path.join(dir1, "results.json"), size: 7, mtime: 1 },
+      });
+      await store.recordNodeOutputs(runId, "verify", 2, {
+        results: { type: "value", path: path.join(dir2, "results.json"), size: 7, mtime: 2 },
+      });
+      const out = new BufferStream();
+      const err = new BufferStream();
+      const code = await catAction({
+        idOrPrefix: "aaaa",
+        selector: "verify:1/results",
+        store,
+        io: { stdout: out, stderr: err },
+      });
+      expect(code).toBe(0);
+      expect(out.text()).toBe('"iter1"');
+    } finally {
+      await store.close();
+    }
+  });
+
+  it("missing on-disk file exits 1", async () => {
+    const store = await freshStore();
+    try {
+      await seed(store);
+      const runId = "aaaa1111-2222-3333-4444-555555555555";
+      await store.recordNodeOutputs(runId, "propose", 1, {
+        findings: {
+          type: "value",
+          path: "/nonexistent/findings.json",
+          size: 0,
+          mtime: 0,
+        },
+      });
+      const out = new BufferStream();
+      const err = new BufferStream();
+      const code = await catAction({
+        idOrPrefix: "aaaa",
+        selector: "propose/findings",
+        store,
+        io: { stdout: out, stderr: err },
+      });
+      expect(code).toBe(1);
+      expect(err.text()).toMatch(/Could not read/);
+    } finally {
+      await store.close();
+    }
+  });
+});

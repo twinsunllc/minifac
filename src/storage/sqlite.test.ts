@@ -38,7 +38,7 @@ describe("SqliteRunStore", () => {
     }
   });
 
-  it("creates the DB file lazily and applies migrations through v2", async () => {
+  it("creates the DB file lazily and applies migrations through v3", async () => {
     const dbPath = path.join(dir, "nested", "runs.db");
     store = SqliteRunStore.open(dbPath);
     // Verify by opening a parallel read-only handle.
@@ -51,7 +51,7 @@ describe("SqliteRunStore", () => {
       const ver = inspector
         .prepare("SELECT COALESCE(MAX(version), 0) AS v FROM schema_version")
         .get() as { v: number };
-      expect(ver.v).toBe(2);
+      expect(ver.v).toBe(3);
       const tables = inspector
         .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
         .all() as Array<{ name: string }>;
@@ -59,9 +59,15 @@ describe("SqliteRunStore", () => {
       expect(names).toContain("runs");
       expect(names).toContain("events");
       expect(names).toContain("node_executions");
+      expect(names).toContain("node_outputs");
       // branch_name column added by 0002.
       const cols = inspector.prepare("PRAGMA table_info(runs)").all() as Array<{ name: string }>;
       expect(cols.map((c) => c.name)).toContain("branch_name");
+      // v3 index exists.
+      const indexes = inspector
+        .prepare("SELECT name FROM sqlite_master WHERE type='index'")
+        .all() as Array<{ name: string }>;
+      expect(indexes.map((i) => i.name)).toContain("idx_node_outputs_run_node_iter");
     } finally {
       inspector.close();
     }
@@ -130,7 +136,7 @@ describe("SqliteRunStore", () => {
       const ver = inspector
         .prepare("SELECT COALESCE(MAX(version), 0) AS v FROM schema_version")
         .get() as { v: number };
-      expect(ver.v).toBe(2);
+      expect(ver.v).toBe(3);
       const cols = inspector.prepare("PRAGMA table_info(runs)").all() as Array<{ name: string }>;
       expect(cols.map((c) => c.name)).toContain("branch_name");
     } finally {
@@ -325,5 +331,143 @@ describe("SqliteRunStore", () => {
     } finally {
       inspector.close();
     }
+  });
+});
+
+describe("SqliteRunStore — node_outputs", () => {
+  let dir: string;
+  let store: SqliteRunStore | undefined;
+  beforeEach(async () => {
+    dir = await tmp("minifac-no-");
+  });
+  afterEach(async () => {
+    if (store) {
+      await store.close();
+      store = undefined;
+    }
+  });
+
+  it("recordNodeOutputs is a no-op on an empty index", async () => {
+    const dbPath = path.join(dir, "no-op.db");
+    store = SqliteRunStore.open(dbPath);
+    await store.createRun({
+      id: "r1",
+      factoryPath: "/p/f.yaml",
+      factoryName: "f",
+      startedAt: 0,
+    });
+    await store.recordNodeOutputs("r1", "a", 1, {});
+    const rows = await store.getNodeOutputs("r1");
+    expect(rows).toEqual([]);
+  });
+
+  it("inserts one row per output key and round-trips via getNodeOutputs", async () => {
+    const dbPath = path.join(dir, "ins.db");
+    store = SqliteRunStore.open(dbPath);
+    await store.createRun({
+      id: "abc",
+      factoryPath: "/p/f.yaml",
+      factoryName: "f",
+      startedAt: 0,
+    });
+    await store.recordNodeOutputs("abc", "propose", 1, {
+      findings: { type: "value", path: "/a/f.json", size: 412, mtime: 1700000000000 },
+      notes: { type: "value", path: "/a/n.json", size: 88, mtime: 1700000000005 },
+    });
+    const rows = await store.getNodeOutputs("abc");
+    expect(rows.length).toBe(2);
+    // Ordered by node_id ASC, iteration ASC, output_key ASC.
+    expect(rows[0]?.outputKey).toBe("findings");
+    expect(rows[1]?.outputKey).toBe("notes");
+    expect(rows[0]?.outputType).toBe("value");
+    expect(rows[0]?.path).toBe("/a/f.json");
+    expect(rows[0]?.size).toBe(412);
+    expect(rows[0]?.mtime).toBe(1700000000000);
+  });
+
+  it("getNodeOutputs filters by nodeId and iteration", async () => {
+    const dbPath = path.join(dir, "filter.db");
+    store = SqliteRunStore.open(dbPath);
+    await store.createRun({
+      id: "abc",
+      factoryPath: "/p/f.yaml",
+      factoryName: "f",
+      startedAt: 0,
+    });
+    await store.recordNodeOutputs("abc", "propose", 1, {
+      findings: { type: "value", path: "/p/1/f.json", size: 1, mtime: 1 },
+    });
+    await store.recordNodeOutputs("abc", "verify", 1, {
+      results: { type: "value", path: "/v/1/r.json", size: 1, mtime: 1 },
+    });
+    await store.recordNodeOutputs("abc", "verify", 2, {
+      results: { type: "value", path: "/v/2/r.json", size: 1, mtime: 1 },
+    });
+    const verifyIter2 = await store.getNodeOutputs("abc", { nodeId: "verify", iteration: 2 });
+    expect(verifyIter2.length).toBe(1);
+    expect(verifyIter2[0]?.path).toBe("/v/2/r.json");
+    const allVerify = await store.getNodeOutputs("abc", { nodeId: "verify" });
+    expect(allVerify.length).toBe(2);
+    expect(allVerify.map((r) => r.iteration)).toEqual([1, 2]);
+  });
+
+  it("re-record with the same primary key replaces the row", async () => {
+    const dbPath = path.join(dir, "replace.db");
+    store = SqliteRunStore.open(dbPath);
+    await store.createRun({
+      id: "abc",
+      factoryPath: "/p/f.yaml",
+      factoryName: "f",
+      startedAt: 0,
+    });
+    await store.recordNodeOutputs("abc", "verify", 1, {
+      results: { type: "value", path: "/a/r.json", size: 100, mtime: 1 },
+    });
+    await store.recordNodeOutputs("abc", "verify", 1, {
+      results: { type: "value", path: "/a/r.json", size: 120, mtime: 2 },
+    });
+    const rows = await store.getNodeOutputs("abc", { nodeId: "verify", iteration: 1 });
+    expect(rows.length).toBe(1);
+    expect(rows[0]?.size).toBe(120);
+    expect(rows[0]?.mtime).toBe(2);
+  });
+
+  it("pre-v3 run returns an empty array (no rows)", async () => {
+    const dbPath = path.join(dir, "empty.db");
+    store = SqliteRunStore.open(dbPath);
+    await store.createRun({
+      id: "legacy",
+      factoryPath: "/p/f.yaml",
+      factoryName: "f",
+      startedAt: 0,
+    });
+    const rows = await store.getNodeOutputs("legacy");
+    expect(rows).toEqual([]);
+  });
+
+  it("deleteNodeOutputsForRun removes only the named run", async () => {
+    const dbPath = path.join(dir, "del.db");
+    store = SqliteRunStore.open(dbPath);
+    await store.createRun({
+      id: "a",
+      factoryPath: "/p/f.yaml",
+      factoryName: "f",
+      startedAt: 0,
+    });
+    await store.createRun({
+      id: "b",
+      factoryPath: "/p/f.yaml",
+      factoryName: "f",
+      startedAt: 0,
+    });
+    await store.recordNodeOutputs("a", "n", 1, {
+      x: { type: "value", path: "/a/x.json", size: 1, mtime: 1 },
+    });
+    await store.recordNodeOutputs("b", "n", 1, {
+      y: { type: "value", path: "/b/y.json", size: 1, mtime: 1 },
+    });
+    await store.deleteNodeOutputsForRun("a");
+    expect((await store.getNodeOutputs("a")).length).toBe(0);
+    expect((await store.getNodeOutputs("b")).length).toBe(1);
   });
 });

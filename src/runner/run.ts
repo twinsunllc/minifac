@@ -1,44 +1,33 @@
 import { randomUUID } from "node:crypto";
+import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Brief } from "../brief/loader.js";
 import type { ExecutorRegistry } from "../executor/registry.js";
 import type { EmittedEvent, NodeResult, ResolvedNode, RunContext } from "../executor/types.js";
 import type { LoadedFactory } from "../factory/loader.js";
+import type { NodeOutputIndex } from "../factory/schema.js";
 import type { RunStore, StoredEventKind } from "../storage/run-store.js";
+import { minifacHome } from "../worktree/config.js";
 import { markBriefDone } from "./mark-done.js";
+import { validateDeclaredOutputs } from "./outputs.js";
 import type { ExecutionLogEntry, RunResult } from "./result.js";
-import { type Substitutions, substitute } from "./substitute.js";
+import { type Substitutions, TemplateSubstitutionError, substitute } from "./substitute.js";
 
 export interface RunOptions {
   registry: ExecutorRegistry;
   /** Called for every event yielded by any node, in order. */
   onEvent?: (entry: EmittedEvent) => void;
-  /** Optional brief in scope for this run. When set, the runner substitutes
-   * `{{ brief.<field> }}` tokens in each node's `with.prompt` string
-   * immediately before dispatch. */
+  /** Optional brief in scope for this run. */
   brief?: Brief;
-  /** Optional run-level cwd. When set, becomes the default cwd for any node
-   * whose `cwd` field is absent or resolves to the empty string, and
-   * resolves the `{{ run.cwd }}` template token. */
+  /** Optional run-level cwd. */
   runCwd?: string;
-  /** Optional persistence backend. When supplied the runner records the run
-   * row, every event, per-node executions, and the terminal status through
-   * the store; when absent the runner behaves exactly as it does without
-   * persistence. */
+  /** Optional persistence backend. */
   store?: RunStore;
-  /** Optional pre-generated run id. When omitted the runner generates one.
-   * Callers (CLI, daemon) supply this so they can reference the row before
-   * the runner returns. */
+  /** Optional pre-generated run id. */
   runId?: string;
-  /** Optional branch name to persist on the runs DB row. Set by the CLI's
-   * worktree path so `minifac merge` and `minifac prune` can find the
-   * branch by id without parsing directory names. */
+  /** Optional branch name to persist on the runs DB row. */
   branchName?: string;
-  /** Optional cancellation signal. When aborted, the runner short-circuits
-   * after the current node's next yielded event and finalizes the run with
-   * `{ status: "failed", reason: "user_quit" }`. The in-flight executor
-   * child is not killed by the runner itself — callers that need prompt
-   * cancellation should also signal the child (e.g. via process exit). */
+  /** Optional cancellation signal. */
   abortSignal?: AbortSignal;
 }
 
@@ -49,14 +38,15 @@ interface QueueItem {
 export async function runFactory(loaded: LoadedFactory, options: RunOptions): Promise<RunResult> {
   const { factory, sourceDir, sourcePath } = loaded;
   const { registry, onEvent, brief, runCwd, store } = options;
-  const subs: Substitutions = {};
-  if (brief) subs.brief = brief;
-  if (runCwd !== undefined && runCwd.length > 0) subs.run = { cwd: runCwd };
+  const baseSubs: Substitutions = {};
+  if (brief) baseSubs.brief = brief;
+  if (runCwd !== undefined && runCwd.length > 0) baseSubs.run = { cwd: runCwd };
 
   const runStart = Date.now();
   const runId = options.runId ?? randomUUID();
   const priorResults: NodeResult[] = [];
   const log: ExecutionLogEntry[] = [];
+  const outputsRoot = path.join(minifacHome(), "outputs", runId);
 
   if (store) {
     try {
@@ -98,15 +88,11 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
   };
 
   const iterations = new Map<string, number>();
-  const edgeTraversals = new Map<string, number>(); // key: from|to|when
+  const edgeTraversals = new Map<string, number>();
   for (const id of Object.keys(factory.nodes)) iterations.set(id, 0);
 
-  // Track whether at least one budget hit caused a skip — used to classify
-  // termination as `budget_exhausted` vs `graph_drained`.
   let budgetHit = false;
 
-  // Start nodes = nodes with no `on_success` inbound edge. See
-  // specs/graph-runner/spec.md "Start nodes".
   const onSuccessInbound = new Set<string>();
   for (const edge of factory.edges) {
     if (edge.when === "on_success") onSuccessInbound.add(edge.to);
@@ -120,11 +106,13 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
   const resolveCwd = (
     nodeCwd: string | undefined,
     nodeInputs: Record<string, unknown> | undefined,
+    outputsDir: string,
   ): string => {
     let effective = nodeCwd;
     if (typeof effective === "string" && effective.length > 0) {
-      const localSubs: Substitutions = { ...subs };
+      const localSubs: Substitutions = { ...baseSubs };
       if (nodeInputs !== undefined) localSubs.inputs = nodeInputs;
+      localSubs.run = { ...(baseSubs.run ?? {}), outputsDir };
       effective = substitute(effective, localSubs);
     }
     if (effective !== undefined && effective.length > 0) {
@@ -153,8 +141,6 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
     const node = factory.nodes[nodeId];
     if (!node) continue;
 
-    // Enforce node max_iterations at pop time too — defensive against
-    // multiple successors enqueueing the same node.
     const usedIterations = iterations.get(nodeId) ?? 0;
     if (node.max_iterations !== undefined && usedIterations >= node.max_iterations) {
       budgetHit = true;
@@ -171,8 +157,6 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
       continue;
     }
 
-    // After loadFactory, every resolved node has an executor populated
-    // (either inline or inlined from a step). Defensively coerce.
     const executorType = node.executor ?? "";
     const executor = registry.get(executorType);
     if (!executor) {
@@ -189,6 +173,16 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
     const iteration = usedIterations + 1;
     iterations.set(nodeId, iteration);
 
+    // Per-node-per-iteration outputs directory. Created mkdirp before
+    // dispatch so the executor (and `{{ run.outputs_dir }}` token) can
+    // rely on its existence.
+    const outputsDir = path.join(outputsRoot, nodeId, String(iteration));
+    try {
+      await mkdir(outputsDir, { recursive: true, mode: 0o755 });
+    } catch (err) {
+      reportStoreError(onEvent, runStart, err);
+    }
+
     if (store) {
       try {
         await store.recordNodeStart(runId, nodeId, iteration, Date.now());
@@ -197,9 +191,6 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
       }
     }
 
-    // Per-node inputs map attached at step inlining time. Inline nodes
-    // (declared with `executor:`/`with:`) have no inputs map; for them,
-    // `{{ inputs.* }}` tokens pass through verbatim.
     const nodeInputs = (node as { __inputs?: unknown }).__inputs;
     const inputsMap =
       nodeInputs !== undefined &&
@@ -209,20 +200,57 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
         ? (nodeInputs as Record<string, unknown>)
         : undefined;
 
-    const nodeSubs: Substitutions = { ...subs };
+    // Build the per-node Substitutions, including outputsDir and the
+    // priorResults map (latest entry per nodeId wins).
+    const priorMap = new Map<string, NodeResult>();
+    for (const entry of priorResults) {
+      priorMap.set(entry.nodeId, entry);
+    }
+    const nodeSubs: Substitutions = { ...baseSubs };
+    nodeSubs.run = { ...(baseSubs.run ?? {}), outputsDir };
     if (inputsMap !== undefined) nodeSubs.inputs = inputsMap;
+    nodeSubs.priorResults = priorMap;
 
     let resolvedNode: ResolvedNode = { ...node, id: nodeId };
-    if (
-      (nodeSubs.brief || nodeSubs.run || nodeSubs.inputs) &&
-      node.with &&
-      typeof node.with.prompt === "string"
-    ) {
-      const substituted = substitute(node.with.prompt, nodeSubs);
-      resolvedNode = {
-        ...resolvedNode,
-        with: { ...node.with, prompt: substituted },
-      };
+    if (node.with && typeof node.with.prompt === "string") {
+      try {
+        const substituted = substitute(node.with.prompt, nodeSubs);
+        resolvedNode = {
+          ...resolvedNode,
+          with: { ...node.with, prompt: substituted },
+        };
+      } catch (err) {
+        if (err instanceof TemplateSubstitutionError) {
+          // Surface the error and fail the run cleanly.
+          const entry: EmittedEvent = {
+            nodeId,
+            iteration,
+            emittedAt: Date.now() - runStart,
+            event: { kind: "stderr", line: `template substitution error: ${err.message}` },
+          };
+          onEvent?.(entry);
+          await appendStoreEvent(nodeId, iteration, "stderr", entry.event, entry.emittedAt);
+          if (store) {
+            try {
+              await store.recordNodeEnd(runId, nodeId, iteration, {
+                status: "failed",
+                at: Date.now(),
+              });
+            } catch (err2) {
+              reportStoreError(onEvent, runStart, err2);
+            }
+          }
+          result = {
+            status: "failed",
+            reason: "node_failed",
+            proximateNodeId: nodeId,
+            log,
+            durationMs: Date.now() - runStart,
+          };
+          break;
+        }
+        throw err;
+      }
     }
     const snapshot: readonly NodeResult[] = Object.freeze(priorResults.slice());
 
@@ -231,7 +259,8 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
       priorResults: snapshot,
       nodeId,
       iteration,
-      cwd: resolveCwd(node.cwd, inputsMap),
+      cwd: resolveCwd(node.cwd, inputsMap, outputsDir),
+      outputsDir,
     };
 
     const startedAt = Date.now() - runStart;
@@ -275,23 +304,95 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
     const endedAt = Date.now() - runStart;
 
     if (finalStatus === null) {
-      // Executor failed to yield a terminal status. Treat as failure.
       finalStatus = "failed";
     }
 
     log.push({ nodeId, iteration, status: finalStatus, startedAt, endedAt });
 
-    // Append a NodeResult entry for this execution. The reason is captured
-    // from the terminal status event's `meta.sentinel` field when the
-    // executor reports `meta.reason === "sentinel_failed"`; otherwise null.
+    // Post-execution outputs validation. Runs only when the node:
+    //  - declared an `outputs:` block, AND
+    //  - terminated `succeeded`.
+    // Sentinel-failed and other-failed nodes skip validation; their
+    // `NodeResult.outputs` stays null.
+    let outputsForResult: NodeOutputIndex | null = null;
+    let resultReason: string | null = extractReason(finalStatus, terminalMeta);
+    let validatedIndex: NodeOutputIndex = {};
+    if (finalStatus === "succeeded" && node.outputs) {
+      const validation = await validateDeclaredOutputs(node, outputsDir);
+      validatedIndex = validation.index;
+      if (validation.missing.length > 0) {
+        finalStatus = "failed";
+        resultReason = "missing_required_output";
+        // Surface the override on stderr so operators see what happened.
+        const lines: string[] = [];
+        lines.push(
+          `missing_required_output: node "${nodeId}" succeeded but is missing required outputs: ${validation.missing.join(", ")} (dir: ${outputsDir})`,
+        );
+        for (const key of validation.missing) {
+          const d = validation.detail[key];
+          if (d) lines.push(`  - ${d}`);
+        }
+        for (const line of lines) {
+          const entry: EmittedEvent = {
+            nodeId,
+            iteration,
+            emittedAt: Date.now() - runStart,
+            event: { kind: "stderr", line },
+          };
+          onEvent?.(entry);
+          await appendStoreEvent(nodeId, iteration, "stderr", entry.event, entry.emittedAt);
+        }
+        // Re-emit a status event so consumers can observe the override.
+        const statusEvent: EmittedEvent = {
+          nodeId,
+          iteration,
+          emittedAt: Date.now() - runStart,
+          event: {
+            kind: "status",
+            status: "failed",
+            meta: {
+              reason: "missing_required_output",
+              missing_outputs: validation.missing,
+              missing_outputs_detail: validation.detail,
+              outputs_dir: outputsDir,
+              partial_index: validation.index,
+            },
+          },
+        };
+        onEvent?.(statusEvent);
+        await appendStoreEvent(
+          nodeId,
+          iteration,
+          "status",
+          statusEvent.event,
+          statusEvent.emittedAt,
+        );
+        // outputs on the prior-results snapshot is null when overridden.
+        outputsForResult = null;
+      } else {
+        outputsForResult = Object.keys(validation.index).length > 0 ? validation.index : null;
+      }
+    }
+
     priorResults.push({
       nodeId,
       iteration,
       status: finalStatus,
-      reason: extractReason(finalStatus, terminalMeta),
+      reason: resultReason,
       startedAt,
       endedAt,
+      outputs: outputsForResult,
     });
+
+    // Persist any indexed outputs (including the partial index on override)
+    // BEFORE recordNodeEnd so the storage state is consistent.
+    if (store && Object.keys(validatedIndex).length > 0) {
+      try {
+        await store.recordNodeOutputs(runId, nodeId, iteration, validatedIndex);
+      } catch (err) {
+        reportStoreError(onEvent, runStart, err);
+      }
+    }
 
     if (store) {
       try {
@@ -315,7 +416,6 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
       break;
     }
 
-    // Evaluate outbound edges.
     const outbound = factory.edges.filter((e) => e.from === nodeId);
     let traversedAny = false;
     let skippedDueToBudget = false;
@@ -369,8 +469,6 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
     };
   }
 
-  // Brief mark-done post-step. Runs after terminal-success only; failures
-  // log a warning and continue. Skipped for brief-less runs.
   if (result.status === "succeeded" && brief && runCwd !== undefined && runCwd.length > 0) {
     const change = brief.frontmatter.change;
     if (typeof change === "string" && change.length > 0) {
@@ -430,9 +528,6 @@ function reportStoreError(
   runStart: number,
   err: unknown,
 ): void {
-  // Surface store failures as a synthetic stderr event via the streaming
-  // callback. Do NOT append to priorResults — that array is for real node
-  // executions only.
   const entry: EmittedEvent = {
     nodeId: "__store__",
     iteration: 0,

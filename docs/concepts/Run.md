@@ -88,3 +88,5 @@ written to stderr on completion.
 - [[Runs-DB]] — where the run persists
 - [[Run-TUI]] — the interactive surface
 - [[Sentinel]] — how nodes signal their status
+- [[Outputs]] — declared deliverables produced by run nodes (run-scoped
+  directory at `~/.minifac/outputs/<run-id>/<node-id>/<iteration>/`)

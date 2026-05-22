@@ -1,5 +1,5 @@
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Brief } from "../brief/loader.js";
 import { ExecutorRegistry } from "../executor/registry.js";
 import type {
@@ -16,7 +16,10 @@ import type {
   CreateRunInput,
   FinalizeRunInput,
   GetEventsOptions,
+  GetNodeOutputsFilter,
   ListRunsFilter,
+  NodeOutputIndex,
+  NodeOutputRow,
   RecordNodeEndInput,
   RunStore,
   StoredEvent,
@@ -37,6 +40,12 @@ class FakeStore implements RunStore {
     nodeId: string;
     iteration: number;
     end: RecordNodeEndInput;
+  }> = [];
+  nodeOutputs: Array<{
+    runId: string;
+    nodeId: string;
+    iteration: number;
+    outputs: NodeOutputIndex;
   }> = [];
   finalizeCalls: Array<{ runId: string; input: FinalizeRunInput }> = [];
 
@@ -81,6 +90,42 @@ class FakeStore implements RunStore {
     end: RecordNodeEndInput,
   ): Promise<void> {
     this.nodeEnds.push({ runId, nodeId, iteration, end });
+  }
+  async recordNodeOutputs(
+    runId: string,
+    nodeId: string,
+    iteration: number,
+    outputs: NodeOutputIndex,
+  ): Promise<void> {
+    if (Object.keys(outputs).length === 0) return;
+    this.nodeOutputs.push({ runId, nodeId, iteration, outputs });
+  }
+  async getNodeOutputs(runId: string, filter?: GetNodeOutputsFilter): Promise<NodeOutputRow[]> {
+    const rows: NodeOutputRow[] = [];
+    for (const e of this.nodeOutputs) {
+      if (e.runId !== runId) continue;
+      if (filter?.nodeId !== undefined && e.nodeId !== filter.nodeId) continue;
+      if (filter?.iteration !== undefined && e.iteration !== filter.iteration) continue;
+      for (const [key, entry] of Object.entries(e.outputs)) {
+        rows.push({
+          runId: e.runId,
+          nodeId: e.nodeId,
+          iteration: e.iteration,
+          outputKey: key,
+          outputType: entry.type,
+          path: entry.path,
+          size: entry.size,
+          mtime: entry.mtime,
+        });
+      }
+    }
+    rows.sort(
+      (a, b) =>
+        a.nodeId.localeCompare(b.nodeId) ||
+        a.iteration - b.iteration ||
+        a.outputKey.localeCompare(b.outputKey),
+    );
+    return rows;
   }
   async finalizeRun(runId: string, input: FinalizeRunInput): Promise<void> {
     this.finalizeCalls.push({ runId, input });
@@ -397,7 +442,7 @@ describe("runFactory", () => {
     expect(typeof entry?.endedAt).toBe("number");
     // The shape contains exactly the documented keys — no extras.
     expect(Object.keys(entry ?? {}).sort()).toEqual(
-      ["endedAt", "iteration", "nodeId", "reason", "startedAt", "status"].sort(),
+      ["endedAt", "iteration", "nodeId", "outputs", "reason", "startedAt", "status"].sort(),
     );
   });
 
@@ -1060,5 +1105,422 @@ describe("runFactory", () => {
       expect(warnings.length).toBeGreaterThan(0);
       expect(warnings[0]).toMatch(/mark-done/);
     });
+  });
+});
+
+describe("runFactory — outputs directory and validation", () => {
+  // Note: these tests touch the real `MINIFAC_HOME` path, but only under
+  // a per-test tmpdir override so they don't pollute the user's state.
+  let savedHome: string | undefined;
+  let homeDir: string | undefined;
+
+  beforeEach(async () => {
+    const os = await import("node:os");
+    const fs = await import("node:fs/promises");
+    savedHome = process.env.MINIFAC_HOME;
+    homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "minifac-outputs-test-"));
+    process.env.MINIFAC_HOME = homeDir;
+  });
+
+  afterEach(() => {
+    if (savedHome === undefined) {
+      Reflect.deleteProperty(process.env, "MINIFAC_HOME");
+    } else {
+      process.env.MINIFAC_HOME = savedHome;
+    }
+  });
+
+  function makeNode(over: Partial<Factory["nodes"][string]> = {}) {
+    return {
+      executor: "fake",
+      terminal: true,
+      ...over,
+    } as Factory["nodes"][string];
+  }
+
+  it("creates the per-iteration outputs directory before dispatch", async () => {
+    const fs = await import("node:fs/promises");
+    let seenDir: string | null = null;
+    const factory: Factory = {
+      name: "f",
+      nodes: { a: makeNode({}) },
+      edges: [],
+    };
+    const exec = new FakeExecutor("fake", {
+      a: (ctx) => {
+        seenDir = ctx.outputsDir;
+        return [succeeded];
+      },
+    });
+    const reg = new ExecutorRegistry();
+    reg.register(exec);
+    const res = await runFactory(wrap(factory), { registry: reg, runId: "run-abc" });
+    expect(res.status).toBe("succeeded");
+    expect(seenDir).toBe(path.join(homeDir as string, "outputs", "run-abc", "a", "1"));
+    // The directory exists by the time the executor saw it; verify now.
+    const stat = await fs.stat(seenDir as unknown as string);
+    expect(stat.isDirectory()).toBe(true);
+  });
+
+  it("substitutes `{{ run.outputs_dir }}` in the node prompt", async () => {
+    let prompt: string | undefined;
+    const factory: Factory = {
+      name: "f",
+      nodes: {
+        a: makeNode({ with: { prompt: "Write to {{ run.outputs_dir }}/findings.json" } }),
+      },
+      edges: [],
+    };
+    const exec = new FakeExecutor("fake", {
+      a: (_ctx, node) => {
+        prompt = node.with?.prompt as string;
+        return [succeeded];
+      },
+    });
+    const reg = new ExecutorRegistry();
+    reg.register(exec);
+    await runFactory(wrap(factory), { registry: reg, runId: "rid" });
+    expect(prompt).toBe(
+      `Write to ${path.join(homeDir as string, "outputs", "rid", "a", "1")}/findings.json`,
+    );
+  });
+
+  it("required value output absent overrides succeed -> failed", async () => {
+    const factory: Factory = {
+      name: "f",
+      nodes: {
+        a: makeNode({
+          outputs: { findings: { type: "value", required: true } },
+        }),
+      },
+      edges: [],
+    };
+    const exec = new FakeExecutor("fake", {
+      a: () => [succeeded],
+    });
+    const reg = new ExecutorRegistry();
+    reg.register(exec);
+    const res = await runFactory(wrap(factory), { registry: reg, runId: "rid" });
+    // terminal:true on `a` so the run would otherwise succeed; but missing
+    // required output flips the node and the overall run to failed.
+    expect(res.status).toBe("failed");
+    expect(res.reason).toBe("node_failed");
+  });
+
+  it("required value output present and parseable keeps succeeded", async () => {
+    const { writeFileSync } = await import("node:fs");
+    const factory: Factory = {
+      name: "f",
+      nodes: {
+        a: makeNode({
+          outputs: { findings: { type: "value", required: true } },
+        }),
+      },
+      edges: [],
+    };
+    const exec = new FakeExecutor("fake", {
+      a: (ctx) => {
+        writeFileSync(path.join(ctx.outputsDir, "findings.json"), JSON.stringify({ ok: true }));
+        return [succeeded];
+      },
+    });
+    const reg = new ExecutorRegistry();
+    reg.register(exec);
+    const res = await runFactory(wrap(factory), { registry: reg, runId: "rid" });
+    expect(res.status).toBe("succeeded");
+  });
+
+  it("required value output present but unparseable fails", async () => {
+    const { writeFileSync } = await import("node:fs");
+    const factory: Factory = {
+      name: "f",
+      nodes: {
+        a: makeNode({
+          outputs: { findings: { type: "value", required: true } },
+        }),
+      },
+      edges: [],
+    };
+    const exec = new FakeExecutor("fake", {
+      a: (ctx) => {
+        writeFileSync(path.join(ctx.outputsDir, "findings.json"), "not json{");
+        return [succeeded];
+      },
+    });
+    const reg = new ExecutorRegistry();
+    reg.register(exec);
+    const res = await runFactory(wrap(factory), { registry: reg, runId: "rid" });
+    expect(res.status).toBe("failed");
+  });
+
+  it("required file output without filename uses glob discovery", async () => {
+    const { writeFileSync } = await import("node:fs");
+    const factory: Factory = {
+      name: "f",
+      nodes: {
+        a: makeNode({
+          outputs: { patch: { type: "file", required: true } },
+        }),
+      },
+      edges: [],
+    };
+    const exec = new FakeExecutor("fake", {
+      a: (ctx) => {
+        writeFileSync(path.join(ctx.outputsDir, "patch.diff"), "--- a\n+++ b\n");
+        return [succeeded];
+      },
+    });
+    const reg = new ExecutorRegistry();
+    reg.register(exec);
+    const res = await runFactory(wrap(factory), { registry: reg, runId: "rid" });
+    expect(res.status).toBe("succeeded");
+  });
+
+  it("ambiguous file output glob fails the node", async () => {
+    const { writeFileSync } = await import("node:fs");
+    const factory: Factory = {
+      name: "f",
+      nodes: {
+        a: makeNode({
+          outputs: { patch: { type: "file", required: true } },
+        }),
+      },
+      edges: [],
+    };
+    const exec = new FakeExecutor("fake", {
+      a: (ctx) => {
+        writeFileSync(path.join(ctx.outputsDir, "patch.diff"), "a");
+        writeFileSync(path.join(ctx.outputsDir, "patch.txt"), "b");
+        return [succeeded];
+      },
+    });
+    const reg = new ExecutorRegistry();
+    reg.register(exec);
+    const res = await runFactory(wrap(factory), { registry: reg, runId: "rid" });
+    expect(res.status).toBe("failed");
+  });
+
+  it("empty directory output fails when required", async () => {
+    const { mkdirSync } = await import("node:fs");
+    const factory: Factory = {
+      name: "f",
+      nodes: {
+        a: makeNode({
+          outputs: { logs: { type: "directory", required: true } },
+        }),
+      },
+      edges: [],
+    };
+    const exec = new FakeExecutor("fake", {
+      a: (ctx) => {
+        mkdirSync(path.join(ctx.outputsDir, "logs"), { recursive: true });
+        return [succeeded];
+      },
+    });
+    const reg = new ExecutorRegistry();
+    reg.register(exec);
+    const res = await runFactory(wrap(factory), { registry: reg, runId: "rid" });
+    expect(res.status).toBe("failed");
+  });
+
+  it("non-empty directory output passes", async () => {
+    const { mkdirSync, writeFileSync } = await import("node:fs");
+    const factory: Factory = {
+      name: "f",
+      nodes: {
+        a: makeNode({
+          outputs: { logs: { type: "directory", required: true } },
+        }),
+      },
+      edges: [],
+    };
+    const exec = new FakeExecutor("fake", {
+      a: (ctx) => {
+        const logsDir = path.join(ctx.outputsDir, "logs");
+        mkdirSync(logsDir, { recursive: true });
+        writeFileSync(path.join(logsDir, "log.txt"), "hello");
+        return [succeeded];
+      },
+    });
+    const reg = new ExecutorRegistry();
+    reg.register(exec);
+    const res = await runFactory(wrap(factory), { registry: reg, runId: "rid" });
+    expect(res.status).toBe("succeeded");
+  });
+
+  it("sentinel-failed node skips validation, preserves reason and outputs:null", async () => {
+    const factory: Factory = {
+      name: "f",
+      nodes: {
+        a: makeNode({
+          outputs: { results: { type: "value", required: true } },
+        }),
+      },
+      edges: [],
+    };
+    const exec = new FakeExecutor("fake", {
+      a: () => [
+        {
+          kind: "status",
+          status: "failed",
+          meta: { reason: "sentinel_failed", sentinel: "verify hit error" },
+        } as NodeEvent,
+      ],
+    });
+    const reg = new ExecutorRegistry();
+    reg.register(exec);
+    const store = new FakeStore();
+    const res = await runFactory(wrap(factory), { registry: reg, runId: "rid", store });
+    expect(res.status).toBe("failed");
+    // Sentinel reason preserved (NOT missing_required_output).
+    expect(store.nodeOutputs.length).toBe(0);
+  });
+
+  it("optional output missing does not fail the node", async () => {
+    const factory: Factory = {
+      name: "f",
+      nodes: {
+        a: makeNode({
+          outputs: { notes: { type: "value", required: false } },
+        }),
+      },
+      edges: [],
+    };
+    const exec = new FakeExecutor("fake", {
+      a: () => [succeeded],
+    });
+    const reg = new ExecutorRegistry();
+    reg.register(exec);
+    const res = await runFactory(wrap(factory), { registry: reg, runId: "rid" });
+    expect(res.status).toBe("succeeded");
+  });
+
+  it("partial index preserved on missing-required override", async () => {
+    const { writeFileSync } = await import("node:fs");
+    const factory: Factory = {
+      name: "f",
+      nodes: {
+        a: makeNode({
+          outputs: {
+            findings: { type: "value", required: true },
+            notes: { type: "value", required: false },
+          },
+        }),
+      },
+      edges: [],
+    };
+    const exec = new FakeExecutor("fake", {
+      a: (ctx) => {
+        writeFileSync(path.join(ctx.outputsDir, "notes.json"), JSON.stringify(["a"]));
+        return [succeeded];
+      },
+    });
+    const reg = new ExecutorRegistry();
+    reg.register(exec);
+    const store = new FakeStore();
+    const res = await runFactory(wrap(factory), { registry: reg, runId: "rid", store });
+    expect(res.status).toBe("failed");
+    // notes was indexed even though findings was missing.
+    expect(store.nodeOutputs.length).toBe(1);
+    const recorded = store.nodeOutputs[0];
+    if (!recorded) throw new Error("expected one nodeOutputs entry");
+    expect(Object.keys(recorded.outputs)).toEqual(["notes"]);
+  });
+
+  it("NodeResult.outputs is null when no outputs declared", async () => {
+    const factory: Factory = {
+      name: "f",
+      nodes: {
+        a: makeNode({ terminal: false }),
+        b: makeNode({}),
+      },
+      edges: [{ from: "a", to: "b", when: "on_success" }],
+    };
+    const exec = new FakeExecutor("fake", {
+      a: () => [succeeded],
+      b: () => [succeeded],
+    });
+    const reg = new ExecutorRegistry();
+    reg.register(exec);
+    await runFactory(wrap(factory), { registry: reg, runId: "rid" });
+    const bCtx = exec.contexts.get("b")?.[0];
+    expect(bCtx?.priorResults[0]?.outputs).toBeNull();
+  });
+
+  it("latest iteration wins for priorResults lookups", async () => {
+    const { writeFileSync } = await import("node:fs");
+    // The chain: v runs, writes results, succeeds → gate. gate fails first
+    // iteration so the runner takes the on_failure edge back to v for a
+    // second iteration of v. gate succeeds on iteration 2 → d. d's prompt
+    // references priorResults.v.outputs.results, which should resolve to
+    // v's iteration-2 path.
+    const factory: Factory = {
+      name: "f",
+      nodes: {
+        v: makeNode({
+          terminal: false,
+          max_iterations: 2,
+          outputs: { results: { type: "value", required: true } },
+        }),
+        gate: makeNode({ terminal: false, max_iterations: 2 }),
+        d: makeNode({
+          with: { prompt: "{{ priorResults.v.outputs.results }}" },
+        }),
+      },
+      edges: [
+        { from: "v", to: "gate", when: "on_success" },
+        { from: "gate", to: "v", when: "on_failure", max_traversals: 1 },
+        { from: "gate", to: "d", when: "on_success" },
+      ],
+    };
+    let vIter = 0;
+    let gateIter = 0;
+    const exec = new FakeExecutor("fake", {
+      v: (ctx) => {
+        vIter += 1;
+        writeFileSync(path.join(ctx.outputsDir, "results.json"), JSON.stringify({ iter: vIter }));
+        return [succeeded];
+      },
+      gate: () => {
+        gateIter += 1;
+        return [gateIter === 1 ? failed : succeeded];
+      },
+      d: () => [succeeded],
+    });
+    const reg = new ExecutorRegistry();
+    reg.register(exec);
+    await runFactory(wrap(factory), { registry: reg, runId: "rid" });
+    const dNode = exec.nodes.get("d")?.[0];
+    const seenPrompt = dNode?.with?.prompt as string;
+    expect(seenPrompt).toMatch(/\/v\/2\/results\.json$/);
+  });
+
+  it("records outputs to the store when satisfied", async () => {
+    const { writeFileSync } = await import("node:fs");
+    const factory: Factory = {
+      name: "f",
+      nodes: {
+        a: makeNode({
+          outputs: { findings: { type: "value", required: true } },
+        }),
+      },
+      edges: [],
+    };
+    const exec = new FakeExecutor("fake", {
+      a: (ctx) => {
+        writeFileSync(path.join(ctx.outputsDir, "findings.json"), JSON.stringify({ ok: 1 }));
+        return [succeeded];
+      },
+    });
+    const reg = new ExecutorRegistry();
+    reg.register(exec);
+    const store = new FakeStore();
+    await runFactory(wrap(factory), { registry: reg, runId: "rid", store });
+    expect(store.nodeOutputs.length).toBe(1);
+    const entry = store.nodeOutputs[0];
+    if (!entry) throw new Error("expected one nodeOutputs entry");
+    expect(entry.nodeId).toBe("a");
+    expect(entry.iteration).toBe(1);
+    expect(entry.outputs.findings?.type).toBe("value");
   });
 });

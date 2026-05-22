@@ -7,6 +7,15 @@
  * See `openspec/changes/run-history-persistence/design.md`.
  */
 
+import type { NodeOutputIndex, NodeOutputType } from "../factory/schema.js";
+
+// Re-export the canonical types so all storage consumers share the same shape.
+export type {
+  NodeOutputEntry,
+  NodeOutputIndex,
+  NodeOutputType,
+} from "../factory/schema.js";
+
 export type RunId = string;
 
 export type RunStatus = "running" | "succeeded" | "failed";
@@ -85,6 +94,22 @@ export interface GetEventsOptions {
   limit?: number;
 }
 
+export interface NodeOutputRow {
+  runId: string;
+  nodeId: string;
+  iteration: number;
+  outputKey: string;
+  outputType: NodeOutputType;
+  path: string;
+  size: number;
+  mtime: number;
+}
+
+export interface GetNodeOutputsFilter {
+  nodeId?: string;
+  iteration?: number;
+}
+
 export interface RunStore {
   createRun(input: CreateRunInput): Promise<void>;
   appendEvent(runId: RunId, event: AppendEventInput): Promise<StoredEvent>;
@@ -95,9 +120,19 @@ export interface RunStore {
     iteration: number,
     end: RecordNodeEndInput,
   ): Promise<void>;
+  recordNodeOutputs(
+    runId: RunId,
+    nodeId: string,
+    iteration: number,
+    outputs: NodeOutputIndex,
+  ): Promise<void>;
+  getNodeOutputs(runId: RunId, filter?: GetNodeOutputsFilter): Promise<NodeOutputRow[]>;
   finalizeRun(runId: RunId, input: FinalizeRunInput): Promise<void>;
   getRun(runId: RunId): Promise<StoredRun | null>;
   listRuns(filter?: ListRunsFilter): Promise<StoredRun[]>;
   getRunEvents(runId: RunId, opts?: GetEventsOptions): Promise<StoredEvent[]>;
   close(): Promise<void>;
+  /** Optional: delete `node_outputs` rows for a given run id. The SQLite
+   * adapter implements this; in-memory test stubs may omit it. */
+  deleteNodeOutputsForRun?(runId: RunId): Promise<void>;
 }

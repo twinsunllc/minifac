@@ -2,6 +2,59 @@ import { z } from "zod";
 
 const PositiveInt = z.number().int().positive();
 
+const OUTPUT_KEY_REGEX = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
+
+export const OutputValueSchema = z
+  .object({
+    type: z.literal("value"),
+    required: z.boolean().default(false),
+    description: z.string().optional(),
+    // Reserved for future structural typing; accept and pass through any value.
+    shape: z.unknown().optional(),
+  })
+  .strict();
+
+export const OutputFileSchema = z
+  .object({
+    type: z.literal("file"),
+    required: z.boolean().default(false),
+    description: z.string().optional(),
+    filename: z
+      .string()
+      .min(1, "filename must be a non-empty string")
+      .refine((s) => !s.includes("/") && !s.includes("\\"), {
+        message: "filename must not contain path separators",
+      })
+      .optional(),
+  })
+  .strict();
+
+export const OutputDirectorySchema = z
+  .object({
+    type: z.literal("directory"),
+    required: z.boolean().default(false),
+    description: z.string().optional(),
+  })
+  .strict();
+
+export const OutputDefSchema = z.discriminatedUnion("type", [
+  OutputValueSchema,
+  OutputFileSchema,
+  OutputDirectorySchema,
+]);
+
+export const OutputsMapSchema = z.record(OutputDefSchema).superRefine((map, ctx) => {
+  for (const key of Object.keys(map)) {
+    if (!OUTPUT_KEY_REGEX.test(key)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [key],
+        message: `output key "${key}" must match ${OUTPUT_KEY_REGEX} (start with a letter or underscore; alphanumeric + underscore only)`,
+      });
+    }
+  }
+});
+
 export const NodeSchema = z
   .object({
     executor: z.string().min(1).optional(),
@@ -11,6 +64,7 @@ export const NodeSchema = z
     with: z.record(z.unknown()).optional(),
     uses: z.string().min(1).optional(),
     inputs: z.record(z.unknown()).optional(),
+    outputs: OutputsMapSchema.optional(),
   })
   .strict();
 
@@ -57,3 +111,18 @@ export type FactoryLayer = z.infer<typeof FactoryLayerSchema>;
 export type Factory = z.infer<typeof FactorySchema>;
 export type FactoryNode = z.infer<typeof NodeSchema>;
 export type FactoryEdge = z.infer<typeof EdgeSchema>;
+export type OutputDef = z.infer<typeof OutputDefSchema>;
+export type OutputValueDef = z.infer<typeof OutputValueSchema>;
+export type OutputFileDef = z.infer<typeof OutputFileSchema>;
+export type OutputDirectoryDef = z.infer<typeof OutputDirectorySchema>;
+
+export type NodeOutputType = "value" | "file" | "directory";
+
+export interface NodeOutputEntry {
+  type: NodeOutputType;
+  path: string;
+  size: number;
+  mtime: number;
+}
+
+export type NodeOutputIndex = Record<string, NodeOutputEntry>;

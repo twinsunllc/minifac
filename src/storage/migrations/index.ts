@@ -64,6 +64,23 @@ const SQL_0002 = `
 ALTER TABLE runs ADD COLUMN branch_name TEXT;
 `;
 
+const SQL_0003 = `
+CREATE TABLE node_outputs (
+  run_id TEXT NOT NULL,
+  node_id TEXT NOT NULL,
+  iteration INTEGER NOT NULL,
+  output_key TEXT NOT NULL,
+  output_type TEXT NOT NULL,
+  path TEXT NOT NULL,
+  size INTEGER NOT NULL,
+  mtime INTEGER NOT NULL,
+  PRIMARY KEY (run_id, node_id, iteration, output_key)
+);
+
+CREATE INDEX idx_node_outputs_run_node_iter
+  ON node_outputs (run_id, node_id, iteration);
+`;
+
 export interface Migration {
   version: number;
   name: string;
@@ -73,6 +90,7 @@ export interface Migration {
 export const MIGRATIONS: readonly Migration[] = Object.freeze([
   { version: 1, name: "initial", sql: SQL_0001 },
   { version: 2, name: "add_branch_name", sql: SQL_0002 },
+  { version: 3, name: "add_node_outputs", sql: SQL_0003 },
 ]);
 
 export function highestMigration(): number {
