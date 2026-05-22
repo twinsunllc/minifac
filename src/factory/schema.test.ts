@@ -145,21 +145,15 @@ describe("NodeSchema — output_nudge_budget", () => {
   });
 
   it("rejects negative output_nudge_budget", () => {
-    expect(() =>
-      NodeSchema.parse({ executor: "claude", output_nudge_budget: -1 }),
-    ).toThrowError();
+    expect(() => NodeSchema.parse({ executor: "claude", output_nudge_budget: -1 })).toThrowError();
   });
 
   it("rejects non-integer output_nudge_budget", () => {
-    expect(() =>
-      NodeSchema.parse({ executor: "claude", output_nudge_budget: 1.5 }),
-    ).toThrowError();
+    expect(() => NodeSchema.parse({ executor: "claude", output_nudge_budget: 1.5 })).toThrowError();
   });
 
   it("rejects string-typed output_nudge_budget", () => {
-    expect(() =>
-      NodeSchema.parse({ executor: "claude", output_nudge_budget: "1" }),
-    ).toThrowError();
+    expect(() => NodeSchema.parse({ executor: "claude", output_nudge_budget: "1" })).toThrowError();
   });
 
   it("accepts output_nudge_budget: 5 (any non-negative integer)", () => {

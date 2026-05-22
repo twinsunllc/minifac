@@ -1720,7 +1720,8 @@ class NudgeableExecutor implements NodeExecutor {
     // Synthesize a final status: use the LAST emitted result's sentinel.
     const lastTurn = turns[turns.length - 1];
     if (lastTurn) {
-      const SENTINEL = /^MINIFAC_STATUS:[ \t]*(succeeded|failed)\b[ \t]*(?:\r?\nREASON:[ \t]*(.*))?/m;
+      const SENTINEL =
+        /^MINIFAC_STATUS:[ \t]*(succeeded|failed)\b[ \t]*(?:\r?\nREASON:[ \t]*(.*))?/m;
       const m = lastTurn.result.match(SENTINEL);
       if (m) {
         if (m[1] === "failed") {
@@ -1799,10 +1800,7 @@ describe("runFactory — post-execution nudge loop", () => {
         { result: "I'm done.\nMINIFAC_STATUS: succeeded" },
         {
           before: (ctx) => {
-            writeFileSync(
-              path.join(ctx.outputsDir, "findings.json"),
-              JSON.stringify({ ok: true }),
-            );
+            writeFileSync(path.join(ctx.outputsDir, "findings.json"), JSON.stringify({ ok: true }));
           },
           result: "Wrote it.\nMINIFAC_STATUS: succeeded",
         },
@@ -1908,8 +1906,7 @@ describe("runFactory — post-execution nudge loop", () => {
     const exec = new NudgeableExecutor({
       a: [
         {
-          result:
-            "Could not complete.\nMINIFAC_STATUS: failed\nREASON: verify hit 3 test failures",
+          result: "Could not complete.\nMINIFAC_STATUS: failed\nREASON: verify hit 3 test failures",
         },
       ],
     });
@@ -1942,10 +1939,7 @@ describe("runFactory — post-execution nudge loop", () => {
       a: [
         {
           before: (ctx) => {
-            writeFileSync(
-              path.join(ctx.outputsDir, "findings.json"),
-              JSON.stringify({ ok: true }),
-            );
+            writeFileSync(path.join(ctx.outputsDir, "findings.json"), JSON.stringify({ ok: true }));
           },
           result: "Done.\nMINIFAC_STATUS: succeeded",
         },
@@ -1982,10 +1976,7 @@ describe("runFactory — post-execution nudge loop", () => {
         { result: "Turn 2 done.\nMINIFAC_STATUS: succeeded" },
         {
           before: (ctx) => {
-            writeFileSync(
-              path.join(ctx.outputsDir, "findings.json"),
-              JSON.stringify({ ok: true }),
-            );
+            writeFileSync(path.join(ctx.outputsDir, "findings.json"), JSON.stringify({ ok: true }));
           },
           result: "Turn 3 done.\nMINIFAC_STATUS: succeeded",
         },
@@ -2045,9 +2036,11 @@ describe("runFactory — post-execution nudge loop", () => {
           (ev.meta as { reason?: string } | undefined)?.reason === "missing_required_output",
       );
     expect(overrideStatus).toBeDefined();
-    const meta = (overrideStatus as {
-      meta: { nudges_used?: number; missing_outputs_detail?: Record<string, string> };
-    }).meta;
+    const meta = (
+      overrideStatus as {
+        meta: { nudges_used?: number; missing_outputs_detail?: Record<string, string> };
+      }
+    ).meta;
     expect(meta.nudges_used).toBe(0);
     const detail = meta.missing_outputs_detail?.findings ?? "";
     expect(detail).toMatch(/nudge stdin write failed/);
@@ -2206,13 +2199,10 @@ describe("runFactory — post-execution nudge loop", () => {
       if (dispatchCount === 2) {
         // For iteration 2's turn-2, write the file.
         const turns = exec.scripts.get("a");
-        if (turns && turns[1]) {
+        if (turns?.[1]) {
           turns[1] = {
             before: (c) => {
-              writeFileSync(
-                path.join(c.outputsDir, "findings.json"),
-                JSON.stringify({ ok: true }),
-              );
+              writeFileSync(path.join(c.outputsDir, "findings.json"), JSON.stringify({ ok: true }));
             },
             result: "Iter2 turn2 wrote file.\nMINIFAC_STATUS: succeeded",
           };

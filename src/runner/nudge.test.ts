@@ -11,9 +11,7 @@ describe("buildNudgeMessage", () => {
       },
     ]);
     expect(out).toContain("The following declared required outputs were not produced:");
-    expect(out).toContain(
-      "- findings (type: value): expected at /tmp/outputs/n1/1/findings.json",
-    );
+    expect(out).toContain("- findings (type: value): expected at /tmp/outputs/n1/1/findings.json");
     expect(out).toContain("Please produce these outputs now.");
     expect(out).toContain("MINIFAC_STATUS: succeeded");
     expect(out).toContain("MINIFAC_STATUS: failed");
@@ -100,12 +98,8 @@ describe("buildNudgeMessage", () => {
   });
 
   it("includes the canonical header line", () => {
-    const items: MissingOutput[] = [
-      { key: "a", type: "value", expected_path: "/x/a.json" },
-    ];
+    const items: MissingOutput[] = [{ key: "a", type: "value", expected_path: "/x/a.json" }];
     const out = buildNudgeMessage(items);
-    expect(out.split("\n")[0]).toBe(
-      "The following declared required outputs were not produced:",
-    );
+    expect(out.split("\n")[0]).toBe("The following declared required outputs were not produced:");
   });
 });

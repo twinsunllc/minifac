@@ -121,11 +121,49 @@ by that node's executor (`stdout`, `stderr`, `status`) to a consumer
 provided at run invocation, in order, without buffering beyond what is
 necessary to deliver one event at a time.
 
+The runner SHALL also emit two runner-originated event kinds
+on the same consumer when the post-execution nudge loop (per
+the "Post-execution nudge loop" requirement) fires:
+
+- `system / runner-action` — an operator-visible one-line note
+  whose payload identifies the nudge action and the budget
+  remaining after the nudge is sent.
+- `user / runner-nudge` — the synthetic user-message string
+  passed to the executor's stdin via the
+  `writeUserMessage()` call, exposed on the event stream so
+  observers see the same message the model receives.
+
+Both runner-originated event kinds SHALL carry the originating
+`nodeId` and the current node iteration so downstream
+consumers (live TUI, web viewer, runs.db replay) can attribute
+the events to the right node-iteration row. The events SHALL
+flow through the existing event pipeline and SHALL be
+persisted by the run-storage layer the same way model events
+are.
+
 #### Scenario: Consumer sees events as they arrive
 
 - **WHEN** an executor yields three `stdout` events spaced 100ms apart
 - **THEN** the consumer receives them in order, each within a small
   constant of the time the executor yielded it (no batching at end of run)
+
+#### Scenario: Consumer sees runner-action and runner-nudge events in order
+
+- **WHEN** a node's post-execution nudge loop fires once (one
+  nudge sent), bracketed by the model's two turns
+- **THEN** the consumer sees, in order: the first turn's
+  events ending in `result`, a `system / runner-action`
+  event with the nudge note, a `user / runner-nudge` event
+  carrying the synthetic user message, the second turn's
+  events ending in `result`
+
+#### Scenario: Runner-originated events are tagged with nodeId and iteration
+
+- **WHEN** the runner fires a nudge during node `propose`
+  iteration 2
+- **THEN** the emitted `system / runner-action` and
+  `user / runner-nudge` events both carry `nodeId:
+  "propose"` and `iteration: 2`
 
 ### Requirement: Run result is structured
 
@@ -943,8 +981,28 @@ the directory) and record `{ type, path, size, mtime }` in the
 After scanning all declared outputs, the validator SHALL collect
 the keys whose `required: true` declaration is unsatisfied
 (absent, present-but-invalid, present-but-ambiguous, or
-present-but-empty). If that set is non-empty, the validator SHALL
-override the node's terminal status:
+present-but-empty). When that set is non-empty, the runner's
+next step SHALL be governed by the "Post-execution nudge loop"
+requirement, NOT an immediate terminal-status override.
+
+Specifically:
+
+- When the dispatching executor's `supportsNudge` flag is
+  `true` AND the node's remaining nudge budget is greater
+  than zero, the runner SHALL invoke the nudge loop per the
+  "Post-execution nudge loop" requirement. The validator's
+  unsatisfied-set determines the nudge message payload; the
+  loop may re-invoke this validation pass on subsequent
+  turns until outputs are satisfied or budget is exhausted.
+- When `supportsNudge` is `false` OR the remaining nudge
+  budget is zero (including the case where the budget was
+  spent by prior nudge iterations in the same dispatch), the
+  validator SHALL override the node's terminal status as
+  described below.
+
+When the validator's unsatisfied-set is non-empty AND no
+further nudges will be attempted (per the conditions above),
+the validator SHALL override the node's terminal status:
 
 - New status: `failed`
 - New `reason`: the string `missing_required_output`
@@ -957,7 +1015,9 @@ override the node's terminal status:
   (and did not write the file via the fallback path either),
   the detail string SHALL note the transport context (e.g.
   `"absent (MCP tool mcp__minifac__report_findings was available but not called; no fallback file at findings.json either)"`)
-  to aid the operator in diagnosing the gap.
+  to aid the operator in diagnosing the gap. When the nudge
+  loop was attempted and exhausted, the detail string SHALL
+  also note the number of nudges spent.
 
 The `NodeOutputIndex` (for the keys that *were* present) SHALL
 still be populated and persisted even when the override fires;
@@ -1011,8 +1071,9 @@ the `NodeOutputIndex` is populated for every present output
   `outputs: { findings: { type: "value", required: true } }`,
   the executor's `supportsMcp` is `true`, the MCP tool was
   registered, the model neither called the tool nor wrote
-  `findings.json` via Write, and the node terminates
-  `succeeded`
+  `findings.json` via Write, the node terminates
+  `succeeded`, AND `output_nudge_budget: 0` (the nudge
+  loop is opted out so the override fires immediately)
 - **THEN** the validator overrides the terminal status to
   `failed` with reason `missing_required_output`; the
   `missing_outputs_detail` string mentions both the
@@ -1023,19 +1084,23 @@ the `NodeOutputIndex` is populated for every present output
 
 - **WHEN** node `propose` declares
   `outputs: { findings: { type: "value", required: true } }`,
-  the executor's `supportsMcp` is `false`, the model did not
+  the executor's `supportsMcp` is `false`, the executor's
+  `supportsNudge` is also `false`, the model did not
   write `findings.json`, and the node terminates `succeeded`
 - **THEN** the validator overrides the terminal status to
-  `failed` with reason `missing_required_output`; the
+  `failed` with reason `missing_required_output` on the
+  first pass (the nudge loop is skipped because the
+  executor cannot accept post-`result` user messages); the
   `missing_outputs_detail` string names the absent file
   without referencing MCP (the transport was not in scope)
 
 #### Scenario: Required file output absent fails the node
 
 - **WHEN** node `apply` declares `outputs: { patch:
-  { type: "file", filename: "patch.diff", required: true } }`,
-  terminates `succeeded`, and `<outputs_dir>/patch.diff` does
-  not exist (MCP does not apply to file outputs)
+  { type: "file", filename: "patch.diff", required: true } }`
+  with `output_nudge_budget: 0`, terminates `succeeded`, and
+  `<outputs_dir>/patch.diff` does not exist (MCP does not
+  apply to file outputs; nudge loop opted out)
 - **THEN** the node's terminal status is overridden to `failed`
   with reason `missing_required_output`; the failure metadata
   carries `missing_outputs: ["patch"]`
@@ -1043,9 +1108,10 @@ the `NodeOutputIndex` is populated for every present output
 #### Scenario: Required directory output empty fails the node
 
 - **WHEN** node `verify` declares `outputs: { logs:
-  { type: "directory", required: true } }`, terminates
-  `succeeded`, and `<outputs_dir>/logs/` exists but contains
-  no files (MCP does not apply to directory outputs)
+  { type: "directory", required: true } }` with
+  `output_nudge_budget: 0`, terminates `succeeded`, and
+  `<outputs_dir>/logs/` exists but contains no files (MCP
+  does not apply to directory outputs; nudge loop opted out)
 - **THEN** the node's terminal status is overridden to `failed`
   with reason `missing_required_output`; the failure metadata
   carries `missing_outputs: ["logs"]`
@@ -1058,41 +1124,21 @@ the `NodeOutputIndex` is populated for every present output
 - **THEN** the outputs validation pass is skipped regardless
   of whether MCP tool calls landed during the dispatch; the
   node's terminal status remains `failed` with the sentinel
-  reason preserved verbatim; `NodeResult.outputs` is `null`
+  reason preserved verbatim; `NodeResult.outputs` is `null`;
+  the nudge loop is not entered
 
-#### Scenario: Validator ignores orphan MCP temp files
+#### Scenario: Missing outputs route through the nudge loop when budget remains
 
-- **WHEN** an interrupted MCP write left
-  `<outputs_dir>/findings.tmp-abc123.json` on disk but
-  `<outputs_dir>/findings.json` does not exist
-- **THEN** the validator treats `findings` as absent (the
-  `.tmp-*` orphan does not match the `<key>.json` filename);
-  the validation outcome is the same as if the orphan file
-  did not exist
-
-#### Scenario: Optional output present via MCP is indexed
-
-- **WHEN** a node declares `notes:
-  { type: "value", required: false }`, the executor is
-  MCP-capable, and the model calls
-  `mcp__minifac__report_notes({ value: "ok" })` so the bridge
-  writes `<outputs_dir>/notes.json`
-- **THEN** the node succeeds; the `NodeOutputIndex` carries
-  `notes: { type: "value", path, size, mtime }` just as it
-  would for a filesystem-written optional output
-
-#### Scenario: Override preserves the partial index across transports
-
-- **WHEN** node `propose` declares two outputs `findings:
-  { type: "value", required: true }` and `summary:
-  { type: "value", required: false }`, the executor is
-  MCP-capable, the model called
-  `mcp__minifac__report_summary({ value: "ok" })` but never
-  reported `findings`, and the node terminates `succeeded`
-- **THEN** the validator overrides the terminal status to
-  `failed` with reason `missing_required_output` and metadata
-  `missing_outputs: ["findings"]`; the `NodeOutputIndex` still
-  carries `summary: { type: "value", path, size, mtime }`
+- **WHEN** node `propose` declares
+  `outputs: { findings: { type: "value", required: true } }`
+  with `output_nudge_budget: 1`, the dispatching executor's
+  `supportsNudge` is `true`, the first turn terminates
+  `succeeded` without writing `findings.json`
+- **THEN** the validator's unsatisfied-set drives the nudge
+  loop (per the "Post-execution nudge loop" requirement)
+  rather than triggering an immediate terminal-status
+  override; the override fires only if outputs remain
+  missing after the budget is exhausted
 
 ### Requirement: `NodeResult.outputs` field on prior results
 
@@ -1477,4 +1523,258 @@ and SHALL NOT pass `--mcp-config`.
   the run are removed from disk before `runFactory` returns;
   the per-node outputs directories themselves remain (subject
   to `prune --outputs`)
+
+### Requirement: Post-execution nudge loop
+
+The runner SHALL run an in-turn nudge loop after the outputs validator (per the "Post-execution outputs validation" requirement) finds one or more declared required outputs unsatisfied, before recording the node's terminal status, when ALL of the following hold: the sentinel reports `succeeded`, the dispatching executor's `supportsNudge` capability flag is `true`, and the node's remaining nudge budget is greater than zero. Each iteration of the loop SHALL execute the following steps:
+
+1. Build a `MissingOutput` list from the validator's result. Each
+   entry SHALL carry the declared output key, its declared type
+   (`value` | `file` | `directory`), the expected absolute
+   filesystem path the validator scanned, and (when present and
+   non-trivial) the validator's detail string describing the
+   specific failure mode (parse error / ambiguous / empty).
+2. Construct a synthetic user-message string by passing the
+   `MissingOutput` list to the `buildNudgeMessage` helper. The
+   helper's output SHALL be the canonical nudge message: a
+   header line ("The following declared required outputs were
+   not produced:"), one bullet per missing key naming key,
+   type, and expected path (plus detail when non-trivial), and
+   a closing paragraph instructing the model to produce the
+   outputs and emit `MINIFAC_STATUS: succeeded` (or `failed`
+   with a `REASON` if it cannot).
+3. Emit a `system / runner-action` event on the runner's
+   `onEvent` consumer with the one-line operator-visible note
+   `"Required outputs missing, nudging (budget remaining:
+   N)..."` where `N` is the budget remaining AFTER this nudge
+   is sent (`current_budget - 1`). The event SHALL carry the
+   originating `nodeId` and the current node iteration.
+4. Emit a `user / runner-nudge` event on the runner's `onEvent`
+   consumer carrying the full `buildNudgeMessage` output as its
+   payload. The event SHALL carry the originating `nodeId` and
+   the current node iteration.
+5. Call the executor's `writeUserMessage(nudgeMessage)` method.
+   The method SHALL frame the message as a stream-json
+   user-message event and write it to the executor's stdin.
+6. On successful stdin write, increment the runner-local
+   `nudges_used` counter, decrement the remaining budget, and
+   resume draining executor events until the next `result`
+   event lands. Then re-run the outputs validator; loop again
+   from step 1 if outputs are still missing AND budget > 0;
+   record `succeeded` if outputs are valid; record `failed`
+   with reason `missing_required_output` if outputs are still
+   missing AND budget = 0.
+7. On stdin write failure (EPIPE, EBADF, OS error), the runner
+   SHALL break out of the loop with a synthetic terminal
+   status of `failed` and reason
+   `missing_required_output`. The `NodeResult.meta` (or
+   runner-internal failure metadata) SHALL preserve the
+   standard `missing_outputs` array from the validator's last
+   pass AND extend `missing_outputs_detail` with a suffix
+   describing the stdin-write failure (e.g.
+   `"; nudge stdin write failed: EPIPE"`). The runner SHALL
+   NOT count a failed write as a consumed nudge — the
+   `nudges_used` counter reflects only nudges the model
+   actually received.
+
+The per-dispatch nudge budget SHALL be sourced from the
+resolved node's `output_nudge_budget` field (per the
+`factory-schema` capability's "`output_nudge_budget` per-node
+field" requirement; default `1` after schema validation). The
+budget is per-node-iteration: a re-dispatch of the same node
+via a graph-level recovery edge or a cycle SHALL start with a
+fresh budget read from the schema. No cross-iteration carryover.
+
+When the resolved executor's `supportsNudge` flag is `false`,
+the runner SHALL NOT enter the nudge loop regardless of
+`output_nudge_budget`; missing outputs fall through directly
+to the existing override-to-failed path established by
+"Post-execution outputs validation". The schema-populated
+`output_nudge_budget` field has no runtime effect on
+non-nudge-capable executors.
+
+The nudge loop SHALL NOT be entered when:
+
+- The node's terminal sentinel reported `failed` (the
+  validation pass is already skipped per the existing
+  contract; the nudge loop is downstream of validation).
+- The node declared no `outputs:` block (no validation runs).
+- All declared required outputs are satisfied on first
+  validation pass.
+- `output_nudge_budget` is `0`.
+- The executor's `supportsNudge` is `false`.
+
+In all of these cases, the existing post-execution flow
+proceeds unchanged: outputs valid → record `succeeded`;
+outputs missing AND budget zero → record `failed` with
+`missing_required_output`.
+
+#### Scenario: Default budget recovers a forgotten output
+
+- **WHEN** node `propose` declares
+  `outputs: { findings: { type: "value", required: true } }`
+  with `output_nudge_budget: 1` (default) and a
+  `supportsNudge: true` executor; the first turn terminates
+  `MINIFAC_STATUS: succeeded` but `findings.json` is not on
+  disk; the nudge fires; the model writes `findings.json`
+  during the second turn and terminates `succeeded`
+- **THEN** the runner records the node as `succeeded`; the
+  `NodeResult.outputs` carries the `findings` entry; the
+  `NodeResult.nudges_used` is `1`
+
+#### Scenario: Default budget exhausted, node fails
+
+- **WHEN** node `propose` declares the same outputs +
+  default budget as above; the first turn terminates
+  `succeeded` with no `findings.json`; the nudge fires; the
+  second turn also terminates `succeeded` without writing
+  `findings.json`
+- **THEN** the runner records the node as `failed` with
+  reason `missing_required_output`; the failure metadata
+  carries `missing_outputs: ["findings"]`; the
+  `NodeResult.nudges_used` is `1`
+
+#### Scenario: Budget zero opts out of nudging cleanly
+
+- **WHEN** node `propose` declares
+  `outputs: { findings: { type: "value", required: true } }`
+  with `output_nudge_budget: 0`; the turn terminates
+  `succeeded` with no `findings.json`
+- **THEN** the runner records the node as `failed` with
+  reason `missing_required_output` on the first validation
+  pass; no nudge events are emitted; no nudge message is
+  written to stdin; the `NodeResult.nudges_used` is `0`
+
+#### Scenario: Sentinel-failed node skips the nudge loop
+
+- **WHEN** node `verify` declares
+  `outputs: { results: { type: "value", required: true } }`
+  with `output_nudge_budget: 1` and terminates `failed` with
+  reason `"verify hit 3 test failures"` (sentinel failure)
+- **THEN** the outputs validation pass is skipped per the
+  existing contract; the nudge loop is not entered; the
+  node's terminal status remains `failed` with the sentinel
+  reason preserved verbatim; the
+  `NodeResult.nudges_used` is `0`
+
+#### Scenario: Higher budget allows multiple nudge attempts
+
+- **WHEN** node `propose` declares
+  `outputs: { findings: { type: "value", required: true } }`
+  with `output_nudge_budget: 3`; the first turn terminates
+  `succeeded` without `findings.json`; the first nudge
+  fires; the second turn still does not write the file; the
+  second nudge fires; the third turn writes the file and
+  terminates `succeeded`
+- **THEN** the runner records the node as `succeeded`; the
+  `NodeResult.nudges_used` is `2`; the executor's event
+  stream carries two `system / runner-action` events and
+  two `user / runner-nudge` events in order, interleaved
+  with the model's three turns
+
+#### Scenario: Broken stdin during nudge fails the node immediately
+
+- **WHEN** node `propose` declares an outputs block with
+  `output_nudge_budget: 1`, the first turn terminates
+  `succeeded` without producing the required output, the
+  runner emits the `runner-action` and `runner-nudge`
+  events, and the subsequent
+  `executor.writeUserMessage()` call rejects with EPIPE
+  (the executor process has exited between the `result`
+  event and the runner's reply)
+- **THEN** the runner records the node as `failed` with
+  reason `missing_required_output`; the
+  `missing_outputs_detail` string carries a suffix
+  identifying the stdin-write failure (e.g. "; nudge
+  stdin write failed: EPIPE"); the
+  `NodeResult.nudges_used` is `0` (the failed write does
+  not count as a consumed nudge)
+
+#### Scenario: Sentinel-succeeded node with no missing outputs skips the loop
+
+- **WHEN** node `propose` declares
+  `outputs: { findings: { type: "value", required: true } }`
+  with `output_nudge_budget: 1` and the first turn
+  terminates `succeeded` with `findings.json` written
+- **THEN** the validator passes on the first pass; the
+  nudge loop is not entered; the node is recorded as
+  `succeeded`; no nudge events are emitted;
+  `NodeResult.nudges_used` is `0`
+
+#### Scenario: Non-nudge-capable executor skips the loop
+
+- **WHEN** the dispatching executor exposes
+  `supportsNudge: false` and the node declares
+  `outputs: { findings: { type: "value", required: true } }`
+  with `output_nudge_budget: 1`; the turn terminates
+  `succeeded` without writing the file
+- **THEN** the runner records the node as `failed` with
+  reason `missing_required_output` on the first validation
+  pass; no nudge events are emitted; the schema-populated
+  `output_nudge_budget: 1` has no runtime effect because
+  the executor cannot accept post-`result` user messages;
+  `NodeResult.nudges_used` is `0`
+
+#### Scenario: Iteration boundary resets the budget
+
+- **WHEN** node `apply` declares `output_nudge_budget: 1`,
+  iteration 1 fails with `missing_required_output` after
+  consuming its single nudge, a graph-level recovery edge
+  re-dispatches the node, and iteration 2 starts
+- **THEN** iteration 2's effective nudge budget is `1`
+  (the full schema-declared value, not zero); the budget
+  is per-iteration and does not carry forward from a
+  prior dispatch
+
+### Requirement: `NodeResult.nudges_used` field
+
+The runner SHALL extend the `NodeResult` shape (per the
+existing "Prior-results accumulate across node executions"
+requirement) with a `nudges_used` field whose value SHALL be
+a non-negative integer recording how many nudges the runner
+spent on the node iteration. The field SHALL default to `0`
+and SHALL be incremented each time the runner successfully
+writes a nudge message to the executor's stdin (per the
+"Post-execution nudge loop" requirement, step 6). The field
+SHALL NOT be incremented when a stdin write fails (step 7).
+
+The field SHALL be populated for every node iteration,
+regardless of whether the node entered the nudge loop. Nodes
+that never enter the loop (sentinel-failed,
+outputs-valid-first-try, no `outputs:` declared, budget zero,
+non-nudge-capable executor) SHALL record
+`nudges_used: 0`.
+
+The field SHALL persist through the existing `NodeResult`
+JSON serialization in the run-storage layer's `recordNodeEnd`
+hook. No schema migration is required; the field rides the
+existing JSON-blob column.
+
+#### Scenario: NodeResult records zero nudges for first-try success
+
+- **WHEN** a node terminates `succeeded` with all required
+  outputs present on the first validation pass
+- **THEN** the recorded `NodeResult.nudges_used` is `0`
+
+#### Scenario: NodeResult records the nudge count on recovery
+
+- **WHEN** a node enters the nudge loop, the runner sends
+  two nudges, and the third turn produces the required
+  outputs
+- **THEN** the recorded `NodeResult.nudges_used` is `2`
+
+#### Scenario: NodeResult records zero nudges on sentinel failure
+
+- **WHEN** a node terminates `failed` with a sentinel
+  reason and the nudge loop is skipped
+- **THEN** the recorded `NodeResult.nudges_used` is `0`
+
+#### Scenario: NodeResult records the consumed count on budget exhaustion
+
+- **WHEN** a node declares `output_nudge_budget: 2`, the
+  runner sends both nudges, and outputs are still missing
+  after the third turn
+- **THEN** the recorded `NodeResult.nudges_used` is `2`;
+  the node is recorded as `failed` with reason
+  `missing_required_output`
 

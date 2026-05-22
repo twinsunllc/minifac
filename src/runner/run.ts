@@ -456,8 +456,7 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
           if (def.type === "value") {
             expectedPath = path.join(outputsDir, `${key}.json`);
           } else if (def.type === "file") {
-            const filename =
-              (def as { filename?: string }).filename ?? `${key}.*`;
+            const filename = (def as { filename?: string }).filename ?? `${key}.*`;
             expectedPath = path.join(outputsDir, filename);
           } else if (def.type === "directory") {
             expectedPath = path.join(outputsDir, key);
