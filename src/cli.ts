@@ -2,8 +2,11 @@
 import { randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { Command } from "commander";
+
+const pkg = createRequire(import.meta.url)("../package.json") as { version: string };
 import { BriefLoadError } from "./brief/loader.js";
 import { BriefCycleError } from "./brief/state.js";
 import { autorunAction } from "./cli/autorun.js";
@@ -135,7 +138,7 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
   program
     .name("minifac")
     .description("Run a minifac factory.")
-    .version("0.0.0")
+    .version(pkg.version)
     .exitOverride()
     .configureOutput({
       writeOut: (str) => io.stdout.write(str),
