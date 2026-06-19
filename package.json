@@ -1,6 +1,6 @@
 {
   "name": "@twinsunllc/minifac",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "A miniature factory: directed (possibly cyclic) YAML graphs of agent + tool nodes, executed by a small TypeScript runner.",
   "keywords": [
     "agent",

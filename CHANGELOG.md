@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2] — 2026-06-18
+
 ### Security
 
 - Cleared all `npm audit` findings (was 1 critical, 3 high, 1 low).
