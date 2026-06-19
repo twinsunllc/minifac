@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- Cleared all `npm audit` findings (was 1 critical, 3 high, 1 low).
+  Bumped `vitest` to `^4.1.8` (drops the vulnerable transitive
+  `esbuild`), pinned `hono` to `4.12.25` (patched production
+  dependency) and `nanoid` to `3.3.12` via `overrides`; `ws` resolves
+  to `8.21.0`. `npm audit --audit-level=high` now exits clean and the
+  dependency-freshness gate stays green.
+- Added the `action-security` CI workflow: every push and PR now runs
+  `twinsunllc/github-actions-security-checker` (SHA-pinned to v1.4.3)
+  to enforce SHA-pinning and verified publishers across
+  `.github/workflows`. See
+  [`0034-Action-Pinning-Enforcement`](docs/decisions/0034-Action-Pinning-Enforcement.md).
+
 ## [0.1.1] — 2026-05-22
 
 Initial public release.
