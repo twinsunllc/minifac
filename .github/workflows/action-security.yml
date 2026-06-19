@@ -1,0 +1,35 @@
+name: action-security
+
+# Enforces docs/decisions/0024-CI-Security-Policy.md rules 1 + 2
+# (SHA-pin every `uses:`; only first-party / verified-publisher
+# actions) as a hard PR gate — see 0034-Action-Pinning-Enforcement.md.
+# The checker itself is SHA-pinned, like every other action.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  audit-actions:
+    name: audit workflow actions (pinning + verified publishers)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      # v1.4.3 recognises the github/* namespace as a verified
+      # first-party publisher, so github/codeql-action passes natively.
+      # `twinsunllc` is our own org — not a Marketplace-verified
+      # publisher — so it is allowlisted as a hand-vetted exception per
+      # 0024 rule 2. Allowlisting bypasses publisher verification but
+      # still enforces the SHA pin (the checker is pinned above).
+      - name: Audit GitHub Actions
+        uses: twinsunllc/github-actions-security-checker@0ad4f2eca85a1c0a633674e88a1c30e574c22927  # v1.4.3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          allowlist: twinsunllc
