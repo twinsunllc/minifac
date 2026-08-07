@@ -22,7 +22,15 @@ briefs supply intent, [[Studio]] eventually provides inspection
 
 ## In-flight
 
-(none — repo is in a clean state, ready to tag v0.1.0)
+- [ ] **`node-session-resume`** — [[0035-Cross-Node-Session-Resume]].
+  Node-level `resume: <node-id>` continues another node's Claude
+  conversation, so a cheap continuation node inherits an expensive
+  node's in-context exploration instead of a lossy plan artifact.
+  Implemented on `run/node-session-resume`; specs + code + docs
+  landed, full suite green. **Not archived** — held open until an
+  external eval validates it against real cascade runs. Carries
+  `runs.db` schema v4 (`node_executions.session_id`), which is a
+  one-way door for any older binary sharing that database.
 
 ## Briefs queued ready-to-run
 
