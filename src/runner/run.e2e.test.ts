@@ -82,6 +82,7 @@ class McpClientStub implements NodeExecutor {
   readonly type = "claude-stub";
   readonly supportsMcp = true;
   readonly supportsNudge = false;
+  readonly supportsResume = false;
   scriptByNode: Record<string, { tool: string; arg: unknown } | "no-tool"> = {};
   constructor(scripts: Record<string, { tool: string; arg: unknown } | "no-tool"> = {}) {
     this.scriptByNode = scripts;
@@ -118,6 +119,7 @@ class FsWriterStub implements NodeExecutor {
   readonly type = "fs-writer";
   readonly supportsMcp = false;
   readonly supportsNudge = false;
+  readonly supportsResume = false;
   constructor(private contents: unknown = []) {}
   async *run(node: ResolvedNode, ctx: RunContext): AsyncIterable<NodeEvent> {
     yield { kind: "status", status: "started" };

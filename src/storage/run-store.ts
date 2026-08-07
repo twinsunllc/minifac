@@ -68,6 +68,12 @@ export interface RecordNodeEndInput {
   status: "succeeded" | "failed" | "skipped";
   sentinelStatus?: string | null;
   exitCode?: number | null;
+  /** Executor session id announced by this node execution, or `null` when
+   * none was announced. Not unique: two executions that continued one
+   * conversation legitimately share an id. It is the join key from a
+   * finished run back to the session transcript (e.g. for splitting cost
+   * by model across a resume cascade). */
+  sessionId?: string | null;
   at: number;
 }
 

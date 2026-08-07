@@ -26,6 +26,8 @@
 // The base argv is always (in this order):
 //
 //   --print --verbose --input-format stream-json --output-format stream-json
+//   [--mcp-config <path>]
+//   [--resume <session-id>]
 //   [--model <model>]
 //   [authority flags, see below]
 //   [...with.args]
@@ -33,6 +35,26 @@
 // Typed authority flags ALWAYS precede `with.args` so that the user-supplied
 // passthrough cannot accidentally override them (without flag deduping logic
 // we'd need to add).
+//
+// ### Session resume (`--resume`)
+//
+// `--resume <session-id>` is emitted when the runner resolved a session for
+// this dispatch and passed it through `ctx.resumeSessionId` — i.e. the node
+// declared `resume: <other-node>` in the factory. The executor does not
+// decide *which* session to continue and never validates the id: an
+// unreadable session surfaces as a non-zero exit through the ordinary
+// exit-code path.
+//
+// `--resume` and `--model` are emitted together when both are in scope.
+// That combination is the point of the feature (continue an expensive
+// node's conversation on a cheaper model), so neither suppresses the
+// other. Consequence worth knowing: swapping models invalidates the
+// conversation prompt cache, so the resumed turn re-sends the accumulated
+// history uncached at the new model's rate. Expected, not a regression.
+//
+// See `openspec/specs/node-executor/spec.md` (requirement: "Claude executor
+// uses stream-json for both input and output") and the `graph-runner`
+// capability's "Cross-node session resume resolution".
 //
 // ### Authority knobs (all optional, opt-in; defaults emit no flag)
 //
@@ -229,7 +251,11 @@ export function buildStreamJsonInput(priorResults: readonly NodeResult[], prompt
  * payload. Exported for snapshot testing — the argv shape is part of the
  * wire-format contract.
  */
-export function buildCliArgs(w: ClaudeWith, mcpConfigPath?: string): string[] {
+export function buildCliArgs(
+  w: ClaudeWith,
+  mcpConfigPath?: string,
+  resumeSessionId?: string,
+): string[] {
   const args: string[] = [
     "--print",
     "--verbose",
@@ -244,6 +270,13 @@ export function buildCliArgs(w: ClaudeWith, mcpConfigPath?: string): string[] {
   // config path is in scope" scenario.
   if (mcpConfigPath !== undefined && mcpConfigPath.length > 0) {
     args.push("--mcp-config", mcpConfigPath);
+  }
+  // `--resume` sits between `--mcp-config` and `--model`: it seeds the
+  // conversation, so it belongs with the context flags and ahead of every
+  // node-supplied one. `--resume` + `--model` is the intended composition
+  // (the model cascade) — neither flag suppresses the other.
+  if (resumeSessionId !== undefined && resumeSessionId.length > 0) {
+    args.push("--resume", resumeSessionId);
   }
   if (w.model) {
     args.push("--model", w.model);
@@ -285,6 +318,7 @@ export class ClaudeExecutor implements NodeExecutor {
   readonly type = "claude";
   readonly supportsMcp = true;
   readonly supportsNudge = true;
+  readonly supportsResume = true;
 
   private readonly spawn: SpawnLike;
   private readonly binary: string;
@@ -352,7 +386,7 @@ export class ClaudeExecutor implements NodeExecutor {
       parsed.data.emit_sentinel_instructions === false
         ? prompt
         : `${prompt}\n\n${SENTINEL_INSTRUCTIONS}`;
-    const cliArgs = buildCliArgs(parsed.data, ctx.mcpConfigPath);
+    const cliArgs = buildCliArgs(parsed.data, ctx.mcpConfigPath, ctx.resumeSessionId);
 
     let child: ChildProcess;
     try {

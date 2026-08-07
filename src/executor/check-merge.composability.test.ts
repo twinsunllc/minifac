@@ -55,6 +55,7 @@ class TrackingExecutor implements NodeExecutor {
   readonly type: string;
   readonly supportsMcp = false;
   readonly supportsNudge = false;
+  readonly supportsResume = false;
   visited: string[] = [];
 
   constructor(type: string) {

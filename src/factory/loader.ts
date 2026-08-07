@@ -105,6 +105,60 @@ async function inlineSteps(
   }
 }
 
+/**
+ * Validate every `resume:` reference against the resolved factory.
+ *
+ * Three rules, all load-time (see specs/factory-schema "Node `resume:`
+ * field"):
+ *
+ *   1. the target must be a declared node id;
+ *   2. a node may not resume itself;
+ *   3. the target's declared `cwd` string must match the declaring node's.
+ *
+ * Rule 3 is the non-obvious one: `claude` scopes sessions per project
+ * directory, so a session started in one cwd is not resumable from a node
+ * running in another. Comparison is on the declared (pre-substitution)
+ * string — both nodes normally say `{{ run.cwd }}` — because the resolved
+ * values don't exist yet at load time.
+ *
+ * Deliberately NOT checked: reachability. The graph is cyclic by design,
+ * so "the target always runs first" isn't statically decidable; an
+ * unreachable target fails at dispatch with `resume_unavailable`.
+ */
+function validateResume(factory: Factory, sourcePath: string, nodeIds: Set<string>): void {
+  for (const [nodeId, node] of Object.entries(factory.nodes)) {
+    const target = node.resume;
+    if (target === undefined) continue;
+
+    if (target === nodeId) {
+      throw new FactoryLoadError(
+        `Node "${nodeId}" declares \`resume: ${target}\`; a node cannot resume itself`,
+        sourcePath,
+      );
+    }
+    if (!nodeIds.has(target)) {
+      throw new FactoryLoadError(
+        `Node "${nodeId}" declares \`resume: ${target}\` but no node "${target}" is declared`,
+        sourcePath,
+      );
+    }
+
+    const targetNode = factory.nodes[target];
+    const ownCwd = node.cwd;
+    const targetCwd = targetNode?.cwd;
+    if (ownCwd !== targetCwd) {
+      throw new FactoryLoadError(
+        `Node "${nodeId}" declares \`resume: ${target}\` but their \`cwd\` differs ("${nodeId}": ${describeCwd(ownCwd)}, "${target}": ${describeCwd(targetCwd)}). A resumed session is scoped to the directory it was started in.`,
+        sourcePath,
+      );
+    }
+  }
+}
+
+function describeCwd(cwd: string | undefined): string {
+  return cwd === undefined ? "<unset>" : `\`${cwd}\``;
+}
+
 function validatePostSchema(factory: Factory, sourcePath: string): void {
   const nodeIds = new Set(Object.keys(factory.nodes));
 
@@ -142,6 +196,8 @@ function validatePostSchema(factory: Factory, sourcePath: string): void {
       sourcePath,
     );
   }
+
+  validateResume(factory, sourcePath, nodeIds);
 
   const uncovered = findUncoveredCycles(factory);
   if (uncovered.length > 0) {

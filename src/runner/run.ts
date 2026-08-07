@@ -3,7 +3,13 @@ import { mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import type { Brief } from "../brief/loader.js";
 import type { ExecutorRegistry } from "../executor/registry.js";
-import type { EmittedEvent, NodeResult, ResolvedNode, RunContext } from "../executor/types.js";
+import type {
+  EmittedEvent,
+  NodeEvent,
+  NodeResult,
+  ResolvedNode,
+  RunContext,
+} from "../executor/types.js";
 import type { LoadedFactory } from "../factory/loader.js";
 import type { NodeOutputIndex } from "../factory/schema.js";
 import type { RunStore, StoredEventKind } from "../storage/run-store.js";
@@ -378,6 +384,38 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
         }
       }
 
+      // Cross-node session resume. When the node declares `resume: <id>`,
+      // resolve the session captured for that node's most recent completed
+      // dispatch (`priorMap` already holds latest-per-nodeId) and thread it
+      // to the executor. An unresolvable resume fails the dispatch BEFORE
+      // spawn: silently starting a fresh session would hand the model an
+      // empty context and produce a plausible-looking wrong result. See the
+      // `graph-runner` capability's "Cross-node session resume resolution".
+      let resumeSessionId: string | undefined;
+      let resumeFailure: { reason: string; detail: string } | null = null;
+      if (node.resume !== undefined) {
+        const target = node.resume;
+        const targetResult = priorMap.get(target);
+        if (!executor.supportsResume) {
+          resumeFailure = {
+            reason: "resume_unsupported",
+            detail: `node "${nodeId}" declares \`resume: ${target}\` but executor "${executorType}" cannot resume a session`,
+          };
+        } else if (targetResult === undefined) {
+          resumeFailure = {
+            reason: "resume_unavailable",
+            detail: `no_prior_dispatch: node "${nodeId}" declares \`resume: ${target}\` but "${target}" has not run in this run`,
+          };
+        } else if (targetResult.session_id === null) {
+          resumeFailure = {
+            reason: "resume_unavailable",
+            detail: `no_session_captured: node "${nodeId}" declares \`resume: ${target}\` but "${target}" iteration ${targetResult.iteration} announced no session`,
+          };
+        } else {
+          resumeSessionId = targetResult.session_id;
+        }
+      }
+
       const ctx: RunContext = {
         factory,
         priorResults: snapshot,
@@ -386,11 +424,17 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
         cwd: resolveCwd(node.cwd, inputsMap, outputsDir),
         outputsDir,
         mcpConfigPath,
+        ...(resumeSessionId !== undefined ? { resumeSessionId } : {}),
       };
 
       const startedAt = Date.now() - runStart;
       let finalStatus: "succeeded" | "failed" | null = null;
       let terminalMeta: unknown = undefined;
+      // Session id announced by this dispatch. The CLI emits a
+      // `system` / `init` line per TURN (a nudged dispatch emits several),
+      // and the line is not necessarily first — so scan every stdout line
+      // and keep the last announcement.
+      const sessionIdBox: { value: string | null } = { value: null };
 
       // Nudge-loop state: tracks the runner's in-turn nudge accounting for
       // this dispatch. See `docs/decisions/0028-Node-Outputs-Nudge.md`
@@ -548,8 +592,42 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
         }
       };
 
+      // Pre-spawn resume failure: emit the terminal status event and skip
+      // the dispatch entirely. Everything downstream (prior-results entry,
+      // `recordNodeEnd`, edge traversal) treats it as an ordinary node
+      // failure, so `on_failure` recovery edges still fire.
+      if (resumeFailure !== null) {
+        const failEvent: EmittedEvent = {
+          nodeId,
+          iteration,
+          emittedAt: Date.now() - runStart,
+          event: {
+            kind: "status",
+            status: "failed",
+            meta: { reason: resumeFailure.reason, detail: resumeFailure.detail },
+          },
+        };
+        onEvent?.(failEvent);
+        await appendStoreEvent(nodeId, iteration, "status", failEvent.event, failEvent.emittedAt);
+        const errEvent: EmittedEvent = {
+          nodeId,
+          iteration,
+          emittedAt: Date.now() - runStart,
+          event: { kind: "stderr", line: `${resumeFailure.reason}: ${resumeFailure.detail}` },
+        };
+        onEvent?.(errEvent);
+        await appendStoreEvent(nodeId, iteration, "stderr", errEvent.event, errEvent.emittedAt);
+        finalStatus = "failed";
+        terminalMeta = { reason: resumeFailure.reason, detail: resumeFailure.detail };
+      }
+
+      // A pre-spawn resume failure yields no executor events; the terminal
+      // status above is the whole dispatch.
+      const dispatchEvents: AsyncIterable<NodeEvent> =
+        resumeFailure !== null ? EMPTY_EVENTS : executor.run(resolvedNode, ctx);
+
       let aborted = false;
-      for await (const event of executor.run(resolvedNode, ctx)) {
+      for await (const event of dispatchEvents) {
         if (options.abortSignal?.aborted) {
           aborted = true;
           break;
@@ -569,17 +647,26 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
             finalStatus = event.status;
             terminalMeta = event.meta;
           }
-        } else if (event.kind === "stdout" && !inputClosed) {
-          const turn = parseTurnFromStdout(event.line);
-          if (turn !== null) {
-            await handleTurnBoundary(turn.sentinel);
+        } else if (event.kind === "stdout") {
+          // Session capture runs on every stdout line, including after the
+          // runner has closed stdin — the last announcement in the dispatch
+          // wins.
+          const announced = parseSessionIdFromStdout(event.line);
+          if (announced !== null) sessionIdBox.value = announced;
+          if (!inputClosed) {
+            const turn = parseTurnFromStdout(event.line);
+            if (turn !== null) {
+              await handleTurnBoundary(turn.sentinel);
+            }
           }
         }
       }
       // Belt-and-suspenders: if the executor's stream ended without our
       // having closed stdin (e.g. the executor self-finalized), this is a
-      // no-op; otherwise it prevents a dangling open handle.
-      ensureInputClosed();
+      // no-op; otherwise it prevents a dangling open handle. Skipped on the
+      // pre-spawn resume failure path — nothing was spawned, so there is no
+      // stdin to close (and the executor instance is shared across nodes).
+      if (resumeFailure === null) ensureInputClosed();
       if (aborted) {
         result = {
           status: "failed",
@@ -705,6 +792,7 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
         endedAt,
         outputs: outputsForResult,
         nudges_used: nudgesUsed,
+        session_id: sessionIdBox.value,
       });
 
       // Persist any indexed outputs (including the partial index on override)
@@ -721,6 +809,7 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
         try {
           await store.recordNodeEnd(runId, nodeId, iteration, {
             status: finalStatus,
+            sessionId: sessionIdBox.value,
             at: Date.now(),
           });
         } catch (err) {
@@ -862,10 +951,47 @@ function extractReason(status: "succeeded" | "failed", meta: unknown): string | 
   if (status !== "failed") return null;
   if (!meta || typeof meta !== "object") return null;
   const m = meta as { reason?: unknown; sentinel?: unknown };
+  // Pre-spawn resume failures name themselves; the categorical string IS
+  // the reason (there is no sentinel, because nothing ran).
+  if (m.reason === "resume_unavailable" || m.reason === "resume_unsupported") {
+    return m.reason;
+  }
   if (m.reason !== "sentinel_failed") return null;
   if (typeof m.sentinel !== "string") return null;
   return m.sentinel.replace(/\s+$/, "");
 }
+
+/**
+ * Parse one stream-json stdout line for a session announcement. Returns the
+ * announced session id, or `null` when the line is not a `system` / `init`
+ * event carrying a non-empty string `session_id`.
+ *
+ * Non-fatal in every failure mode, matching `parseTurnFromStdout`: a
+ * non-JSON line, a JSON line of another shape, or a non-string `session_id`
+ * is simply not an announcement. The caller keeps the LAST announcement
+ * seen — the CLI emits one init line per turn, so a nudged dispatch
+ * announces several times (all carrying the same id).
+ */
+export function parseSessionIdFromStdout(line: string): string | null {
+  let obj: unknown;
+  try {
+    obj = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  if (!obj || typeof obj !== "object") return null;
+  const o = obj as { type?: unknown; subtype?: unknown; session_id?: unknown };
+  if (o.type !== "system" || o.subtype !== "init") return null;
+  if (typeof o.session_id !== "string" || o.session_id.length === 0) return null;
+  return o.session_id;
+}
+
+/** No-event iterable for dispatches the runner fails before spawn. */
+const EMPTY_EVENTS: AsyncIterable<NodeEvent> = {
+  async *[Symbol.asyncIterator]() {
+    // intentionally empty
+  },
+};
 
 function reportStoreError(
   onEvent: ((entry: EmittedEvent) => void) | undefined,

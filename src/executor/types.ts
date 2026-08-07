@@ -42,6 +42,12 @@ export interface NodeResult {
    * Only incremented on successful stdin write — a failed write does
    * not consume a nudge because the model never received it. */
   nudges_used: number;
+  /** The executor session id announced by this dispatch (per the
+   * `graph-runner` capability's "Per-dispatch session id capture"
+   * requirement), or `null` when the dispatch announced none — including
+   * dispatches the runner failed before spawn. Two entries may legitimately
+   * carry the same id when one node resumed another's conversation. */
+  session_id: string | null;
 }
 
 /**
@@ -73,6 +79,12 @@ export interface RunContext {
    * not emitted a config (e.g. unit-test invocations outside the runner,
    * or executors with `supportsMcp: false`). */
   mcpConfigPath?: string;
+  /** The session id this dispatch should continue, resolved by the runner
+   * from the node's `resume: <node-id>` declaration (per the `graph-runner`
+   * capability's "Cross-node session resume resolution" requirement).
+   * Absent for nodes that declare no `resume:`; executors that speak
+   * sessions forward it to their CLI's resume argument. */
+  resumeSessionId?: string;
 }
 
 export type ResolvedNode = FactoryNode & { id: string };
@@ -98,6 +110,17 @@ export interface NodeExecutor {
    * skips the loop entirely; the schema-accepted `output_nudge_budget`
    * has no runtime effect on those executors. */
   readonly supportsNudge: boolean;
+  /** Whether the executor's underlying runtime can continue a previously
+   * started session identified by an opaque session id, rather than
+   * starting a fresh one. When `true`, the runner may thread a resolved
+   * `ctx.resumeSessionId` into a dispatch for a node that declares
+   * `resume:`. When `false`, the runner fails such a dispatch before spawn
+   * with `resume_unsupported` (per the `node-executor` capability's
+   * "Executor `supportsResume` capability flag" requirement). The flag does
+   * not affect nodes that declare no `resume:`, and does not gate
+   * session-id capture — the runner captures announced session ids
+   * regardless. */
+  readonly supportsResume: boolean;
   run(node: ResolvedNode, ctx: RunContext): AsyncIterable<NodeEvent>;
   /** When `supportsNudge` is `true`, the runner calls this method to
    * frame `msg` as a stream-json user-message event and write it to

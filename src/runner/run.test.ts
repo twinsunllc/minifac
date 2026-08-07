@@ -155,6 +155,8 @@ class FakeExecutor implements NodeExecutor {
   readonly type: string;
   readonly supportsMcp = false;
   readonly supportsNudge = false;
+  /** Mutable so a test can opt this double into resume support. */
+  supportsResume = false;
   /** Per-node scripts keyed by node id. The same script runs every iteration. */
   scripts: Map<string, Script>;
   /** Optional capture of contexts seen, per node id. */
@@ -451,6 +453,7 @@ describe("runFactory", () => {
         "nudges_used",
         "outputs",
         "reason",
+        "session_id",
         "startedAt",
         "status",
       ].sort(),
@@ -1641,6 +1644,7 @@ class NudgeableExecutor implements NodeExecutor {
   readonly type = "nudgeable";
   readonly supportsMcp = false;
   readonly supportsNudge = true;
+  readonly supportsResume = false;
   /** Per-node ordered list of turn scripts. Turn N runs after the Nth
    * input (turn 0 runs on initial dispatch; turn 1 after the first
    * `writeUserMessage` call; etc.). */
@@ -2220,5 +2224,386 @@ describe("runFactory — post-execution nudge loop", () => {
     // Each iteration's dispatch consumed at most its own budget (1). Iter-1
     // spent its nudge and failed; iter-2 spent its nudge and recovered.
     expect(exec.nudgeMessagesReceived.get("a")?.length ?? 0).toBeGreaterThanOrEqual(2);
+  });
+});
+
+/** Emit a stream-json `system` / `init` announcement line. */
+function initLine(sessionId: string): NodeEvent {
+  return {
+    kind: "stdout",
+    line: JSON.stringify({
+      type: "system",
+      subtype: "init",
+      cwd: "/tmp",
+      session_id: sessionId,
+      model: "some-model",
+    }),
+  };
+}
+
+describe("runFactory — session id capture", () => {
+  it("captures the session id announced by a dispatch", async () => {
+    const factory: Factory = {
+      name: "f",
+      nodes: { a: { executor: "fake", terminal: true } },
+      edges: [],
+    };
+    const exec = new FakeExecutor("fake", {
+      a: () => [initLine("abc-123"), succeeded],
+    });
+    const registry = new ExecutorRegistry();
+    registry.register(exec);
+    const store = new FakeStore();
+    const res = await runFactory(wrap(factory), { registry, store, runId: "rid" });
+    expect(res.status).toBe("succeeded");
+    expect(store.nodeEnds.at(-1)?.end.sessionId).toBe("abc-123");
+  });
+
+  it("keeps the LAST announcement when a dispatch announces several", async () => {
+    // The CLI emits one init line per turn, so a multi-turn dispatch
+    // announces more than once.
+    const factory: Factory = {
+      name: "f",
+      nodes: { a: { executor: "fake", terminal: true } },
+      edges: [],
+    };
+    const exec = new FakeExecutor("fake", {
+      a: () => [initLine("first"), { kind: "stdout", line: "work" }, initLine("second"), succeeded],
+    });
+    const registry = new ExecutorRegistry();
+    registry.register(exec);
+    const store = new FakeStore();
+    await runFactory(wrap(factory), { registry, store, runId: "rid" });
+    expect(store.nodeEnds.at(-1)?.end.sessionId).toBe("second");
+  });
+
+  it("records null when the dispatch announces no session", async () => {
+    const factory: Factory = {
+      name: "f",
+      nodes: { a: { executor: "fake", terminal: true } },
+      edges: [],
+    };
+    const exec = new FakeExecutor("fake", {
+      a: () => [{ kind: "stdout", line: "no init here" }, succeeded],
+    });
+    const registry = new ExecutorRegistry();
+    registry.register(exec);
+    const store = new FakeStore();
+    await runFactory(wrap(factory), { registry, store, runId: "rid" });
+    expect(store.nodeEnds.at(-1)?.end.sessionId).toBeNull();
+  });
+
+  it("ignores non-JSON, off-shape, and non-string session_id lines", async () => {
+    const factory: Factory = {
+      name: "f",
+      nodes: { a: { executor: "fake", terminal: true } },
+      edges: [],
+    };
+    const lines = [
+      "not json at all",
+      JSON.stringify({ type: "assistant", session_id: "wrong-type" }),
+      JSON.stringify({ type: "system", subtype: "other", session_id: "wrong-subtype" }),
+      JSON.stringify({ type: "system", subtype: "init", session_id: 42 }),
+      JSON.stringify({ type: "system", subtype: "init", session_id: "" }),
+    ];
+    const exec = new FakeExecutor("fake", {
+      a: () => [...lines.map((l): NodeEvent => ({ kind: "stdout", line: l })), succeeded],
+    });
+    const registry = new ExecutorRegistry();
+    registry.register(exec);
+    const store = new FakeStore();
+    const events: EmittedEvent[] = [];
+    await runFactory(wrap(factory), {
+      registry,
+      store,
+      runId: "rid",
+      onEvent: (e) => events.push(e),
+    });
+    expect(store.nodeEnds.at(-1)?.end.sessionId).toBeNull();
+    // Every line still reached the event stream, in order, unaltered.
+    const stdoutLines = events
+      .filter((e) => e.event.kind === "stdout")
+      .map((e) => (e.event as { line: string }).line);
+    expect(stdoutLines).toEqual(lines);
+  });
+
+  it("captures the session id even for a failed dispatch", async () => {
+    const factory: Factory = {
+      name: "f",
+      nodes: { a: { executor: "fake", terminal: true } },
+      edges: [],
+    };
+    const exec = new FakeExecutor("fake", {
+      a: () => [initLine("abc-123"), failed],
+    });
+    const registry = new ExecutorRegistry();
+    registry.register(exec);
+    const store = new FakeStore();
+    const res = await runFactory(wrap(factory), { registry, store, runId: "rid" });
+    expect(res.status).toBe("failed");
+    expect(store.nodeEnds.at(-1)?.end.sessionId).toBe("abc-123");
+  });
+});
+
+describe("runFactory — cross-node session resume", () => {
+  /** Two-node cascade: `plan` announces a session, `apply` resumes it. */
+  function cascade(overrides: Partial<Factory["nodes"]> = {}): Factory {
+    return {
+      name: "f",
+      nodes: {
+        plan: { executor: "fake", terminal: false },
+        apply: { executor: "fake", terminal: true, resume: "plan" },
+        ...overrides,
+      },
+      edges: [{ from: "plan", to: "apply", when: "on_success" }],
+    };
+  }
+
+  function resumeCapable(scripts: Record<string, Script>): FakeExecutor {
+    const exec = new FakeExecutor("fake", scripts);
+    exec.supportsResume = true;
+    return exec;
+  }
+
+  it("threads the target node's captured session into the resuming dispatch", async () => {
+    const exec = resumeCapable({
+      plan: () => [initLine("abc-123"), succeeded],
+      apply: () => [initLine("abc-123"), succeeded],
+    });
+    const registry = new ExecutorRegistry();
+    registry.register(exec);
+    const res = await runFactory(wrap(cascade()), { registry });
+    expect(res.status).toBe("succeeded");
+    expect(exec.contexts.get("apply")?.[0]?.resumeSessionId).toBe("abc-123");
+    // The plan node itself declares no `resume:`.
+    expect(exec.contexts.get("plan")?.[0]?.resumeSessionId).toBeUndefined();
+  });
+
+  it("a later iteration picks up the target's newer session after the target re-runs", async () => {
+    // plan -> apply -> (on_failure) plan -> apply. `plan` announces a new
+    // session each dispatch; `apply` iteration 2 must resume the newer one.
+    const factory: Factory = {
+      name: "f",
+      nodes: {
+        plan: { executor: "fake", terminal: false, max_iterations: 2 },
+        apply: { executor: "fake", terminal: true, resume: "plan", max_iterations: 2 },
+      },
+      edges: [
+        { from: "plan", to: "apply", when: "on_success" },
+        { from: "apply", to: "plan", when: "on_failure", max_traversals: 1 },
+      ],
+    };
+    let planDispatch = 0;
+    let applyDispatch = 0;
+    const exec = resumeCapable({
+      plan: () => {
+        planDispatch += 1;
+        return [initLine(`s${planDispatch}`), succeeded];
+      },
+      apply: () => {
+        applyDispatch += 1;
+        return applyDispatch === 1 ? [initLine("s1"), failed] : [initLine("s2"), succeeded];
+      },
+    });
+    const registry = new ExecutorRegistry();
+    registry.register(exec);
+    const res = await runFactory(wrap(factory), { registry });
+    expect(res.status).toBe("succeeded");
+    const seen = exec.contexts.get("apply") ?? [];
+    expect(seen[0]?.resumeSessionId).toBe("s1");
+    expect(seen[1]?.resumeSessionId).toBe("s2");
+  });
+
+  it("reuses the same session when only the resuming node re-runs", async () => {
+    // apply cycles on itself via a recovery edge through a passthrough node;
+    // `plan` runs once, so both apply iterations resume the same session.
+    const factory: Factory = {
+      name: "f",
+      nodes: {
+        plan: { executor: "fake", terminal: false },
+        apply: { executor: "fake", terminal: false, resume: "plan", max_iterations: 2 },
+        done: { executor: "fake", terminal: true },
+      },
+      edges: [
+        { from: "plan", to: "apply", when: "on_success" },
+        { from: "apply", to: "done", when: "on_success" },
+        { from: "apply", to: "apply", when: "on_failure", max_traversals: 1 },
+      ],
+    };
+    let applyDispatch = 0;
+    const exec = resumeCapable({
+      plan: () => [initLine("s1"), succeeded],
+      apply: () => {
+        applyDispatch += 1;
+        return applyDispatch === 1 ? [initLine("s1"), failed] : [initLine("s1"), succeeded];
+      },
+      done: () => [succeeded],
+    });
+    const registry = new ExecutorRegistry();
+    registry.register(exec);
+    const res = await runFactory(wrap(factory), { registry });
+    expect(res.status).toBe("succeeded");
+    const seen = exec.contexts.get("apply") ?? [];
+    expect(seen).toHaveLength(2);
+    expect(seen[0]?.resumeSessionId).toBe("s1");
+    expect(seen[1]?.resumeSessionId).toBe("s1");
+  });
+
+  it("resumes a FAILED target that produced a session (on_failure recovery)", async () => {
+    const factory: Factory = {
+      name: "f",
+      nodes: {
+        plan: { executor: "fake", terminal: false },
+        recover: { executor: "fake", terminal: true, resume: "plan" },
+      },
+      edges: [{ from: "plan", to: "recover", when: "on_failure" }],
+    };
+    const exec = resumeCapable({
+      plan: () => [initLine("abc-123"), failed],
+      recover: () => [initLine("abc-123"), succeeded],
+    });
+    const registry = new ExecutorRegistry();
+    registry.register(exec);
+    const res = await runFactory(wrap(factory), { registry });
+    expect(res.status).toBe("succeeded");
+    expect(exec.contexts.get("recover")?.[0]?.resumeSessionId).toBe("abc-123");
+  });
+
+  it("fails before spawn when the target never ran (no_prior_dispatch)", async () => {
+    const factory: Factory = {
+      name: "f",
+      nodes: {
+        apply: { executor: "fake", terminal: false, resume: "verify" },
+        verify: { executor: "fake", terminal: true },
+      },
+      edges: [{ from: "apply", to: "verify", when: "on_success" }],
+    };
+    const exec = resumeCapable({
+      apply: () => [succeeded],
+      verify: () => [succeeded],
+    });
+    const registry = new ExecutorRegistry();
+    registry.register(exec);
+    const events: EmittedEvent[] = [];
+    const res = await runFactory(wrap(factory), { registry, onEvent: (e) => events.push(e) });
+    expect(res.status).toBe("failed");
+    expect(res.reason).toBe("node_failed");
+    expect(res.proximateNodeId).toBe("apply");
+    // No dispatch happened.
+    expect(exec.contexts.get("apply")).toBeUndefined();
+    const status = events.find((e) => e.event.kind === "status" && e.event.status === "failed");
+    expect((status?.event as { meta?: { reason?: string; detail?: string } }).meta?.reason).toBe(
+      "resume_unavailable",
+    );
+    expect((status?.event as { meta?: { detail?: string } }).meta?.detail).toMatch(
+      /no_prior_dispatch/,
+    );
+  });
+
+  it("fails before spawn when the target captured no session (no_session_captured)", async () => {
+    const exec = resumeCapable({
+      plan: () => [{ kind: "stdout", line: "crashed before init" }, succeeded],
+      apply: () => [succeeded],
+    });
+    const registry = new ExecutorRegistry();
+    registry.register(exec);
+    const events: EmittedEvent[] = [];
+    const res = await runFactory(wrap(cascade()), { registry, onEvent: (e) => events.push(e) });
+    expect(res.status).toBe("failed");
+    expect(exec.contexts.get("apply")).toBeUndefined();
+    const status = events.find(
+      (e) => e.nodeId === "apply" && e.event.kind === "status" && e.event.status === "failed",
+    );
+    const meta = (status?.event as { meta?: { reason?: string; detail?: string } }).meta;
+    expect(meta?.reason).toBe("resume_unavailable");
+    expect(meta?.detail).toMatch(/no_session_captured/);
+  });
+
+  it("fails before spawn when the executor cannot resume", async () => {
+    // FakeExecutor defaults to supportsResume = false.
+    const exec = new FakeExecutor("fake", {
+      plan: () => [initLine("abc-123"), succeeded],
+      apply: () => [succeeded],
+    });
+    const registry = new ExecutorRegistry();
+    registry.register(exec);
+    const events: EmittedEvent[] = [];
+    const res = await runFactory(wrap(cascade()), { registry, onEvent: (e) => events.push(e) });
+    expect(res.status).toBe("failed");
+    expect(exec.contexts.get("apply")).toBeUndefined();
+    const status = events.find(
+      (e) => e.nodeId === "apply" && e.event.kind === "status" && e.event.status === "failed",
+    );
+    expect((status?.event as { meta?: { reason?: string } }).meta?.reason).toBe(
+      "resume_unsupported",
+    );
+  });
+
+  it("records the resume failure as an ordinary node failure in prior results", async () => {
+    // A recovery node hanging off an on_failure edge sees the failed
+    // resume node's prior-results entry with the categorical reason.
+    const factory: Factory = {
+      name: "f",
+      nodes: {
+        apply: { executor: "fake", terminal: false, resume: "verify" },
+        recover: { executor: "fake", terminal: true },
+        verify: { executor: "fake", terminal: false },
+      },
+      edges: [
+        { from: "apply", to: "verify", when: "on_success" },
+        { from: "apply", to: "recover", when: "on_failure" },
+      ],
+    };
+    const exec = resumeCapable({
+      apply: () => [succeeded],
+      recover: () => [succeeded],
+      verify: () => [succeeded],
+    });
+    const registry = new ExecutorRegistry();
+    registry.register(exec);
+    const res = await runFactory(wrap(factory), { registry });
+    expect(res.status).toBe("succeeded");
+    // The on_failure edge traversed, so `recover` ran and saw apply's entry.
+    const prior = exec.contexts.get("recover")?.[0]?.priorResults ?? [];
+    const applyEntry = prior.find((p) => p.nodeId === "apply");
+    expect(applyEntry?.status).toBe("failed");
+    expect(applyEntry?.reason).toBe("resume_unavailable");
+    expect(applyEntry?.session_id).toBeNull();
+  });
+
+  it("brackets a pre-spawn resume failure with node start/end rows", async () => {
+    const exec = resumeCapable({
+      plan: () => [{ kind: "stdout", line: "no init" }, succeeded],
+      apply: () => [succeeded],
+    });
+    const registry = new ExecutorRegistry();
+    registry.register(exec);
+    const store = new FakeStore();
+    await runFactory(wrap(cascade()), { registry, store, runId: "rid" });
+    expect(store.nodeStarts.some((s) => s.nodeId === "apply")).toBe(true);
+    const end = store.nodeEnds.find((e) => e.nodeId === "apply");
+    expect(end?.end.status).toBe("failed");
+    expect(end?.end.sessionId).toBeNull();
+  });
+
+  it("leaves nodes without `resume:` untouched", async () => {
+    const factory: Factory = {
+      name: "f",
+      nodes: {
+        a: { executor: "fake", terminal: false },
+        b: { executor: "fake", terminal: true },
+      },
+      edges: [{ from: "a", to: "b", when: "on_success" }],
+    };
+    const exec = resumeCapable({
+      a: () => [initLine("s1"), succeeded],
+      b: () => [initLine("s2"), succeeded],
+    });
+    const registry = new ExecutorRegistry();
+    registry.register(exec);
+    const res = await runFactory(wrap(factory), { registry });
+    expect(res.status).toBe("succeeded");
+    expect(exec.contexts.get("a")?.[0]?.resumeSessionId).toBeUndefined();
+    expect(exec.contexts.get("b")?.[0]?.resumeSessionId).toBeUndefined();
   });
 });

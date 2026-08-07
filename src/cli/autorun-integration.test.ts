@@ -45,6 +45,7 @@ class FakeExecutor implements NodeExecutor {
   readonly type = "fake";
   readonly supportsMcp = false;
   readonly supportsNudge = false;
+  readonly supportsResume = false;
   async *run(_node: ResolvedNode, _ctx: RunContext): AsyncIterable<NodeEvent> {
     yield { kind: "stdout", line: "fake hello" };
     yield { kind: "status", status: "started" };

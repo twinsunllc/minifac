@@ -132,6 +132,7 @@ export class CheckMergeExecutor implements NodeExecutor {
   readonly type = "check-merge";
   readonly supportsMcp = false;
   readonly supportsNudge = false;
+  readonly supportsResume = false;
 
   private readonly gitRunner: GitRunner;
 

@@ -81,6 +81,10 @@ CREATE INDEX idx_node_outputs_run_node_iter
   ON node_outputs (run_id, node_id, iteration);
 `;
 
+const SQL_0004 = `
+ALTER TABLE node_executions ADD COLUMN session_id TEXT;
+`;
+
 export interface Migration {
   version: number;
   name: string;
@@ -91,6 +95,7 @@ export const MIGRATIONS: readonly Migration[] = Object.freeze([
   { version: 1, name: "initial", sql: SQL_0001 },
   { version: 2, name: "add_branch_name", sql: SQL_0002 },
   { version: 3, name: "add_node_outputs", sql: SQL_0003 },
+  { version: 4, name: "add_session_id", sql: SQL_0004 },
 ]);
 
 export function highestMigration(): number {

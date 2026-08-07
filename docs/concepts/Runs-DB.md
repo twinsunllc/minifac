@@ -30,7 +30,14 @@ belong in git. See [[0012-Where-State-Lives]].
 - **events**: run_id, seq, node_id, iteration, kind, payload,
   emitted_at
 - **node_executions**: run_id, node_id, iteration, status, started_at,
-  ended_at, exit_code, sentinel_status
+  ended_at, exit_code, sentinel_status, session_id (schema v4) — the
+  executor session this node execution ran in. Nullable (a dispatch
+  that crashed before announcing one, or that the runner failed before
+  spawn, stores `NULL`) and **not** unique: when one node resumes
+  another's conversation (see [[Runner#Cross-node session resume]])
+  both rows carry the same id. It is the join key from a finished run
+  back to the session transcript — which is what makes splitting a
+  cascade's cost by model possible after the fact.
 - **node_outputs** (schema v3): run_id, node_id, iteration,
   output_key, output_type, path, size, mtime — an index of declared
   [[Outputs]] produced per node iteration. Contents stay on disk

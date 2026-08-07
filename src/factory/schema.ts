@@ -70,6 +70,13 @@ export const NodeSchema = z
     // unsatisfied required output; `0` opts the node out of nudging
     // entirely. See `docs/decisions/0028-Node-Outputs-Nudge.md`.
     output_nudge_budget: z.number().int().nonnegative().optional().default(1),
+    // Names another node in this factory whose `claude` conversation this
+    // node continues instead of starting a fresh one. Topology, not
+    // executor payload: the runner resolves the named node's captured
+    // session id and threads it to the executor. Reference validation
+    // (declared target, no self-resume, matching `cwd`) runs post-schema
+    // against the resolved factory — see `validateResume` in `loader.ts`.
+    resume: z.string().min(1).optional(),
   })
   .strict();
 

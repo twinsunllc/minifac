@@ -147,6 +147,28 @@ conflict context between iterations.
 is a bad precedent). The conflict context flows through node
 outputs so the retried `apply` knows what to fix.
 
+### Resumed sessions: append vs fork
+
+**Question:** Should a node's `resume:` continue the target's session
+in place (today's behavior) or fork it into a fresh session id per
+dispatch — i.e. is a `resume_mode: append | fork` knob worth adding?
+**Trigger:** A factory hits context limits inside a resumed revise
+loop, or an operator wants two continuation nodes off one plan node
+without their turns interleaving in a single transcript.
+**Status:** v1 appends, deliberately. Resumed turns write back into
+the same conversation and re-announce the same session id, so a node
+that resumes across iterations also sees its own earlier turns. In a
+revise loop that is usually what you want — the second attempt knows
+what the first tried — and it keeps the `node_executions.session_id`
+join key meaningful for cost attribution. The cost is unbounded growth
+in a long cycle.
+**Likely shape:** The mechanism already exists upstream —
+`claude --fork-session` ("when resuming, create a new session ID
+instead of reusing the original"). A knob would be a node-level
+`resume_mode:` defaulting to `append`, mapping `fork` onto that flag.
+Cheap to add; not worth adding before a real factory feels the pain.
+See [[Runner#Cross-node session resume]].
+
 ## Concurrency & queueing
 
 ### Machine-wide concurrency cap
