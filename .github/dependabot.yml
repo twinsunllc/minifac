@@ -1,0 +1,100 @@
+# Routine version updates for the two ecosystems this repo uses. Modeled on
+# twinsunllc/scarif-web's config (SCARIFW-1178 / -1201 / -1203 / -1213); the
+# reasoning below is load-bearing and should travel with any edit.
+#
+# Security updates are enabled at the repo level once this file exists and are
+# NOT disabled here: no ecosystem sets `open-pull-requests-limit: 0`, and the
+# one `ignore` condition is scoped by `update-types` so it cannot reach a
+# security update.
+#
+# npm ignores routine `version-update:semver-major` bumps. Majors accumulate
+# faster than anyone triages them, and .github/workflows/dependabot-automerge.yml
+# only ever auto-merges patch and stable-minor, so a routine major PR is pure
+# queue. Per GitHub's Dependabot options reference, `update-types` "only affects
+# version updates, not security updates": a major that resolves an advisory is
+# still opened, still arrives ungrouped, and still requires a human merge.
+#
+# Do NOT express this with the `dependency-name` or `versions` ignore parameters
+# — both DO apply to security updates, so either would silently suppress
+# advisory fixes, and that failure is invisible until an advisory goes
+# unpatched. `dependency-name: "*"` is safe here only because the `update-types`
+# key sits on the SAME sequence item and scopes it; splitting the two keys
+# across two items would reintroduce exactly that failure.
+# `open-pull-requests-limit: 0` is not an alternative either: it exempts
+# security updates but would also suppress the patch and minor updates the
+# auto-merge workflow exists to clear.
+#
+# github-actions is deliberately exempt from the ignore. Action majors are
+# largely how we stay on supported runner runtimes, they rarely arrive via
+# advisories, and they are the cheapest majors to review. Suppressing them would
+# mean rotting toward a hard break with no signal. They are still never
+# auto-merged.
+#
+# Each ecosystem is split into a `-patch` group and a `-minor` group rather than
+# one group per ecosystem: a grouped PR reports the HIGHEST semver change across
+# its members, so a single all-inclusive group would report `semver-minor` as
+# soon as one member had a minor bump, and a routine patch batch could not then
+# be reviewed or reverted independently of a minor one. No group lists `major`:
+# a routine major is no longer opened at all for npm, and a security-driven
+# major — or any github-actions major — arrives ungrouped.
+#
+# The npm `cooldown` mirrors `min-release-age=3` in .npmrc and the lockfile gate
+# in scripts/check-dep-freshness.mjs (docs/decisions/0024-CI-Security-Policy.md).
+# Without it, a Monday PR carrying a package published over the weekend fails CI
+# on the freshness check and sits red until someone re-runs it three days later.
+# Cooldown is version-updates-only, so it cannot delay a security update either.
+version: 2
+
+updates:
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: America/Chicago
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+    # Matches .npmrc min-release-age=3 / scripts/check-dep-freshness.mjs.
+    cooldown:
+      default-days: 3
+    # Routine majors only. `update-types` does not affect security updates, so a
+    # major that resolves an advisory is still opened. Both keys must stay on
+    # this one sequence item — see the header comment.
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+    groups:
+      npm-patch:
+        patterns:
+          - "*"
+        update-types:
+          - patch
+      npm-minor:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: America/Chicago
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+    groups:
+      github-actions-patch:
+        patterns:
+          - "*"
+        update-types:
+          - patch
+      github-actions-minor:
+        patterns:
+          - "*"
+        update-types:
+          - minor
