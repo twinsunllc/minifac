@@ -1,0 +1,176 @@
+# Enable GitHub native auto-merge on qualifying Dependabot PRs. Ported from
+# twinsunllc/scarif-web (SCARIFW-1178 / -1201 / -1213); the reasoning below is
+# load-bearing and should travel with any edit.
+#
+# `gh pr merge --auto` does NOT bypass anything: GitHub still waits for whatever
+# required status checks and reviews branch protection already demands. This
+# workflow adds no protection rules and weakens none.
+#
+# It also does not SUPPLY them. If `main` has no required status checks, a
+# Dependabot PR is mergeable the moment it opens and gh merges it immediately
+# rather than waiting — "auto-merge green builds" is only true when the checks
+# are required. See docs/decisions/0036-Dependabot-Auto-Merge.md.
+#
+# Auto-merge is enabled for version updates at semver-patch or semver-minor,
+# routine or security alike. Every major — routine or security — is left for a
+# human.
+#
+# Minor is not unconditional. Under semver a 0.x MINOR bump is precisely where
+# breaking changes are allowed to live, and by convention that is what they are
+# — so a minor auto-merges only when EVERY dependency the PR updates was already
+# at 1.0.0 or above before the bump. Patch stays unconditional at any version,
+# including 0.x, because a 0.x patch is conventionally safe and is not where
+# this risk lives. The asymmetry is deliberate and is visible in the merge
+# condition: the patch clause is a bare update-type equality, and only the minor
+# clause is conjoined with the member_versions gate below.
+#
+# What went wrong without the gate: scarif-worker#326 — web-tree-sitter 0.21.0
+# -> 0.26.11, reported as a minor, arriving through an npm-minor group — merged
+# and broke the TypeScript build on main, a day after a human had already judged
+# that exact bump breaking and deliberately deferred it.
+#
+# Why the gate reads the PR body: dependabot/fetch-metadata's previous-version
+# and new-version describe a single dependency, so on a GROUPED PR — which is
+# how .github/dependabot.yml configures both ecosystems — they characterise one
+# arbitrary member and say nothing about the others. The body carries a version
+# for every member and dependency-names carries the authoritative membership
+# list, so the gate cross-checks the two and emits all-stable=false whenever a
+# version or the membership cannot be determined. Undeterminable fails closed.
+#
+# Why minor at all: fetch-metadata reports a GROUPED PR's update-type as the
+# HIGHEST bump across its members, so under patch-only a single minor member
+# disqualifies the whole group and a batch of green patch bumps sits unmerged
+# every week. Patch-only auto-merge and grouped updates do not work together.
+# The trade is deliberate — ci, codeql, dependency-review and action-security,
+# which --auto waits on, are the gate.
+name: Dependabot auto-merge
+
+on:
+  pull_request:
+    branches: [main]
+
+# Workflows triggered by Dependabot get a read-only GITHUB_TOKEN by default;
+# this block is what elevates it enough to enable auto-merge.
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  automerge:
+    name: Enable auto-merge
+    # Dependabot's own PRs only — never a human's, never a fork's.
+    if: github.event.pull_request.user.login == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      # dependabot/fetch-metadata passes the verified-publisher check in
+      # .github/workflows/action-security.yml natively; SHA-pinned per
+      # docs/decisions/0024-CI-Security-Policy.md rule 1.
+      - name: Fetch Dependabot metadata
+        id: metadata
+        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98  # v3.1.0
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Require every updated dependency at 1.0.0 or above
+        id: member_versions
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+          DEPENDENCY_NAMES: ${{ steps.metadata.outputs.dependency-names }}
+        run: |
+          set -euo pipefail
+
+          body="${PR_BODY:-}"
+          names="${DEPENDENCY_NAMES:-}"
+
+          # Dependabot names every member it updated on its own line, in one of
+          # two shapes: `Updates `pkg` from A to B` on a grouped PR (and for the
+          # extra members of a single-dependency PR), or
+          # `Bumps [pkg](url) from A to B.` on a single-dependency PR. Both verbs
+          # occur with either spelling of the name, so all four combinations are
+          # accepted. A is the version the PR moves away FROM, and A is what
+          # decides this gate: one 0.x member blocks the whole PR.
+          bump_backticked='^[[:space:]]*(Updates|Bumps)[[:space:]]+`([^`]+)`[[:space:]]+from[[:space:]]+([^[:space:]]+)[[:space:]]+to[[:space:]]+[^[:space:]]'
+          bump_linked='^[[:space:]]*(Updates|Bumps)[[:space:]]+\[([^]]+)\]\([^)]*\)[[:space:]]+from[[:space:]]+([^[:space:]]+)[[:space:]]+to[[:space:]]+[^[:space:]]'
+          version='^([0-9]+)(\.[0-9]+)*([-+][0-9A-Za-z.-]+)?$'
+          zero_major='^0+$'
+
+          lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
+
+          # 0 = was at 1.0.0 or above, 1 = was pre-1.0, 2 = not a version this
+          # gate can read (a commit SHA, a git ref, prose) -- undeterminable.
+          classify_previous() {
+            local candidate="${1#v}"
+            if [[ ! $candidate =~ $version ]]; then
+              return 2
+            fi
+            local major="${BASH_REMATCH[1]}"
+            if [[ $major =~ $zero_major ]]; then
+              return 1
+            fi
+            return 0
+          }
+
+          all_stable=true
+          members=0
+          seen=''
+
+          while IFS= read -r line; do
+            if [[ $line =~ $bump_backticked ]] || [[ $line =~ $bump_linked ]]; then
+              name="${BASH_REMATCH[2]}"
+              previous="${BASH_REMATCH[3]}"
+            else
+              continue
+            fi
+            members=$((members + 1))
+            seen="${seen}$(lower "$name")"$'\n'
+            status=0
+            classify_previous "$previous" || status=$?
+            if [ "$status" -eq 0 ]; then
+              echo "$name: was $previous, at 1.0.0 or above"
+            elif [ "$status" -eq 1 ]; then
+              echo "$name: was $previous, pre-1.0 -- a minor bump here is allowed to break us"
+              all_stable=false
+            else
+              echo "$name: cannot read $previous as a version"
+              all_stable=false
+            fi
+          done <<< "$body"
+
+          if [ "$members" -eq 0 ]; then
+            echo 'no dependency version lines found in the pull request body'
+            all_stable=false
+          fi
+
+          # dependency-names comes off the commit trailer, so it stays
+          # authoritative even when Dependabot truncates a long body. Every name
+          # it reports has to have been read above; one that was not means
+          # membership is undeterminable, and undeterminable fails closed.
+          if [ -z "${names//[[:space:],]/}" ]; then
+            echo 'the metadata step reported no dependency names'
+            all_stable=false
+          fi
+
+          while IFS= read -r member; do
+            member="${member//[[:space:]]/}"
+            if [ -z "$member" ]; then
+              continue
+            fi
+            member="$(lower "$member")"
+            if [[ $'\n'"$seen" != *$'\n'"$member"$'\n'* ]]; then
+              echo "$member was updated but has no version line in the pull request body"
+              all_stable=false
+            fi
+          done <<< "${names//,/$'\n'}"
+
+          echo "all-stable=$all_stable" >> "$GITHUB_OUTPUT"
+          echo "all-stable=$all_stable"
+
+      - name: Enable auto-merge for patch updates and stable minor updates
+        if: |
+          steps.metadata.outputs.update-type == 'version-update:semver-patch' ||
+          (steps.metadata.outputs.update-type == 'version-update:semver-minor' &&
+          steps.member_versions.outputs.all-stable == 'true')
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh pr merge --auto --squash "$PR_URL"
