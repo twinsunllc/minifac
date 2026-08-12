@@ -88,13 +88,38 @@ updates:
     labels:
       - dependencies
     groups:
+      # `github/codeql-action/init` and `.../analyze` are two directories of one
+      # action, and Dependabot treats each as its own dependency. Ungrouped, it
+      # opens a PR per directory, each of which moves half the pair — and a
+      # mismatched pair fails hard: "Loaded a configuration file for version
+      # '4.37.6', but running version '3.35.5'" (minifac#14, #17). Neither PR can
+      # ever go green alone.
+      #
+      # This group is the only one that lists `major`, so codeql-action majors
+      # arrive as ONE PR instead of two. It does not make them auto-merge: a
+      # grouped PR reports the highest bump across its members, so a major here
+      # reports semver-major and dependabot-automerge.yml leaves it for a human.
+      #
+      # The wildcard groups below must exclude the same pattern, or a
+      # codeql-action patch/minor would match both and split again.
+      codeql-action:
+        patterns:
+          - "github/codeql-action*"
+        update-types:
+          - patch
+          - minor
+          - major
       github-actions-patch:
         patterns:
           - "*"
+        exclude-patterns:
+          - "github/codeql-action*"
         update-types:
           - patch
       github-actions-minor:
         patterns:
           - "*"
+        exclude-patterns:
+          - "github/codeql-action*"
         update-types:
           - minor

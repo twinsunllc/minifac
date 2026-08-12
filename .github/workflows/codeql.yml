@@ -24,13 +24,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
+      # init and analyze are two directories of ONE action and must stay on the
+      # same commit — a mismatched pair fails with "Loaded a configuration file
+      # for version 'X', but running version 'Y'". Bump them together; the
+      # `codeql-action` group in .github/dependabot.yml keeps Dependabot from
+      # splitting them across two PRs.
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@458d36d7d4f47d0dd16ca424c1d3cda0060f1360  # v3
+        uses: github/codeql-action/init@5595ccaf912efad79be6eef63a5619ff05969be3  # v4.37.6
         with:
           languages: javascript-typescript
           build-mode: none
 
       - name: Perform analysis
-        uses: github/codeql-action/analyze@458d36d7d4f47d0dd16ca424c1d3cda0060f1360  # v3
+        uses: github/codeql-action/analyze@5595ccaf912efad79be6eef63a5619ff05969be3  # v4.37.6
         with:
           category: "/language:javascript-typescript"
