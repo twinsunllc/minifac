@@ -12,6 +12,7 @@ import type {
 } from "../executor/types.js";
 import type { LoadedFactory } from "../factory/loader.js";
 import type { NodeOutputIndex } from "../factory/schema.js";
+import { startNodeIds } from "../factory/start-nodes.js";
 import type { RunStore, StoredEventKind } from "../storage/run-store.js";
 import { minifacHome } from "../worktree/config.js";
 import { markBriefDone } from "./mark-done.js";
@@ -206,13 +207,11 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
 
     let budgetHit = false;
 
-    const onSuccessInbound = new Set<string>();
-    for (const edge of factory.edges) {
-      if (edge.when === "on_success") onSuccessInbound.add(edge.to);
-    }
-    const startNodeIds = Object.keys(factory.nodes).filter((id) => !onSuccessInbound.has(id));
+    // See `startNodeIds` in `../factory/start-nodes.ts`: no inbound edge
+    // from another node (any `when`), or `start: true`.
+    const startIds = startNodeIds(factory);
 
-    const queue: QueueItem[] = startNodeIds.map((id) => ({ nodeId: id }));
+    const queue: QueueItem[] = startIds.map((id) => ({ nodeId: id }));
 
     let result: RunResult | null = null;
 

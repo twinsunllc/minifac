@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { FactoryLoadError, loadFactory } from "./loader.js";
+import { startNodeIds } from "./start-nodes.js";
 
 const tmpDirs: string[] = [];
 
@@ -139,14 +140,16 @@ edges:
   });
 
   it("rejects unbounded cycles", async () => {
-    // a is a start node (no on_success inbound); b loops back on_failure
-    // with no budget on either the edge or a node in the cycle.
+    // a is the declared start node (b loops back into it on_failure, so it
+    // needs `start: true`); no budget on either the edge or a node in the
+    // cycle.
     const file = await writeFactory(
       "cycle.yaml",
       `name: cyc
 nodes:
   a:
     executor: claude
+    start: true
   b:
     executor: claude
     terminal: true
@@ -168,6 +171,7 @@ edges:
 nodes:
   a:
     executor: claude
+    start: true
   b:
     executor: claude
     terminal: true
@@ -191,6 +195,7 @@ edges:
 nodes:
   a:
     executor: claude
+    start: true
     max_iterations: 3
   b:
     executor: claude
@@ -220,7 +225,7 @@ edges: []
     await expect(loadFactory(file)).rejects.toThrowError(/terminal/i);
   });
 
-  it("rejects factories with no start node", async () => {
+  it("rejects factories with no start node, naming the entry cycle and the fix", async () => {
     // closed loop of two nodes — both have inbound, neither is a start node
     const file = await writeFactory(
       "nostart.yaml",
@@ -240,7 +245,104 @@ edges:
     to: a
 `,
     );
-    await expect(loadFactory(file)).rejects.toThrowError(/start/i);
+    await expect(loadFactory(file)).rejects.toThrowError(/no start node/i);
+    await expect(loadFactory(file)).rejects.toThrowError(/a → b/);
+    await expect(loadFactory(file)).rejects.toThrowError(/start: true/);
+  });
+
+  it("a node reachable only by an on_failure edge is not a start node (no load error, not dispatched)", async () => {
+    // Issue #36 / FINDINGS F6: a → b, b → ask (on_failure), b → z. `ask`
+    // has an inbound edge, so it is not a start node; `a` alone is.
+    const file = await writeFactory(
+      "escalation.yaml",
+      `name: esc
+nodes:
+  a:
+    executor: claude
+  b:
+    executor: claude
+  ask:
+    executor: claude
+    terminal: true
+  z:
+    executor: claude
+    terminal: true
+edges:
+  - from: a
+    to: b
+  - from: b
+    to: ask
+    when: on_failure
+  - from: b
+    to: z
+`,
+    );
+    const loaded = await loadFactory(file);
+    expect(startNodeIds(loaded.factory)).toEqual(["a"]);
+  });
+
+  it("a cycle with an on_failure back-edge into its entry needs `start: true` on the entry", async () => {
+    const body = (startLine: string) => `name: pv
+nodes:
+  p:
+    executor: claude${startLine}
+  v:
+    executor: claude
+    terminal: true
+edges:
+  - from: p
+    to: v
+  - from: v
+    to: p
+    when: on_failure
+    max_traversals: 2
+`;
+    const bare = await writeFactory("pv-bare.yaml", body(""));
+    await expect(loadFactory(bare)).rejects.toThrowError(/no start node/i);
+    await expect(loadFactory(bare)).rejects.toThrowError(/p → v/);
+
+    const declared = await writeFactory("pv-start.yaml", body("\n    start: true"));
+    const loaded = await loadFactory(declared);
+    expect(loaded.factory.nodes.p?.start).toBe(true);
+    expect(startNodeIds(loaded.factory)).toEqual(["p"]);
+  });
+
+  it("a self-loop does not disqualify a start node", async () => {
+    const file = await writeFactory(
+      "selfloop.yaml",
+      `name: retry
+nodes:
+  a:
+    executor: claude
+    max_iterations: 3
+  t:
+    executor: claude
+    terminal: true
+edges:
+  - from: a
+    to: a
+    when: on_failure
+  - from: a
+    to: t
+`,
+    );
+    const loaded = await loadFactory(file);
+    expect(startNodeIds(loaded.factory)).toEqual(["a"]);
+  });
+
+  it("rejects a non-boolean `start:`", async () => {
+    const file = await writeFactory(
+      "badstart.yaml",
+      `name: bad
+nodes:
+  a:
+    executor: claude
+    terminal: true
+    start: yes please
+edges: []
+`,
+    );
+    await expect(loadFactory(file)).rejects.toThrowError(/start/);
   });
 
   it("reports a line number for malformed YAML", async () => {
@@ -530,6 +632,7 @@ nodes:
   apply:
     executor: claude
     resume: verify
+    start: true
     max_iterations: 2
   verify:
     executor: claude

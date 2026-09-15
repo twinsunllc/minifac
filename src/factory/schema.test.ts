@@ -161,3 +161,20 @@ describe("NodeSchema — output_nudge_budget", () => {
     expect(node.output_nudge_budget).toBe(5);
   });
 });
+
+describe("NodeSchema — `start` field", () => {
+  it("accepts `start: true`", () => {
+    const out = NodeSchema.parse({ executor: "claude", start: true });
+    expect(out.start).toBe(true);
+  });
+
+  it("leaves `start` undefined when omitted (no default)", () => {
+    const out = NodeSchema.parse({ executor: "claude" });
+    expect(out.start).toBeUndefined();
+    expect("start" in out).toBe(false);
+  });
+
+  it("rejects a non-boolean `start`", () => {
+    expect(() => NodeSchema.parse({ executor: "claude", start: "yes" })).toThrowError(/start/);
+  });
+});

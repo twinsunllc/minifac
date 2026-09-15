@@ -6,10 +6,11 @@ import {
   loadProjectLayout,
 } from "../library/library.js";
 import { inlineStepIntoNode } from "../step/inline.js";
-import { findUncoveredCycles } from "./cycles.js";
+import { findEntryCycles, findUncoveredCycles } from "./cycles.js";
 import { resolveExtendsChain } from "./extends.js";
 import { FactoryLoadError } from "./loader-error.js";
 import type { Factory, FactoryNode } from "./schema.js";
+import { startNodeIds } from "./start-nodes.js";
 
 export { FactoryLoadError };
 
@@ -203,17 +204,15 @@ function validatePostSchema(factory: Factory, sourcePath: string): void {
     }
   }
 
-  // Start nodes are nodes with no `on_success` inbound edges. `on_failure`
-  // edges are recovery flow and don't disqualify a node from being an entry
-  // point for the forward flow. See specs/graph-runner/spec.md.
-  const onSuccessInbound = new Set<string>();
-  for (const edge of factory.edges) {
-    if (edge.when === "on_success") onSuccessInbound.add(edge.to);
-  }
-  const startNodes = [...nodeIds].filter((id) => !onSuccessInbound.has(id));
-  if (startNodes.length === 0) {
+  // Start nodes are nodes with no inbound edge from another node (any
+  // `when`), plus any node declaring `start: true`. See `start-nodes.ts`
+  // and specs/graph-runner/spec.md ("Start nodes").
+  if (startNodeIds(factory).length === 0) {
+    const cycles = findEntryCycles(factory)
+      .map((c) => c.nodes.join(" → "))
+      .join("; ");
     throw new FactoryLoadError(
-      "Factory has no start node (every node is the target of an `on_success` edge)",
+      `Factory has no start node: every node has an inbound edge. The graph is entered only through the cycle ${cycles}. Mark the entry node with \`start: true\`, or remove the edge into it.`,
       sourcePath,
     );
   }

@@ -155,6 +155,9 @@ export async function inlineStepIntoNode(args: InlineArgs): Promise<InlinedNode>
   // body has no opinion on — so it rides through inlining untouched, on the
   // same independence basis as `outputs` / `output_nudge_budget`.
   if (node.resume !== undefined) out.resume = node.resume;
+  // `start:` is graph topology (which nodes the run begins at), never a
+  // property of the step body. Same independence basis.
+  if (node.start !== undefined) out.start = node.start;
 
   // Attach the inputs map as a non-enumerable property so it doesn't
   // appear in serialized factory snapshots but is reachable at runtime.

@@ -374,4 +374,35 @@ edges: []
     expect(factory.nodes.verify?.with).toEqual(plain.nodes.verify?.with);
     expect(plain.nodes.verify?.resume).toBeUndefined();
   });
+
+  it("preserves `start:` through step inlining", async () => {
+    const repo = await makeRepo();
+    await writeAt(repo, "examples/steps/myfac-propose.yaml", PROPOSE_STEP);
+    await writeAt(repo, "examples/steps/myfac-verify.yaml", VERIFY_STEP);
+    const fac = await writeAt(
+      repo,
+      "fac.yaml",
+      `name: f
+nodes:
+  propose:
+    uses: minifac:myfac-propose
+    inputs: { change: foo }
+    start: true
+    max_iterations: 2
+  verify:
+    uses: minifac:myfac-verify
+    inputs: { change: foo }
+    terminal: true
+edges:
+  - from: propose
+    to: verify
+  - from: verify
+    to: propose
+    when: on_failure
+`,
+    );
+    const { factory } = await loadFactory(fac, repo);
+    expect(factory.nodes.propose?.start).toBe(true);
+    expect(factory.nodes.verify?.start).toBeUndefined();
+  });
 });
