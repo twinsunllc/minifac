@@ -273,6 +273,40 @@ with:
     expect((out.with as Record<string, unknown>).prompt).toBe("Change: {{ brief.change }}");
   });
 
+  it("leaves priorResults tokens supplied through inputs for dispatch (#33)", async () => {
+    const repo = await makeRepo();
+    await writeStep(
+      repo,
+      "relay",
+      `name: relay
+version: "1"
+executor: claude
+inputs:
+  findings: { type: string, required: true }
+  path: { type: string, required: true }
+with:
+  prompt: "Read {{ inputs.path }}. Findings: {{ inputs.findings }}. Also {{ priorResults.other.outputs.notes }}."
+`,
+    );
+    const out = await inlineStepIntoNode({
+      factoryPath: FACTORY,
+      nodeId: "n1",
+      node: {
+        uses: "minifac:relay",
+        inputs: {
+          findings: "{{ priorResults.writer.outputs.findings:read }}",
+          path: "{{ priorResults.writer.outputs.findings }}",
+        },
+      } as never,
+      callerCwd: repo,
+    });
+    // Before the fix the second substitution pass resolved these against an
+    // empty prior-results map and erased them to "".
+    expect((out.with as Record<string, unknown>).prompt).toBe(
+      "Read {{ priorResults.writer.outputs.findings }}. Findings: {{ priorResults.writer.outputs.findings:read }}. Also {{ priorResults.other.outputs.notes }}.",
+    );
+  });
+
   it("surfaces missing step file as FactoryLoadError", async () => {
     const repo = await makeRepo();
     await expect(
