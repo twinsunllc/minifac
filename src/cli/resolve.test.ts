@@ -135,6 +135,25 @@ describe("resolveRunArg", () => {
     }
   });
 
+  it("in a factory repo, a bare name resolves to root workflows/<name>.yaml (ADR 0039)", async () => {
+    const repo = await makeRepo();
+    await writeAt(repo, "factory.yaml", "name: c\n");
+    const workflow = await writeAt(repo, "workflows/impl.yaml", FACTORY_BODY);
+    await writeAt(repo, "inputs/foo.md", briefFor("impl"));
+    const r = await resolveRunArg("foo", repo);
+    expect(r.kind).toBe("brief");
+    if (r.kind === "brief") expect(r.factoryPath).toBe(workflow);
+    // .minifac/factories still wins over workflows/.
+    const local = await writeAt(repo, ".minifac/factories/impl.yaml", FACTORY_BODY);
+    expect(await resolveFactoryByName("impl", repo)).toBe(local);
+  });
+
+  it("root workflows/ is not a lookup location without factory.yaml", async () => {
+    const repo = await makeRepo();
+    await writeAt(repo, "workflows/impl.yaml", FACTORY_BODY);
+    await expect(resolveFactoryByName("impl", repo)).rejects.toThrowError(RunArgResolutionError);
+  });
+
   it("missing-everywhere bare name returns a RunArgResolutionError naming both factory paths tried", async () => {
     const repo = await makeRepo();
     try {

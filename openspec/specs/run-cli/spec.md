@@ -41,12 +41,21 @@ forms:
   tree, the two paths collapse to the same file. The local
   `.minifac/factories/<name>.yaml` SHALL NOT be consulted for
   `minifac:<name>` references.
-- `<name>` (no prefix) — try `<cwd>/.minifac/factories/<name>.yaml`
-  first; if that path does not exist, fall back to
-  `<cwd>/examples/<name>.yaml`. A bare `<name>` lookup SHALL NOT
-  consult the install root. A `<name>` lookup succeeds at whichever
-  candidate exists; if none exists, factory-by-name resolution
-  fails.
+- `<name>` (no prefix) — try, in order:
+    1. `<cwd>/.minifac/factories/<name>.yaml`;
+    2. `<cwd>/workflows/<name>.yaml`, only when `<cwd>` is a factory
+       repo (its root carries `factory.yaml`, per the
+       `library-resolution` capability);
+    3. `<library-root>/workflows/<name>.yaml`, only when the project
+       declares a library (per the `library-resolution` capability),
+       where `<library-root>` is the library's tree at the pinned sha;
+    4. `<cwd>/examples/<name>.yaml`.
+  A bare `<name>` lookup SHALL NOT consult the install root. A
+  `<name>` lookup succeeds at whichever candidate exists first; if
+  none exists, factory-by-name resolution fails. Reading the
+  project's library for step 3 fetches and verifies the pin, so a
+  branch, abbreviated, or stale pin SHALL fail resolution with the
+  pin error rather than reading as a missing factory.
 
 A brief whose `factory:` field uses the `minifac:` prefix SHALL
 resolve via the install-root-first lookup even when an equally-named
@@ -61,8 +70,9 @@ factory-by-name resolution above. A brief whose `factory:` field
 does not resolve to any candidate path SHALL exit `1` with an error
 naming the missing factory and, for the `minifac:<name>` form, both
 paths tried (install-root and source-tree); for the bare `<name>`
-form, both paths tried (local `.minifac/factories/` and source-tree
-`examples/`).
+form, every path tried in order (local `.minifac/factories/`, the
+factory repo's `workflows/` and the library's `workflows/` when those
+layers apply, and source-tree `examples/`).
 
 **`--factory <name>` override.** When `--factory <name>` is
 supplied (steps 1 or 2 — i.e. a brief-driven invocation), the flag
@@ -419,6 +429,34 @@ which factory produced which branch.
 - **THEN** the CLI exits `1` with a stderr message naming the
   conflict (`--factory` is only meaningful with a brief); no
   worktree is created, no lock is claimed
+
+#### Scenario: Factory repo resolves a bare name from root workflows/
+
+- **WHEN** `<cwd>` carries `factory.yaml` and `workflows/impl.yaml`,
+  there is no `.minifac/factories/impl.yaml`, and a brief declares
+  `factory: impl`
+- **THEN** the CLI resolves the factory to `<cwd>/workflows/impl.yaml`
+
+#### Scenario: Root workflows/ is ignored outside a factory repo
+
+- **WHEN** `<cwd>` has `workflows/impl.yaml` but no `factory.yaml`, and
+  nothing else named `impl` resolves
+- **THEN** factory-by-name resolution of `impl` fails
+
+#### Scenario: A bare name falls back to the library's workflow
+
+- **WHEN** the project pins a library whose tree has
+  `workflows/standard.yaml`, and no local candidate named `standard`
+  exists
+- **THEN** the CLI resolves `standard` to the library's
+  `workflows/standard.yaml` at the pinned sha
+
+#### Scenario: A bad pin is reported as a pin error
+
+- **WHEN** the project's `library.ref` is a branch name and the user
+  invokes `minifac run standard`
+- **THEN** the CLI exits `1` with an error naming the non-immutable
+  ref, not a "could not resolve" error
 
 ### Requirement: Event output format
 

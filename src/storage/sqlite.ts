@@ -79,8 +79,9 @@ export class SqliteRunStore implements RunStore {
     const stmt = this.db.prepare(
       `INSERT INTO runs
         (id, factory_path, factory_name, brief_path, change, base_branch,
-         worktree_path, branch_name, status, reason, proximate_node_id, started_at, ended_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'running', NULL, NULL, ?, NULL)`,
+         worktree_path, branch_name, library_repo, library_ref, library_sha,
+         status, reason, proximate_node_id, started_at, ended_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', NULL, NULL, ?, NULL)`,
     );
     stmt.run(
       input.id,
@@ -91,6 +92,9 @@ export class SqliteRunStore implements RunStore {
       input.baseBranch ?? null,
       input.worktreePath ?? null,
       input.branchName ?? null,
+      input.library?.repo ?? null,
+      input.library?.ref ?? null,
+      input.library?.sha ?? null,
       input.startedAt,
     );
   }
@@ -324,6 +328,9 @@ interface RunRow {
   base_branch: string | null;
   worktree_path: string | null;
   branch_name: string | null;
+  library_repo?: string | null;
+  library_ref?: string | null;
+  library_sha?: string | null;
   status: RunStatus;
   reason: string | null;
   proximate_node_id: string | null;
@@ -351,6 +358,10 @@ function rowToStoredRun(r: RunRow): StoredRun {
     baseBranch: r.base_branch,
     worktreePath: r.worktree_path,
     branchName: r.branch_name ?? null,
+    library:
+      r.library_repo && r.library_ref && r.library_sha
+        ? { repo: r.library_repo, ref: r.library_ref, sha: r.library_sha }
+        : null,
     status: r.status,
     reason: r.reason,
     proximateNodeId: r.proximate_node_id,

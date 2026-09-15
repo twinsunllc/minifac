@@ -19,17 +19,19 @@ resolve, and the direction we expect the resolver to grow.
 
 ## Grammar (current)
 
-Three reference forms are recognized:
+Four reference forms are recognized:
 
 | Form | Example | Status |
 |---|---|---|
 | `minifac:<name>[@<version>]` | `minifac:openspec-propose` | Implemented — bundled built-ins |
-| `<name>[@<version>]` | `lint-check` | Implemented — user-local |
+| `library:<name>[@<version>]` | `library:standard_implementation` | Implemented — the project's pinned library ([[0039-Library-Namespace]]) |
+| `<name>[@<version>]` | `lint-check` | Implemented — local, then library, then built-in |
 | `<scope>/<name>[@<version>]` | `myorg/lint-check` | **Reserved.** Parses; rejected at resolution time pending a future remote-resolution brief |
 
 The `@<version>` pin is parsed and validated but not yet
 used for resolution. It's present so future versions can pin
-without breaking the grammar.
+without breaking the grammar. The library's version is pinned
+once, per project, by `library.ref` — not per reference.
 
 ## Resolution (current)
 
@@ -42,17 +44,32 @@ For `minifac:<name>` references, the resolver chain is:
    when minifac is run from its own source tree
    (`callerCwd === <package-root>` in that case anyway).
 
-For bare `<name>` references:
+The **local layer** is `<callerCwd>/.minifac/steps/` (steps) or
+`<callerCwd>/.minifac/factories/` (workflows), plus — in a
+**factory repo**, a project whose root carries `factory.yaml` —
+root `steps/` and `workflows/`.
 
-1. **User-local** — `<callerCwd>/.minifac/steps/<name>.yaml`
-   or `<callerCwd>/.minifac/factories/<name>.yaml`.
-2. **Built-in fallback** — same as `minifac:<name>` above.
+The **library layer** is the project's pinned library, declared
+as `library: { repo, ref }` in `factory.yaml` or
+`.minifac/config.yaml`, fetched into
+`$MINIFAC_HOME/cache/library/` and read at the pinned sha
+(`steps/<name>.yaml`, `workflows/<name>.yaml`).
+
+| Reference | Order |
+|---|---|
+| `uses: <name>` | local → library → built-in |
+| `uses: library:<name>` | local → library (a local step replaces the library's wholly) |
+| `extends: <name>` | local → library |
+| `extends: library:<name>` | library only (so a workflow can extend the library workflow of the same name) |
+| factory by name | local → library → `<callerCwd>/examples/` |
 
 For `<scope>/<name>` references: rejected with an error
 pointing at this document.
 
-See [[0030-Bundle-Builtins]] for the binding decision on
-built-in shipping and resolver behavior.
+See [[0030-Bundle-Builtins]] for built-in shipping and
+[[0039-Library-Namespace]] for the library layer: the pin rule
+(tag or full sha; branches and abbreviated shas refused), the
+cache, offline behaviour, and stale-pin failure.
 
 ## Direction (where we expect this to go)
 
@@ -60,6 +77,11 @@ The current resolver chain handles bundled + user-local. The
 likely growth direction adds two more layers:
 
 ### Layer 3: Remote, cached
+
+> **Status:** implemented for one pinned library per project by
+> [[0039-Library-Namespace]] — a `library:` namespace rather than
+> per-reference URLs, and branch refs are refused rather than
+> warned. The per-reference form below remains a direction.
 
 Once people start wanting to share workflows across repos
 (especially within an org), the resolver gains a

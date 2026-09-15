@@ -1,5 +1,6 @@
 import { FactoryLoadError } from "../factory/loader-error.js";
 import type { FactoryNode } from "../factory/schema.js";
+import type { ProjectLayout } from "../library/library.js";
 import { substituteInputs } from "../runner/substitute.js";
 import { StepLoadError } from "./loader-error.js";
 import { loadStep } from "./loader.js";
@@ -13,6 +14,8 @@ export interface InlineArgs {
   nodeId: string;
   node: FactoryNode & { uses?: unknown; inputs?: unknown };
   callerCwd: string;
+  /** The project's local/library layers (ADR 0039). Defaults to none. */
+  layout?: ProjectLayout;
 }
 
 /**
@@ -35,7 +38,7 @@ export function getInlinedInputs(node: object): Record<string, unknown> | undefi
 }
 
 export async function inlineStepIntoNode(args: InlineArgs): Promise<InlinedNode> {
-  const { factoryPath, nodeId, node, callerCwd } = args;
+  const { factoryPath, nodeId, node, callerCwd, layout } = args;
   const usesRaw = node.uses;
   if (typeof usesRaw !== "string" || usesRaw.length === 0) {
     throw new FactoryLoadError(`Node "${nodeId}" has invalid \`uses:\` value`, factoryPath);
@@ -43,7 +46,7 @@ export async function inlineStepIntoNode(args: InlineArgs): Promise<InlinedNode>
 
   let stepPath: string;
   try {
-    stepPath = await resolveStepRef(usesRaw, callerCwd);
+    stepPath = await resolveStepRef(usesRaw, callerCwd, layout);
   } catch (err) {
     if (err instanceof StepLoadError) {
       throw new FactoryLoadError(`Node "${nodeId}": ${err.message}`, factoryPath);

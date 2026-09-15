@@ -155,6 +155,7 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
           baseBranch: brief?.frontmatter.base_branch ?? null,
           worktreePath: runCwd ?? null,
           branchName: options.branchName ?? null,
+          library: loaded.library ?? null,
           startedAt: runStart,
         });
       } catch (err) {

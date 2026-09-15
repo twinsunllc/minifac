@@ -133,6 +133,41 @@ schema is intentionally narrow (nodes + edges + a few knobs), and
 per-repo customization composes via `extends:` (override one node)
 or per-node `uses:` references to reusable steps.
 
+## Sharing workflows: the `library:` namespace
+
+A project can pin one **library** — a git repo with `steps/` and
+`workflows/` at its root — and use its contents by name:
+
+```yaml
+# factory.yaml (or .minifac/config.yaml)
+library:
+  repo: acme/workflows     # owner/name, a git URL, or an absolute path
+  ref: v0.4.0              # a tag or a full 40-character commit sha
+
+# workflows/standard_implementation.yaml
+extends: library:standard_implementation
+```
+
+- `extends: library:<name>` reads the library's `workflows/<name>.yaml`
+  at the pin, so a local workflow can extend the library workflow of
+  the same name. `uses: library:<name>` reads its `steps/<name>.yaml`.
+  A bare `uses: <name>` tries local, then the library, then built-ins.
+- **Local wins, wholly.** A `.minifac/steps/review.yaml` (or, in a
+  repo with `factory.yaml`, a root `steps/review.yaml`) replaces the
+  library's `review` step in full; no fields are merged. A workflow
+  that `extends:` a library workflow overrides whole nodes.
+- **The pin must be immutable.** A branch name or an abbreviated sha
+  is refused at load, naming the ref. A tag resolves to its sha once;
+  if the tag later moves, the load fails. A pin that no longer exists
+  in the library fails naming the ref and the library's current head.
+- The library is fetched with your normal git credentials into
+  `~/.minifac/cache/library/`, one tree per resolved sha. A warm
+  cache works offline (with a warning); a cold cache with no network
+  fails. Each run records the library repo, ref, and sha in
+  `runs.db` (`minifac runs --json`).
+
+See [`docs/decisions/0039-Library-Namespace.md`](docs/decisions/0039-Library-Namespace.md).
+
 ## Install
 
 ```bash

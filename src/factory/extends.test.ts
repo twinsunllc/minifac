@@ -122,7 +122,7 @@ describe("extends chain resolution", () => {
       `extends: ../other/foo.yaml\n${VALID_BASE}`,
     );
     await expect(loadFactory(file, repo)).rejects.toThrowError(
-      /only `minifac:<name>` and bare `<name>` forms/,
+      /only `minifac:<name>`, `library:<name>`, and bare `<name>` forms/,
     );
   });
 

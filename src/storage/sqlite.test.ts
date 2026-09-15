@@ -39,7 +39,7 @@ describe("SqliteRunStore", () => {
     }
   });
 
-  it("creates the DB file lazily and applies migrations through v4", async () => {
+  it("creates the DB file lazily and applies migrations through v5", async () => {
     const dbPath = path.join(dir, "nested", "runs.db");
     store = SqliteRunStore.open(dbPath);
     // Verify by opening a parallel read-only handle.
@@ -52,7 +52,7 @@ describe("SqliteRunStore", () => {
       const ver = inspector
         .prepare("SELECT COALESCE(MAX(version), 0) AS v FROM schema_version")
         .get() as { v: number };
-      expect(ver.v).toBe(4);
+      expect(ver.v).toBe(5);
       const tables = inspector
         .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
         .all() as Array<{ name: string }>;
@@ -142,7 +142,7 @@ describe("SqliteRunStore", () => {
       const ver = inspector
         .prepare("SELECT COALESCE(MAX(version), 0) AS v FROM schema_version")
         .get() as { v: number };
-      expect(ver.v).toBe(4);
+      expect(ver.v).toBe(5);
       const cols = inspector.prepare("PRAGMA table_info(runs)").all() as Array<{ name: string }>;
       expect(cols.map((c) => c.name)).toContain("branch_name");
     } finally {
@@ -178,7 +178,7 @@ describe("SqliteRunStore", () => {
     expect(byId.get("without-branch")?.branchName).toBeNull();
   });
 
-  it("applies 0004 to a pre-existing v3 database without touching other tables", async () => {
+  it("applies 0004 (and later) to a pre-existing v3 database without touching other tables", async () => {
     const dbPath = path.join(dir, "v3.db");
     const seed = new DatabaseSync(dbPath);
     seed.exec("CREATE TABLE schema_version (version INTEGER PRIMARY KEY)");
@@ -230,7 +230,7 @@ describe("SqliteRunStore", () => {
       const ver = inspector
         .prepare("SELECT COALESCE(MAX(version), 0) AS v FROM schema_version")
         .get() as { v: number };
-      expect(ver.v).toBe(4);
+      expect(ver.v).toBe(5);
       const cols = inspector.prepare("PRAGMA table_info(node_executions)").all() as Array<{
         name: string;
       }>;
@@ -272,6 +272,72 @@ describe("SqliteRunStore", () => {
       const byNode = new Map(rows.map((r) => [r.node_id, r.session_id]));
       expect(byNode.get("plan")).toBe("abc-123");
       expect(byNode.get("skipped")).toBeNull();
+    } finally {
+      inspector.close();
+    }
+  });
+
+  it("createRun round-trips the library pin; runs without one read back null", async () => {
+    const dbPath = path.join(dir, "lib.db");
+    store = SqliteRunStore.open(dbPath);
+    const pin = { repo: "acme/lib", ref: "v0.1.0", sha: "b".repeat(40) };
+    await store.createRun({
+      id: "with-lib",
+      factoryPath: "/p",
+      factoryName: "f",
+      library: pin,
+      startedAt: 1,
+    });
+    await store.createRun({ id: "no-lib", factoryPath: "/p", factoryName: "f", startedAt: 2 });
+    expect((await store.getRun("with-lib"))?.library).toEqual(pin);
+    expect((await store.getRun("no-lib"))?.library).toBeNull();
+    const byId = new Map((await store.listRuns()).map((r) => [r.id, r]));
+    expect(byId.get("with-lib")?.library).toEqual(pin);
+  });
+
+  it("applies 0005 to a pre-existing v4 database; old runs read back with no library", async () => {
+    const dbPath = path.join(dir, "v4.db");
+    const seed = new DatabaseSync(dbPath);
+    seed.exec("CREATE TABLE schema_version (version INTEGER PRIMARY KEY)");
+    seed.prepare("INSERT INTO schema_version (version) VALUES (?)").run(4);
+    seed.exec(`
+      CREATE TABLE runs (
+        id TEXT PRIMARY KEY,
+        factory_path TEXT NOT NULL,
+        factory_name TEXT NOT NULL,
+        brief_path TEXT,
+        change TEXT,
+        base_branch TEXT,
+        worktree_path TEXT,
+        status TEXT NOT NULL,
+        reason TEXT,
+        proximate_node_id TEXT,
+        started_at INTEGER NOT NULL,
+        ended_at INTEGER,
+        branch_name TEXT
+      );
+    `);
+    seed
+      .prepare(
+        "INSERT INTO runs (id, factory_path, factory_name, status, started_at) VALUES (?,?,?,?,?)",
+      )
+      .run("legacy-run", "/p/f.yaml", "f", "succeeded", 1);
+    seed.close();
+
+    store = SqliteRunStore.open(dbPath);
+    const row = await store.getRun("legacy-run");
+    expect(row?.factoryName).toBe("f");
+    expect(row?.library).toBeNull();
+    const inspector = new DatabaseSync(dbPath);
+    try {
+      const ver = inspector
+        .prepare("SELECT COALESCE(MAX(version), 0) AS v FROM schema_version")
+        .get() as { v: number };
+      expect(ver.v).toBe(5);
+      const cols = inspector.prepare("PRAGMA table_info(runs)").all() as Array<{ name: string }>;
+      expect(cols.map((c) => c.name)).toEqual(
+        expect.arrayContaining(["library_repo", "library_ref", "library_sha"]),
+      );
     } finally {
       inspector.close();
     }

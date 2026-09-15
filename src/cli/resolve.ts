@@ -2,6 +2,7 @@ import { stat } from "node:fs/promises";
 import path from "node:path";
 import { type Brief, BriefLoadError, loadBrief } from "../brief/loader.js";
 import { BriefCycleError, computeBriefState } from "../brief/state.js";
+import { LibraryError, loadProjectLayout } from "../library/library.js";
 import { installRoot } from "../packaging/install-root.js";
 import type { RunStore } from "../storage/run-store.js";
 
@@ -30,6 +31,25 @@ function isPathLike(arg: string): boolean {
 }
 
 /**
+ * The ordered candidate paths for a bare factory name (ADR 0039):
+ * `.minifac/factories/`, then — in a factory repo — root `workflows/`, then
+ * the pinned library's `workflows/`, then `examples/`. Reading the layout
+ * fetches and verifies a declared library, so a bad pin throws
+ * `LibraryError` here rather than reading as a missing factory.
+ */
+async function bareFactoryCandidates(name: string, cwd: string): Promise<string[]> {
+  const layout = await loadProjectLayout(cwd);
+  const file = `${name}.yaml`;
+  const candidates = [path.resolve(cwd, ".minifac", "factories", file)];
+  if (layout.factoryRepo) candidates.push(path.resolve(cwd, "workflows", file));
+  if (layout.library !== undefined) {
+    candidates.push(path.resolve(layout.library.root, "workflows", file));
+  }
+  candidates.push(path.resolve(cwd, "examples", file));
+  return candidates;
+}
+
+/**
  * Resolve a factory reference to an absolute path.
  *
  * Two forms are accepted:
@@ -37,9 +57,11 @@ function isPathLike(arg: string): boolean {
  *   - `minifac:<name>` — built-in factory; resolved against
  *     `<install-root>/examples/<name>.yaml` first, then
  *     `<cwd>/examples/<name>.yaml`. The local lookup is skipped.
- *   - `<name>` (no prefix) — try `<cwd>/.minifac/factories/<name>.yaml`
- *     first, then fall back to `<cwd>/examples/<name>.yaml`. The install
- *     root is NOT consulted for bare names.
+ *   - `<name>` (no prefix) — `<cwd>/.minifac/factories/<name>.yaml`, then
+ *     `<cwd>/workflows/<name>.yaml` in a factory repo (a project with a
+ *     `factory.yaml`), then the pinned library's `workflows/<name>.yaml`,
+ *     then `<cwd>/examples/<name>.yaml`. The install root is NOT consulted
+ *     for bare names.
  *
  * On miss, a `RunArgResolutionError` is thrown naming every path tried.
  */
@@ -54,12 +76,12 @@ export async function resolveFactoryByName(ref: string, cwd: string): Promise<st
       `Could not resolve factory \`${ref}\` — tried ${installCandidate}, then ${localCandidate}`,
     );
   }
-  const localCandidate = path.resolve(cwd, ".minifac", "factories", `${ref}.yaml`);
-  if (await exists(localCandidate)) return localCandidate;
-  const exampleCandidate = path.resolve(cwd, "examples", `${ref}.yaml`);
-  if (await exists(exampleCandidate)) return exampleCandidate;
+  const candidates = await bareFactoryCandidates(ref, cwd);
+  for (const candidate of candidates) {
+    if (await exists(candidate)) return candidate;
+  }
   throw new RunArgResolutionError(
-    `Could not resolve factory \`${ref}\` — tried ${localCandidate} and ${exampleCandidate}`,
+    `Could not resolve factory \`${ref}\` — tried ${candidates.join(", then ")}`,
   );
 }
 
@@ -69,9 +91,8 @@ export async function resolveFactoryByName(ref: string, cwd: string): Promise<st
  * Precedence (per the run-cli spec):
  *   1. Path-like → brief path.
  *   2. inputs/<thing>.md exists → brief by name.
- *   3. Factory by name. Resolved via the two-step lookup described on
- *      `resolveFactoryByName`: `<thing>` is tried as
- *      `.minifac/factories/<thing>.yaml` first, then `examples/<thing>.yaml`.
+ *   3. Factory by name, via the bare-name lookup described on
+ *      `resolveFactoryByName`.
  *   4. Else → error.
  *
  * In cases 1 and 2, the brief's `factory:` field is further resolved using
@@ -103,14 +124,15 @@ export async function resolveRunArg(arg: string, cwd: string): Promise<ResolvedR
   try {
     const factoryPath = await resolveFactoryByName(arg, cwd);
     return { kind: "factory", factoryPath };
-  } catch {
-    // Fall through to the unified error.
+  } catch (err) {
+    // A bad library pin is not a missing factory; say what is wrong.
+    if (err instanceof LibraryError) throw new RunArgResolutionError(err.message);
+    // Otherwise fall through to the unified error.
   }
 
-  const localCandidate = path.resolve(cwd, ".minifac", "factories", `${arg}.yaml`);
-  const exampleCandidate = path.resolve(cwd, "examples", `${arg}.yaml`);
+  const factoryCandidates = await bareFactoryCandidates(arg, cwd);
   throw new RunArgResolutionError(
-    `Could not resolve \`${arg}\` as a brief path, brief name (${briefCandidate}), or factory name (${localCandidate}, ${exampleCandidate})`,
+    `Could not resolve \`${arg}\` as a brief path, brief name (${briefCandidate}), or factory name (${factoryCandidates.join(", ")})`,
   );
 }
 

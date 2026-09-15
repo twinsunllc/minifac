@@ -59,6 +59,7 @@ class FakeStore implements RunStore {
       baseBranch: input.baseBranch ?? null,
       worktreePath: input.worktreePath ?? null,
       branchName: input.branchName ?? null,
+      library: input.library ?? null,
       status: "running",
       reason: null,
       proximateNodeId: null,
@@ -900,6 +901,21 @@ describe("runFactory", () => {
       expect(r?.change).toBe("mychange");
       expect(r?.briefPath).toBe("/inputs/mychange.md");
       expect(r?.baseBranch).toBe("main");
+    });
+
+    it("records the library pin the factory was loaded against (ADR 0039)", async () => {
+      const store = new FakeStore();
+      const { factory, reg } = singleSuccess();
+      const pin = { repo: "acme/lib", ref: "v1.0.0", sha: "a".repeat(40) };
+      await runFactory({ ...wrap(factory), library: pin }, { registry: reg, store, runId: "r1" });
+      expect(store.runs.get("r1")?.library).toEqual(pin);
+    });
+
+    it("records no library when the factory loaded without one", async () => {
+      const store = new FakeStore();
+      const { factory, reg } = singleSuccess();
+      await runFactory(wrap(factory), { registry: reg, store, runId: "r1" });
+      expect(store.runs.get("r1")?.library).toBeNull();
     });
 
     it("brief-less run leaves change/briefPath null", async () => {
