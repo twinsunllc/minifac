@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Declared start nodes** (#36, #50,
+  [ADR 0040](docs/decisions/0040-Declared-Start-Nodes.md)). A start node
+  is a node with no inbound edge from another node, of any kind, or one
+  declaring the new `start: true`. A node reachable only through
+  `on_failure` edges therefore no longer auto-starts, which is what makes
+  an escalation / wait / re-poll node possible. Self-loops do not count
+  as inbound. A graph with no start node is a load error naming the entry
+  cycle and both fixes. **Breaking for one shape:** a cycle whose entry
+  node has a back-edge into it now needs `start: true` on that node.
+- **Failed-node outputs stay addressable** (#38, #51,
+  [ADR 0041](docs/decisions/0041-Keep-Failed-Node-Outputs.md)). Declared
+  `outputs:` are indexed on every node that produced them, whatever its
+  status; status decides what is enforced, never what is kept. A failed
+  node's present-and-satisfied outputs are on `priorResults` for
+  downstream templates, a missing required output on a failed node is an
+  `outputs_warning` event instead of a dropped index, and two new tokens,
+  `{{ priorResults.<id>.status }}` and `{{ priorResults.<id>.reason }}`,
+  let a step branch on how a node ended. Succeeded nodes behave as
+  before. Edge payloads (`carries:`) were considered and deferred.
 - **Library namespace with pinned fetch-at-ref resolution** (#44, #47,
   [ADR 0039](docs/decisions/0039-Library-Namespace.md)). A project pins
   one library with `library: { repo, ref }` in `factory.yaml` or
@@ -37,6 +56,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The per-run outputs MCP socket now binds under a short per-run
+  directory in `os.tmpdir()` instead of beneath `MINIFAC_HOME`, so a
+  deep home no longer exceeds the platform `sun_path` limit
+  (104 bytes on macOS/BSD, 108 elsewhere). The path is length-checked
+  before anything is created, and a failure to start the server is now
+  reported on stderr, as a stream event, and in the run log, naming that
+  the `mcp__minifac__report_*` tools will be absent for the run (#35,
+  #49). Set `TMPDIR` to a shorter directory if the guard trips.
 - A `{{ priorResults.* }}` token passed through a `uses:` node's
   `inputs:` was erased to `""` at load time; load-time substitution now
   resolves `inputs.*` only and leaves other namespaces for dispatch
