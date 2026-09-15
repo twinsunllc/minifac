@@ -104,7 +104,8 @@ async function makeLibrary(root: string): Promise<Library> {
 async function makeConsumer(root: string, repo: string, ref: string): Promise<string> {
   const dir = path.join(root, "consumer");
   await mkdir(dir, { recursive: true });
-  await writeAt(dir, "factory.yaml", `name: c\nlibrary:\n  repo: ${repo}\n  ref: ${ref}\n`);
+  // Quoted, so an all-digit sha prefix stays a string (YAML would read it as a number).
+  await writeAt(dir, "factory.yaml", `name: c\nlibrary:\n  repo: ${repo}\n  ref: "${ref}"\n`);
   return dir;
 }
 
@@ -159,10 +160,23 @@ describe("library pin validation", () => {
   it.each(["HEAD", "main~1", "refs/tags/v0.1.0", "-v1"])(
     "refuses `%s` before touching the remote",
     async (ref) => {
-      const consumer = await makeConsumer(root, path.join(root, "no-such-remote.git"), `"${ref}"`);
+      const consumer = await makeConsumer(root, path.join(root, "no-such-remote.git"), ref);
       await expect(loadProjectLayout(consumer)).rejects.toThrow(/is not an immutable pin/);
     },
   );
+
+  it("refuses an unquoted all-digit ref (YAML number) as an abbreviated sha", async () => {
+    const dir = path.join(root, "numeric");
+    await mkdir(dir, { recursive: true });
+    await writeAt(
+      dir,
+      "factory.yaml",
+      `name: c\nlibrary:\n  repo: ${path.join(root, "no-such-remote.git")}\n  ref: 2107410\n`,
+    );
+    await expect(loadProjectLayout(dir)).rejects.toThrow(
+      /`library\.ref: 2107410`.*abbreviated commit sha.*not an immutable pin/s,
+    );
+  });
 
   it("refuses a library declared in both factory.yaml and .minifac/config.yaml", async () => {
     const lib = await makeLibrary(root);

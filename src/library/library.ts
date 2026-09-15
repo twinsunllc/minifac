@@ -122,6 +122,14 @@ function parseDeclaration(value: unknown, file: string): LibraryDeclaration {
   if (typeof repo !== "string" || repo.length === 0) {
     throw new LibraryError(`\`library.repo\` in ${file} must be a non-empty string`, file);
   }
+  if (typeof ref === "number") {
+    // YAML reads an all-digit scalar (`ref: 2107410`) as a number. That is an
+    // abbreviated sha in every realistic case; say so, and how to quote a tag.
+    throw new LibraryError(
+      `\`library.ref: ${ref}\` in ${file} was read as a number, so it is either an abbreviated commit sha (an abbreviated sha is not an immutable pin; use the full 40-character sha) or an unquoted numeric tag (quote it: ref: "${ref}")`,
+      file,
+    );
+  }
   if (typeof ref !== "string" || ref.length === 0) {
     throw new LibraryError(
       `\`library.ref\` in ${file} must be a tag or a full 40-character commit sha`,
