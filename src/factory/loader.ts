@@ -1,4 +1,10 @@
 import path from "node:path";
+import {
+  LibraryError,
+  type LibraryPin,
+  type ProjectLayout,
+  loadProjectLayout,
+} from "../library/library.js";
 import { inlineStepIntoNode } from "../step/inline.js";
 import { findUncoveredCycles } from "./cycles.js";
 import { resolveExtendsChain } from "./extends.js";
@@ -11,6 +17,12 @@ export interface LoadedFactory {
   factory: Factory;
   sourcePath: string;
   sourceDir: string;
+  /**
+   * The project's pinned library, resolved to a sha, when the project
+   * declares one. Recorded on the run so "which workflow ran" is answerable
+   * after the fact (ADR 0039).
+   */
+  library?: LibraryPin;
 }
 
 /**
@@ -22,26 +34,41 @@ export interface LoadedFactory {
  *   3. Inline step references on every node that declared `uses:`.
  *   4. Run post-schema validation (cycles, terminal node, edge endpoints).
  *
- * `callerCwd` is used both for `extends:` lookup and for `uses:` step
- * lookup (built-in: `<callerCwd>/examples/steps/<name>.yaml`;
- * local: `<callerCwd>/.minifac/steps/<name>.yaml`).
+ * `callerCwd` is the project root. It is used for `extends:` and `uses:`
+ * lookup (local: `<callerCwd>/.minifac/`, plus root `steps/` / `workflows/`
+ * in a factory repo; built-in: `<callerCwd>/examples/`), and it is where
+ * the project's `library:` pin is read from (`.minifac/config.yaml` or
+ * `factory.yaml`). A declared library is fetched and verified before
+ * anything else resolves, so a branch or stale pin fails the load.
  */
 export async function loadFactory(
   sourcePath: string,
   callerCwd: string = process.cwd(),
 ): Promise<LoadedFactory> {
   const absolute = path.resolve(sourcePath);
-  const resolved = await resolveExtendsChain(absolute, callerCwd);
+  let layout: ProjectLayout;
+  try {
+    layout = await loadProjectLayout(callerCwd);
+  } catch (err) {
+    if (err instanceof LibraryError) throw new FactoryLoadError(err.message, absolute);
+    throw err;
+  }
+  const resolved = await resolveExtendsChain(absolute, callerCwd, layout);
 
   validateNodeShape(resolved.factory, absolute);
-  await inlineSteps(resolved.factory, absolute, callerCwd);
+  await inlineSteps(resolved.factory, absolute, callerCwd, layout);
   validatePostSchema(resolved.factory, absolute);
 
-  return {
+  const loaded: LoadedFactory = {
     factory: resolved.factory,
     sourcePath: absolute,
     sourceDir: path.dirname(absolute),
   };
+  if (layout.library !== undefined) {
+    const { repo, ref, sha } = layout.library;
+    loaded.library = { repo, ref, sha };
+  }
+  return loaded;
 }
 
 /**
@@ -91,6 +118,7 @@ async function inlineSteps(
   factory: Factory,
   factoryPath: string,
   callerCwd: string,
+  layout: ProjectLayout,
 ): Promise<void> {
   for (const [nodeId, node] of Object.entries(factory.nodes)) {
     const n = node as FactoryNode & { uses?: unknown; inputs?: unknown };
@@ -100,6 +128,7 @@ async function inlineSteps(
       nodeId,
       node: n,
       callerCwd,
+      layout,
     });
     factory.nodes[nodeId] = inlined;
   }

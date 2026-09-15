@@ -2,6 +2,7 @@ import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { parseDocument } from "yaml";
 import { ZodError } from "zod";
+import { type ProjectLayout, describeLibrary } from "../library/library.js";
 import { installRoot } from "../packaging/install-root.js";
 import { FactoryLoadError } from "./loader-error.js";
 import { type Factory, type FactoryLayer, FactoryLayerSchema, FactorySchema } from "./schema.js";
@@ -26,60 +27,82 @@ function isPathLike(ref: string): boolean {
   );
 }
 
-interface ExtendsCandidates {
-  primary: string;
-  fallback?: string;
-}
-
 function extendsCandidates(
   ref: string,
   callerCwd: string,
   declaringFile: string,
-): ExtendsCandidates {
-  if (ref.startsWith("minifac:")) {
-    const name = ref.slice("minifac:".length);
+  layout: ProjectLayout,
+): string[] {
+  for (const prefix of ["minifac:", "library:"] as const) {
+    if (!ref.startsWith(prefix)) continue;
+    const name = ref.slice(prefix.length);
     if (name.length === 0 || isPathLike(name)) {
       throw new FactoryLoadError(
-        `Invalid \`extends:\` value \`${ref}\`: built-in name must be a bare identifier.`,
+        `Invalid \`extends:\` value \`${ref}\`: the name after \`${prefix}\` must be a bare identifier.`,
         declaringFile,
       );
     }
-    return {
-      primary: path.resolve(installRoot(), "examples", `${name}.yaml`),
-      fallback: path.resolve(callerCwd, "examples", `${name}.yaml`),
-    };
+    if (prefix === "minifac:") {
+      return [
+        path.resolve(installRoot(), "examples", `${name}.yaml`),
+        path.resolve(callerCwd, "examples", `${name}.yaml`),
+      ];
+    }
+    // `library:<name>` reads the library only. A local workflow of the same
+    // name is usually the file doing the extending (F1), so letting the local
+    // layer shadow it would resolve the base to itself.
+    if (layout.library === undefined) {
+      throw new FactoryLoadError(
+        `\`extends: ${ref}\` uses the \`library:\` namespace, but this project declares no library (add \`library: { repo, ref }\` to .minifac/config.yaml or factory.yaml)`,
+        declaringFile,
+      );
+    }
+    return [path.resolve(layout.library.root, "workflows", `${name}.yaml`)];
   }
   if (isPathLike(ref)) {
     throw new FactoryLoadError(
-      `Invalid \`extends:\` value \`${ref}\`: only \`minifac:<name>\` and bare \`<name>\` forms are accepted; path-like references are not allowed.`,
+      `Invalid \`extends:\` value \`${ref}\`: only \`minifac:<name>\`, \`library:<name>\`, and bare \`<name>\` forms are accepted; path-like references are not allowed.`,
       declaringFile,
     );
   }
-  return { primary: path.resolve(callerCwd, ".minifac", "factories", `${ref}.yaml`) };
+  const candidates = [path.resolve(callerCwd, ".minifac", "factories", `${ref}.yaml`)];
+  if (layout.factoryRepo) candidates.push(path.resolve(callerCwd, "workflows", `${ref}.yaml`));
+  if (layout.library !== undefined) {
+    candidates.push(path.resolve(layout.library.root, "workflows", `${ref}.yaml`));
+  }
+  return candidates;
 }
 
 /**
  * Resolve an `extends:` value to an absolute path on disk.
  *
- * Precedence for `minifac:<name>`:
+ * `minifac:<name>`:
  *   1. `<install-root>/examples/<name>.yaml` (installed package)
  *   2. `<callerCwd>/examples/<name>.yaml`    (source-tree dogfood)
  *
- * Bare `<name>` references resolve only against
- * `<callerCwd>/.minifac/factories/<name>.yaml` — the install root is NOT
+ * `library:<name>`: `<library-root>/workflows/<name>.yaml` only.
+ *
+ * Bare `<name>`: `<callerCwd>/.minifac/factories/<name>.yaml`, then — in a
+ * factory repo — `<callerCwd>/workflows/<name>.yaml`, then the library's
+ * `workflows/<name>.yaml` when one is pinned. The install root is NOT
  * consulted.
  */
 async function resolveExtendsRef(
   ref: string,
   callerCwd: string,
   declaringFile: string,
+  layout: ProjectLayout,
 ): Promise<string> {
-  const { primary, fallback } = extendsCandidates(ref, callerCwd, declaringFile);
-  if (await fileExists(primary)) return primary;
-  if (fallback !== undefined && (await fileExists(fallback))) return fallback;
-  const tried = fallback === undefined ? primary : `${primary}, then ${fallback}`;
+  const candidates = extendsCandidates(ref, callerCwd, declaringFile, layout);
+  for (const candidate of candidates) {
+    if (await fileExists(candidate)) return candidate;
+  }
+  const where =
+    ref.startsWith("library:") && layout.library !== undefined
+      ? ` — no workflow \`${ref.slice("library:".length)}\` in the library ${describeLibrary(layout.library)}`
+      : "";
   throw new FactoryLoadError(
-    `Could not resolve \`extends: ${ref}\` — tried ${tried}`,
+    `Could not resolve \`extends: ${ref}\`${where} — tried ${candidates.join(", then ")}`,
     declaringFile,
   );
 }
@@ -126,7 +149,11 @@ async function readAndParseLayer(absolutePath: string): Promise<FactoryLayer> {
  * in deepest-base-first order (entry layer last). Throws on cycles, missing
  * base files, and invalid `extends:` values.
  */
-async function walkExtendsChain(entryPath: string, callerCwd: string): Promise<ParsedLayer[]> {
+async function walkExtendsChain(
+  entryPath: string,
+  callerCwd: string,
+  layout: ProjectLayout,
+): Promise<ParsedLayer[]> {
   const layers: ParsedLayer[] = [];
   const visited = new Set<string>();
 
@@ -150,7 +177,7 @@ async function walkExtendsChain(entryPath: string, callerCwd: string): Promise<P
     }
 
     const declaringFile = layers[layers.length - 1]?.sourcePath ?? currentPath;
-    currentPath = await resolveExtendsRef(layer.extends, callerCwd, declaringFile);
+    currentPath = await resolveExtendsRef(layer.extends, callerCwd, declaringFile, layout);
   }
 
   // Reverse to deepest-base-first.
@@ -237,9 +264,10 @@ export interface ResolvedFactory {
 export async function resolveExtendsChain(
   entryPath: string,
   callerCwd: string,
+  layout: ProjectLayout = { factoryRepo: false },
 ): Promise<ResolvedFactory> {
   const absolute = path.resolve(entryPath);
-  const layers = await walkExtendsChain(absolute, callerCwd);
+  const layers = await walkExtendsChain(absolute, callerCwd, layout);
   const merged = mergeLayers(layers);
 
   let factory: Factory;

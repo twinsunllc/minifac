@@ -8,6 +8,7 @@
  */
 
 import type { NodeOutputIndex, NodeOutputType } from "../factory/schema.js";
+import type { LibraryPin } from "../library/library.js";
 
 // Re-export the canonical types so all storage consumers share the same shape.
 export type {
@@ -37,6 +38,9 @@ export interface CreateRunInput {
   baseBranch?: string | null;
   worktreePath?: string | null;
   branchName?: string | null;
+  /** The project's pinned library, resolved to a commit sha, when the
+   * factory loaded one (ADR 0039). Answers "which workflow ran". */
+  library?: LibraryPin | null;
   startedAt: number;
 }
 
@@ -94,6 +98,7 @@ export interface StoredRun {
   baseBranch: string | null;
   worktreePath: string | null;
   branchName: string | null;
+  library: LibraryPin | null;
   status: RunStatus;
   reason: string | null;
   proximateNodeId: string | null;

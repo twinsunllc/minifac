@@ -85,6 +85,12 @@ const SQL_0004 = `
 ALTER TABLE node_executions ADD COLUMN session_id TEXT;
 `;
 
+const SQL_0005 = `
+ALTER TABLE runs ADD COLUMN library_repo TEXT;
+ALTER TABLE runs ADD COLUMN library_ref TEXT;
+ALTER TABLE runs ADD COLUMN library_sha TEXT;
+`;
+
 export interface Migration {
   version: number;
   name: string;
@@ -96,6 +102,7 @@ export const MIGRATIONS: readonly Migration[] = Object.freeze([
   { version: 2, name: "add_branch_name", sql: SQL_0002 },
   { version: 3, name: "add_node_outputs", sql: SQL_0003 },
   { version: 4, name: "add_session_id", sql: SQL_0004 },
+  { version: 5, name: "add_run_library", sql: SQL_0005 },
 ]);
 
 export function highestMigration(): number {

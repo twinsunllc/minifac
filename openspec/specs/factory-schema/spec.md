@@ -289,10 +289,13 @@ The factory schema SHALL accept an optional top-level `extends:` field whose val
   Resolution uses the install-root-first / source-tree-fallback
   precedence defined in the "`extends:` chain resolution rules"
   requirement below.
-- `<local-name>` (no prefix) — a reference to another local custom
-  factory at `<callerCwd>/.minifac/factories/<local-name>.yaml`.
-  Local references MAY themselves declare an `extends:` field
-  (recursive extension).
+- `library:<name>` — a reference to a workflow in the project's
+  pinned library (per the `library-resolution` capability).
+- `<local-name>` (no prefix) — a reference to another custom factory,
+  resolved against the local layer and then the library per the
+  "`extends:` chain resolution rules" requirement below. Such
+  references MAY themselves declare an `extends:` field (recursive
+  extension).
 
 When the loader reads a factory file with `extends:` set, it SHALL
 resolve the chain into a single in-memory factory before running any
@@ -349,15 +352,29 @@ root:
   tree, the two paths collapse to the same file. If neither path
   exists, the loader SHALL throw `FactoryLoadError` whose message
   names the reference and both candidate absolute paths in order.
-- A `<name>` reference (no prefix) SHALL resolve to
-  `<callerCwd>/.minifac/factories/<name>.yaml`. If that path does
-  not exist, the loader SHALL throw `FactoryLoadError` naming both
-  the reference and the path tried. The install root SHALL NOT be
-  consulted for bare references.
+- A `library:<name>` reference SHALL resolve to
+  `<library-root>/workflows/<name>.yaml` only, where `<library-root>`
+  is the project's library tree at the pinned sha (per the
+  `library-resolution` capability). The local layer SHALL NOT be
+  consulted: a factory workflow extending the library workflow of
+  the same name would otherwise resolve its base to itself. When the
+  project declares no library, the loader SHALL throw
+  `FactoryLoadError` stating that the `library:` namespace needs a
+  `library:` declaration. When the library has no such workflow, the
+  loader SHALL throw `FactoryLoadError` naming the reference, the
+  library's repo, ref and sha, and the path tried.
+- A `<name>` reference (no prefix) SHALL try, in order:
+  `<callerCwd>/.minifac/factories/<name>.yaml`; then
+  `<callerCwd>/workflows/<name>.yaml` when `<callerCwd>` is a factory
+  repo (its root carries `factory.yaml`); then
+  `<library-root>/workflows/<name>.yaml` when the project declares a
+  library. The first existing file wins. If none exists, the loader
+  SHALL throw `FactoryLoadError` naming the reference and every path
+  tried. The install root SHALL NOT be consulted for bare references.
 - A reference whose value contains a path separator or extension
   (e.g. `extends: ../factories/foo.yaml`) SHALL be rejected with a
-  `FactoryLoadError` naming the offending value; only `minifac:<name>`
-  and bare `<name>` are valid forms in v0.
+  `FactoryLoadError` naming the offending value; only `minifac:<name>`,
+  `library:<name>`, and bare `<name>` are valid forms.
 
 The loader SHALL detect cycles in the `extends:` chain. If the same
 absolute factory path is visited twice while walking `extends:`, the
@@ -404,7 +421,7 @@ operator knows which file to edit.
   `<install-root>/examples/sdd.yaml` exists, and
   `<callerCwd>/.minifac/factories/sdd.yaml` does not exist
 - **THEN** the loader throws `FactoryLoadError` naming the reference
-  and only the local path tried; the install root is not consulted
+  and only the local paths tried; the install root is not consulted
 
 #### Scenario: Missing `minifac:<name>` is rejected at load time with both paths
 
@@ -446,8 +463,38 @@ operator knows which file to edit.
 - **WHEN** the loader reads a factory whose `extends:` field is
   `../other/foo.yaml` or `./foo`
 - **THEN** the loader throws `FactoryLoadError` naming the
-  offending value and explaining that only `minifac:<name>` and
-  bare `<name>` forms are accepted
+  offending value and explaining that only `minifac:<name>`,
+  `library:<name>`, and bare `<name>` forms are accepted
+
+#### Scenario: `library:<name>` resolves the library workflow of the same name
+
+- **WHEN** a factory repo's `workflows/standard.yaml` declares
+  `extends: library:standard`, and the project's pinned library has
+  `workflows/standard.yaml`
+- **THEN** the loader resolves the base to the library's
+  `workflows/standard.yaml` at the pinned sha, not to the declaring
+  file, and the resolved factory carries the library workflow's nodes
+
+#### Scenario: `library:<name>` the library lacks is a load error
+
+- **WHEN** a factory declares `extends: library:nope` and the pinned
+  library has no `workflows/nope.yaml`
+- **THEN** the loader throws `FactoryLoadError` naming `library:nope`
+  and the library's repo and ref
+
+#### Scenario: `library:<name>` without a declared library is a load error
+
+- **WHEN** a factory declares `extends: library:standard` and the
+  project declares no library
+- **THEN** the loader throws `FactoryLoadError` stating that the
+  project declares no library
+
+#### Scenario: Bare `<name>` falls through to a factory repo's workflows/
+
+- **WHEN** a factory repo declares `extends: base` in one workflow,
+  `<callerCwd>/.minifac/factories/base.yaml` does not exist, and
+  `<callerCwd>/workflows/base.yaml` does
+- **THEN** the loader resolves the base to `<callerCwd>/workflows/base.yaml`
 
 ### Requirement: Replace-at-node-level merge semantics
 

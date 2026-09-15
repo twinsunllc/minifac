@@ -57,6 +57,7 @@ export async function listAction(input: ListActionInput): Promise<number> {
       factoryName: r.factoryName,
       change: r.change,
       branchName: r.branchName,
+      library: r.library,
       status: r.status,
       startedAt: r.startedAt,
       endedAt: r.endedAt,
