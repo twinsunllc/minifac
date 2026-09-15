@@ -158,17 +158,50 @@ async function walkExtendsChain(entryPath: string, callerCwd: string): Promise<P
   return layers;
 }
 
+/**
+ * A derived layer's node id that the merged base lacks is either an
+ * addition or an override of a node the base does not have (a typo, or a
+ * node the base renamed). The two are told apart by wiring: a node the
+ * layer adds must be the endpoint of an edge the same layer declares. An
+ * unwired new node is never an addition — with no inbound `on_success` edge
+ * it would be inferred as a start node and dispatched when the run begins —
+ * so it is a load error naming the node and the base (ADR 0008, #34).
+ */
+function assertNoOrphanOverride(
+  layer: FactoryLayer,
+  sourcePath: string,
+  baseNodes: Record<string, unknown>,
+  baseSourcePath: string,
+): void {
+  if (layer.nodes === undefined) return;
+  const wired = new Set<string>();
+  for (const edge of layer.edges ?? []) {
+    wired.add(edge.from);
+    wired.add(edge.to);
+  }
+  for (const nodeId of Object.keys(layer.nodes)) {
+    if (Object.hasOwn(baseNodes, nodeId) || wired.has(nodeId)) continue;
+    const declared = Object.keys(baseNodes).join(", ") || "(none)";
+    throw new FactoryLoadError(
+      `Node "${nodeId}" overrides a node that base \`${layer.extends}\` (${baseSourcePath}) does not declare (base nodes: ${declared}). To add a new node instead, wire it with an edge in this layer's \`edges:\`.`,
+      sourcePath,
+    );
+  }
+}
+
 function mergeLayers(layers: ParsedLayer[]): unknown {
   // The deepest base provides the initial shape. Subsequent layers overlay.
   const acc: Record<string, unknown> = {};
 
-  for (const { layer } of layers) {
+  for (const [i, { layer, sourcePath }] of layers.entries()) {
     if (layer.name !== undefined) acc.name = layer.name;
     if (layer.description !== undefined) acc.description = layer.description;
     if (layer.brief !== undefined) acc.brief = layer.brief;
 
     if (layer.nodes !== undefined) {
       const baseNodes = (acc.nodes as Record<string, unknown> | undefined) ?? {};
+      const base = layers[i - 1];
+      if (base !== undefined) assertNoOrphanOverride(layer, sourcePath, baseNodes, base.sourcePath);
       acc.nodes = { ...baseNodes, ...layer.nodes };
     }
 

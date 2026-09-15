@@ -146,7 +146,7 @@ nodes:
     expect(loaded.factory.nodes.apply?.with?.prompt).toBe("overridden-apply");
   });
 
-  it("derived layer can add a new node", async () => {
+  it("derived layer can add a new node it wires with its own edges", async () => {
     const repo = await makeRepo();
     await writeAt(repo, "examples/base.yaml", VALID_BASE);
     const derived = await writeAt(
@@ -157,11 +157,95 @@ nodes:
   audit:
     executor: claude
     with: { prompt: new-audit }
+edges:
+  - { from: propose, to: audit }
+  - { from: audit, to: apply }
 `,
     );
     const loaded = await loadFactory(derived, repo);
     expect(loaded.factory.nodes.audit?.with?.prompt).toBe("new-audit");
     expect(loaded.factory.nodes.propose).toBeDefined();
+  });
+
+  it("override naming a node the base lacks is a load error (the `veriy` typo, #34)", async () => {
+    const repo = await makeRepo();
+    const base = await writeAt(
+      repo,
+      "examples/base.yaml",
+      `name: base
+nodes:
+  plan:
+    executor: claude
+  verify:
+    executor: claude
+    terminal: true
+edges:
+  - { from: plan, to: verify }
+`,
+    );
+    const derived = await writeAt(
+      repo,
+      ".minifac/factories/derived.yaml",
+      `extends: minifac:base
+nodes:
+  veriy:
+    executor: claude
+    terminal: true
+    with: { prompt: "npm test" }
+`,
+    );
+    const err = await loadFactory(derived, repo).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(FactoryLoadError);
+    const msg = (err as FactoryLoadError).message;
+    expect(msg).toContain('Node "veriy"');
+    expect(msg).toContain("minifac:base");
+    expect(msg).toContain(base);
+    expect(msg).toContain("base nodes: plan, verify");
+    expect((err as FactoryLoadError).sourcePath).toBe(derived);
+  });
+
+  it("a new node absent from the layer's own edges is still an orphan override", async () => {
+    const repo = await makeRepo();
+    await writeAt(repo, "examples/base.yaml", VALID_BASE);
+    const derived = await writeAt(
+      repo,
+      ".minifac/factories/derived.yaml",
+      `extends: minifac:base
+nodes:
+  audit:
+    executor: claude
+edges:
+  - { from: propose, to: apply }
+`,
+    );
+    await expect(loadFactory(derived, repo)).rejects.toThrow(/Node "audit" overrides a node/);
+  });
+
+  it("orphan-override check applies at every level of a multi-level chain", async () => {
+    const repo = await makeRepo();
+    await writeAt(repo, "examples/base.yaml", VALID_BASE);
+    await writeAt(
+      repo,
+      ".minifac/factories/mid.yaml",
+      `extends: minifac:base
+nodes:
+  apply:
+    executor: claude
+    terminal: true
+    with: { prompt: mid-apply }
+`,
+    );
+    const top = await writeAt(
+      repo,
+      ".minifac/factories/top.yaml",
+      `extends: mid
+nodes:
+  aply:
+    executor: claude
+`,
+    );
+    const err = await loadFactory(top, repo).catch((e: unknown) => e);
+    expect((err as Error).message).toMatch(/Node "aply" overrides a node that base `mid`/);
   });
 
   it("derived layer's `edges:` replaces base edges wholesale", async () => {

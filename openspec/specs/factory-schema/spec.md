@@ -463,7 +463,17 @@ The loader SHALL merge an `extends:` chain into a single in-memory factory by ap
 - Nodes whose ids appear in the base but not in the derived layer
   SHALL be preserved unchanged.
 - New nodes (ids that appear only in the derived layer) SHALL be
-  added to the accumulator.
+  added to the accumulator **only when the same layer's `edges:`
+  names the node as an endpoint** (`from` or `to`). A derived-layer
+  node id that the accumulated base does not declare and that the
+  layer's own `edges:` does not reference is an override of a node
+  the base lacks — a typo, or a node the base renamed — and SHALL be
+  a load error. The error SHALL name the override's node id, the
+  base (its `extends:` reference and resolved path), and the base's
+  declared node ids, and SHALL cite the derived layer's file. It
+  SHALL NOT be added silently: with no inbound `on_success` edge it
+  would be inferred as a start node and dispatched when the run
+  begins.
 - **Edges.** If the derived layer declares an `edges:` array (even
   an empty array), the accumulator's `edges` SHALL be replaced
   wholesale by the derived layer's array. If the derived layer
@@ -492,9 +502,36 @@ from the resolved factory; downstream consumers SHALL NOT see it.
 #### Scenario: Override adds a new node
 
 - **WHEN** the loader reads a layer that declares an `audit` node
-  not present in the base
+  not present in the base, and the layer's `edges:` wires it
+  (`propose → audit`, `audit → apply`)
 - **THEN** the resolved factory's `nodes` map contains both the
   base's nodes and the new `audit` node
+
+#### Scenario: Override naming a node the base lacks is a load error
+
+- **WHEN** the loader reads a layer whose `extends:` names a base
+  declaring `plan` and `verify`, and the layer's `nodes` map
+  declares `veriy` (a typo for `verify`) with no `edges:`
+- **THEN** the loader throws `FactoryLoadError` citing the derived
+  layer's file, whose message names the node id `veriy`, the base's
+  `extends:` reference and path, and the base's declared node ids
+- **AND** the run does not start with `veriy` added as a start node
+
+#### Scenario: A new node the layer's edges do not reference is rejected
+
+- **WHEN** the loader reads a layer that declares an `audit` node not
+  present in the base, and the layer declares `edges:` none of which
+  names `audit`
+- **THEN** the loader throws `FactoryLoadError` naming `audit` as an
+  override of a node the base does not declare
+
+#### Scenario: The check applies at every level of a chain
+
+- **WHEN** the loader reads `top` extending `mid` extending
+  `minifac:base`, and `top` declares an unwired node id that neither
+  `mid` nor `minifac:base` declares
+- **THEN** the loader throws `FactoryLoadError` naming the node id and
+  `mid` as the base
 
 #### Scenario: `edges:` in derived layer replaces base edges wholesale
 
