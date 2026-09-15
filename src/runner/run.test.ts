@@ -306,6 +306,107 @@ describe("runFactory", () => {
     expect(result.log.map((l) => l.nodeId)).toEqual(["a"]);
   });
 
+  it("does not dispatch a node reachable only by an on_failure edge at run start (F6 probe)", async () => {
+    // a → b, b → ask (on_failure), b → z. Before #36 the order was `a ask`:
+    // `ask` ran before `b` ever failed and, being terminal, ended the run.
+    const factory: Factory = {
+      name: "f",
+      nodes: {
+        a: { executor: "fake", terminal: false },
+        b: { executor: "fake", terminal: false },
+        ask: { executor: "fake", terminal: true },
+        z: { executor: "fake", terminal: true },
+      },
+      edges: [
+        { from: "a", to: "b", when: "on_success" },
+        { from: "b", to: "ask", when: "on_failure" },
+        { from: "b", to: "z", when: "on_success" },
+      ],
+    };
+    const order: string[] = [];
+    const record = (id: string, outcome: NodeEvent) => () => {
+      order.push(id);
+      return [outcome];
+    };
+    const exec = new FakeExecutor("fake", {
+      a: record("a", succeeded),
+      b: record("b", succeeded),
+      ask: record("ask", succeeded),
+      z: record("z", succeeded),
+    });
+    const reg = new ExecutorRegistry();
+    reg.register(exec);
+    const result = await runFactory(wrap(factory), { registry: reg });
+    expect(result.status).toBe("succeeded");
+    expect(order).toEqual(["a", "b", "z"]);
+  });
+
+  it("dispatches the on_failure-only node exactly when its source fails", async () => {
+    const factory: Factory = {
+      name: "f",
+      nodes: {
+        a: { executor: "fake", terminal: false },
+        b: { executor: "fake", terminal: false },
+        ask: { executor: "fake", terminal: true },
+        z: { executor: "fake", terminal: true },
+      },
+      edges: [
+        { from: "a", to: "b", when: "on_success" },
+        { from: "b", to: "ask", when: "on_failure" },
+        { from: "b", to: "z", when: "on_success" },
+      ],
+    };
+    const order: string[] = [];
+    const record = (id: string, outcome: NodeEvent) => () => {
+      order.push(id);
+      return [outcome];
+    };
+    const exec = new FakeExecutor("fake", {
+      a: record("a", succeeded),
+      b: record("b", failed),
+      ask: record("ask", succeeded),
+      z: record("z", succeeded),
+    });
+    const reg = new ExecutorRegistry();
+    reg.register(exec);
+    const result = await runFactory(wrap(factory), { registry: reg });
+    expect(result.status).toBe("succeeded");
+    expect(order).toEqual(["a", "b", "ask"]);
+  });
+
+  it("`start: true` dispatches a node that has inbound edges at run start", async () => {
+    // s has an on_success inbound from a but is also declared a start node,
+    // so it is dispatched at begin — before a has run — and t (reached from
+    // s) ends the run before a's own traversal into s is popped.
+    const factory: Factory = {
+      name: "f",
+      nodes: {
+        s: { executor: "fake", terminal: false, start: true },
+        a: { executor: "fake", terminal: false },
+        t: { executor: "fake", terminal: true },
+      },
+      edges: [
+        { from: "a", to: "s", when: "on_success" },
+        { from: "s", to: "t", when: "on_success" },
+      ],
+    };
+    const order: string[] = [];
+    const record = (id: string, outcome: NodeEvent) => () => {
+      order.push(id);
+      return [outcome];
+    };
+    const exec = new FakeExecutor("fake", {
+      a: record("a", succeeded),
+      s: record("s", succeeded),
+      t: record("t", succeeded),
+    });
+    const reg = new ExecutorRegistry();
+    reg.register(exec);
+    const result = await runFactory(wrap(factory), { registry: reg });
+    expect(result.status).toBe("succeeded");
+    expect(order).toEqual(["s", "a", "t"]);
+  });
+
   it("traverses on_failure edges when the source fails", async () => {
     const factory: Factory = {
       name: "f",
@@ -386,11 +487,12 @@ describe("runFactory", () => {
   });
 
   it("supports terminal node participating in a cycle (success on second iter)", async () => {
-    // p -> v ; v -> p on_failure. v is terminal.
+    // p -> v ; v -> p on_failure. v is terminal. p has an inbound edge, so
+    // it must declare `start: true` to be the entry.
     const factory: Factory = {
       name: "f",
       nodes: {
-        p: { executor: "fake", terminal: false, max_iterations: 5 },
+        p: { executor: "fake", terminal: false, max_iterations: 5, start: true },
         v: { executor: "fake", terminal: true, max_iterations: 5 },
       },
       edges: [
@@ -465,7 +567,7 @@ describe("runFactory", () => {
     const factory: Factory = {
       name: "f",
       nodes: {
-        p: { executor: "fake", terminal: false, max_iterations: 3 },
+        p: { executor: "fake", terminal: false, max_iterations: 3, start: true },
         v: { executor: "fake", terminal: true, max_iterations: 3 },
       },
       edges: [
@@ -1549,6 +1651,7 @@ describe("runFactory — outputs directory and validation", () => {
         v: makeNode({
           terminal: false,
           max_iterations: 2,
+          start: true,
           outputs: { results: { type: "value", required: true } },
         }),
         gate: makeNode({ terminal: false, max_iterations: 2 }),
@@ -2385,7 +2488,7 @@ describe("runFactory — cross-node session resume", () => {
     const factory: Factory = {
       name: "f",
       nodes: {
-        plan: { executor: "fake", terminal: false, max_iterations: 2 },
+        plan: { executor: "fake", terminal: false, max_iterations: 2, start: true },
         apply: { executor: "fake", terminal: true, resume: "plan", max_iterations: 2 },
       },
       edges: [

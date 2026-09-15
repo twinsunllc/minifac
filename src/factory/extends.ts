@@ -163,7 +163,7 @@ async function walkExtendsChain(entryPath: string, callerCwd: string): Promise<P
  * addition or an override of a node the base does not have (a typo, or a
  * node the base renamed). The two are told apart by wiring: a node the
  * layer adds must be the endpoint of an edge the same layer declares. An
- * unwired new node is never an addition — with no inbound `on_success` edge
+ * unwired new node is never an addition — with no inbound edge at all
  * it would be inferred as a start node and dispatched when the run begins —
  * so it is a load error naming the node and the base (ADR 0008, #34).
  */

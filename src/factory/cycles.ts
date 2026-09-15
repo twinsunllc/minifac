@@ -60,6 +60,28 @@ export interface UncoveredCycle {
   nodes: string[];
 }
 
+export interface EntryCycle {
+  nodes: string[];
+}
+
+/**
+ * Returns the cyclic SCCs that no edge enters from outside the component.
+ * When a factory has no start node, every node has an inbound edge from
+ * another node, so the graph can only be entered through such a cycle —
+ * these are the components the load error names, because one node in each
+ * is where `start: true` belongs.
+ */
+export function findEntryCycles(factory: Factory): EntryCycle[] {
+  const entries: EntryCycle[] = [];
+  for (const scc of tarjanSCCs(factory)) {
+    if (scc.length < 2) continue;
+    const members = new Set(scc);
+    const entered = factory.edges.some((e) => members.has(e.to) && !members.has(e.from));
+    if (!entered) entries.push({ nodes: [...scc].reverse() });
+  }
+  return entries;
+}
+
 /**
  * Returns the cyclic SCCs whose budget coverage is missing. A cycle is
  * "covered" if any node in the SCC has `max_iterations`, OR any edge whose

@@ -2,6 +2,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { getInlinedInputs } from "../step/inline.js";
 import { loadFactory } from "./loader.js";
+import { startNodeIds } from "./start-nodes.js";
 
 const sddPath = path.resolve(__dirname, "..", "..", "examples", "sdd.yaml");
 const repoRoot = path.resolve(__dirname, "..", "..");
@@ -132,14 +133,9 @@ describe("examples/sdd.yaml", () => {
 
   it("resolves propose as the sole start node", async () => {
     const { factory } = await loadFactory(sddPath, repoRoot);
-    const onSuccessInbound = new Set<string>();
-    for (const edge of factory.edges) {
-      if (edge.when === "on_success") onSuccessInbound.add(edge.to);
-    }
-    const startNodes = Object.keys(factory.nodes)
-      .filter((id) => !onSuccessInbound.has(id))
-      .sort();
-    expect(startNodes).toEqual(["propose"]);
+    // `apply` is the `verify → apply` on_failure target; it also has the
+    // `propose → apply` forward edge, so it is not a start node either way.
+    expect(startNodeIds(factory)).toEqual(["propose"]);
   });
 
   it("declares permission_mode: bypass_permissions on every resolved node", async () => {

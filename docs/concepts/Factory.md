@@ -20,12 +20,17 @@ canonical templates like `minifac:sdd`) or in
     `inputs:` block supplying values to the step's typed inputs.
 
   Both shapes accept the per-node fields: optional `cwd`, an optional
-  `terminal: true` marker, and an optional `max_iterations` budget.
+  `terminal: true` marker, an optional `start: true` marker, and an
+  optional `max_iterations` budget.
 - **Edges** carry `from` / `to` / optional `when` (`on_success` default,
   or `on_failure`) and an optional `max_traversals` budget.
-- **Start nodes** are nodes with no `on_success` inbound edge.
-  `on_failure` edges are recovery flow, not forward flow, so a node
-  whose only inbound is `on_failure` is still a valid entry point.
+- **Start nodes** are nodes with no inbound edge from another node —
+  of any kind — plus any node declaring `start: true`. A node reached
+  only by `on_failure` edges (an escalation, wait, or re-poll node) is
+  *not* a start node; it runs only when that edge fires. A cycle's
+  entry node has a back-edge into it, so it declares `start: true`.
+  Self-loops don't count. Zero start nodes is a load error naming the
+  cycle. See [[0040-Declared-Start-Nodes]].
 - **Terminal node** with `terminal: true` ends the run on success.
 - **[[Cycle]]s** are first-class but must be bounded — see
   [[0002-Cycles-First-Class]].
@@ -228,6 +233,7 @@ it and inlines the step's `executor` and `with`, discarding any
 | `inputs` | map (string → unknown) | no | — | Input values supplied to the step declared in `uses:`. Keys must match the step's declared input names. Omit when using inline `executor` + `with`. |
 | `cwd` | string | no | — | Working directory for this node. Accepts `{{ run.cwd }}` and `{{ brief.* }}` template tokens. If omitted the runner's default cwd applies. |
 | `terminal` | boolean | no | `false` | When `true`, a successful exit from this node ends the run. Use on the last node in a forward-flow path. |
+| `start` | boolean | no | — | When `true`, the [[Runner]] dispatches this node when the run begins even though it has inbound edges. Only needed for the entry node of a cycle (e.g. `propose` when `verify → propose` is an `on_failure` edge); a node with no inbound edge from another node starts without it. `false` is the same as omitted. Survives step inlining. See [[0040-Declared-Start-Nodes]]. |
 | `max_iterations` | positive integer | no | — | Maximum times this node may be dispatched across the entire run (counting all edge traversals). Absent means unlimited, subject to `max_traversals` on inbound edges. |
 | `outputs` | map (string → [[#Output fields\|output]]) | no | — | Declared outputs the node produces (typed JSON values, files, or directories under the per-iteration outputs directory). Keys match the same identifier grammar as step input keys. See [[Outputs]] for the full contract. |
 | `resume` | string (min 1) | no | — | Names another node in this factory whose conversation this node continues instead of starting a fresh one. Pair it with a `with.model` override to build a **cascade**: an expensive explore/plan node, then a cheap continuation that already has the context. Validated at load time — see [[#Cross-node session resume\|below]]. Runtime behavior lives in the [[Runner]]. |

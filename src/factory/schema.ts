@@ -77,6 +77,14 @@ export const NodeSchema = z
     // (declared target, no self-resume, matching `cwd`) runs post-schema
     // against the resolved factory — see `validateResume` in `loader.ts`.
     resume: z.string().min(1).optional(),
+    // Declares this node a start node even though it has inbound edges:
+    // the runner dispatches it when the run begins. Only needed for an
+    // entry node inside a cycle (e.g. `propose` when `verify → propose`
+    // is an `on_failure` edge). A node with no inbound edge from another
+    // node is a start node without it; `false` is the same as omitted.
+    // See `startNodeIds` in `start-nodes.ts` and
+    // `docs/decisions/0040-Declared-Start-Nodes.md`.
+    start: z.boolean().optional(),
   })
   .strict();
 

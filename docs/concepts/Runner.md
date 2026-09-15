@@ -11,7 +11,8 @@ and produces a structured [[Run]] result.
 
 ## Loop
 
-1. Resolve start nodes (no `on_success` inbound) from the [[Factory]]
+1. Resolve start nodes from the [[Factory]]: no inbound edge from
+   another node (any `when`; self-loops don't count), or `start: true`
 2. Build a `RunContext` for each scheduled node: factory reference,
    frozen snapshot of run-wide history, current `nodeId`, current
    `iteration` count, resolved `cwd`
