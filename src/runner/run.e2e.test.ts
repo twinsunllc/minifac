@@ -16,7 +16,7 @@ import type { NodeEvent, NodeExecutor, ResolvedNode, RunContext } from "../execu
 import type { LoadedFactory } from "../factory/loader.js";
 import type { Factory } from "../factory/schema.js";
 import * as worktreeConfig from "../worktree/config.js";
-import { runFactory } from "./run.js";
+import { type EmittedEvent, runFactory } from "./run.js";
 
 // Same socket-client transport as in mcp-server.test.ts. Duplicated to
 // keep the test file self-contained.
@@ -84,6 +84,8 @@ class McpClientStub implements NodeExecutor {
   readonly supportsNudge = false;
   readonly supportsResume = false;
   scriptByNode: Record<string, { tool: string; arg: unknown } | "no-tool"> = {};
+  /** Every socket path this stub was pointed at, in dispatch order. */
+  readonly socketPaths: string[] = [];
   constructor(scripts: Record<string, { tool: string; arg: unknown } | "no-tool"> = {}) {
     this.scriptByNode = scripts;
   }
@@ -96,6 +98,7 @@ class McpClientStub implements NodeExecutor {
       };
       const args = body.mcpServers.minifac.args;
       const socketPath = args[args.length - 1] as string;
+      this.socketPaths.push(socketPath);
       const transport = new SocketClientTransport(socketPath);
       const client = new ClientCls({ name: "stub", version: "0.0.1" }, {});
       // biome-ignore lint/suspicious/noExplicitAny: SDK accepts any Transport
@@ -147,14 +150,13 @@ describe("run.ts MCP integration — end-to-end", () => {
 
   it("MCP path: server starts, tool registers, file lands, validator passes, server stops", async () => {
     const registry = new ExecutorRegistry();
-    registry.register(
-      new McpClientStub({
-        report: {
-          tool: "mcp__minifac__report_findings",
-          arg: { value: [{ id: 1 }, { id: 2 }] },
-        },
-      }),
-    );
+    const stub = new McpClientStub({
+      report: {
+        tool: "mcp__minifac__report_findings",
+        arg: { value: [{ id: 1 }, { id: 2 }] },
+      },
+    });
+    registry.register(stub);
     const factory: Factory = {
       name: "f",
       brief: "none",
@@ -174,9 +176,16 @@ describe("run.ts MCP integration — end-to-end", () => {
     const contents = JSON.parse(await readFile(path.join(outDir, "findings.json"), "utf8"));
     expect(contents).toEqual([{ id: 1 }, { id: 2 }]);
 
-    // Server cleanup: socket file gone.
-    const sockPath = path.join(tmpHome, "outputs", "r1.mcp.sock");
+    // Server cleanup: the socket lived under os.tmpdir() (not MINIFAC_HOME)
+    // and its file + per-run directory are gone.
+    expect(stub.socketPaths).toHaveLength(1);
+    const sockPath = stub.socketPaths[0] as string;
+    expect(sockPath.startsWith(tmpHome)).toBe(false);
+    expect(
+      path.dirname(sockPath).startsWith(path.join(path.resolve(tmpdir()), "minifac-r1-")),
+    ).toBe(true);
     await expect(stat(sockPath)).rejects.toThrow();
+    await expect(stat(path.dirname(sockPath))).rejects.toThrow();
 
     // `.mcp.json` cleanup: file is gone, per ADR-0029 D5.
     await expect(stat(path.join(outDir, ".mcp.json"))).rejects.toThrow();
@@ -204,10 +213,101 @@ describe("run.ts MCP integration — end-to-end", () => {
     const contents = JSON.parse(await readFile(path.join(outDir, "findings.json"), "utf8"));
     expect(contents).toEqual([{ ok: true }]);
 
-    // Server still ran (other nodes might use it), socket gone after termination.
-    await expect(stat(path.join(tmpHome, "outputs", "r2.mcp.sock"))).rejects.toThrow();
     // No `.mcp.json` for non-MCP executor.
     await expect(stat(path.join(outDir, ".mcp.json"))).rejects.toThrow();
+  });
+
+  it("deep MINIFAC_HOME (issue #35): MCP tools still reach the model", async () => {
+    // Old layout put the socket at `${MINIFAC_HOME}/outputs/<run-id>.mcp.sock`;
+    // this home is deep enough that that path would overflow sun_path.
+    const deepHome = path.join(tmpHome, "h".repeat(60), "o".repeat(60), "m".repeat(60));
+    await mkdir(deepHome, { recursive: true });
+    vi.spyOn(worktreeConfig, "minifacHome").mockReturnValue(deepHome);
+    expect(path.join(deepHome, "outputs", "r4.mcp.sock").length).toBeGreaterThan(108);
+
+    const registry = new ExecutorRegistry();
+    const stub = new McpClientStub({
+      report: { tool: "mcp__minifac__report_findings", arg: { value: [{ id: 35 }] } },
+    });
+    registry.register(stub);
+    const factory: Factory = {
+      name: "f",
+      brief: "none",
+      nodes: {
+        report: {
+          executor: "claude-stub",
+          terminal: true,
+          outputs: { findings: { type: "value", required: true } },
+        },
+      },
+      edges: [],
+    };
+    const events: EmittedEvent[] = [];
+    const result = await runFactory(wrap(factory), {
+      registry,
+      runId: "r4",
+      onEvent: (e) => events.push(e),
+    });
+    expect(result.status).toBe("succeeded");
+    expect(events.some((e) => e.nodeId === "__mcp__")).toBe(false);
+    expect(stub.socketPaths).toHaveLength(1);
+    expect((stub.socketPaths[0] as string).startsWith(deepHome)).toBe(false);
+    const outDir = path.join(deepHome, "outputs", "r4", "report", "1");
+    const contents = JSON.parse(await readFile(path.join(outDir, "findings.json"), "utf8"));
+    expect(contents).toEqual([{ id: 35 }]);
+  });
+
+  it("deep TMPDIR: socket path guard trips, run falls back to files and says so loudly", async () => {
+    // Deep enough that even the short runtime-dir socket path overflows
+    // sun_path. `os.tmpdir()` re-reads TMPDIR on every call.
+    const deep = path.join(tmpHome, "d".repeat(120));
+    await mkdir(deep, { recursive: true });
+    const savedTmpdir = process.env.TMPDIR;
+    process.env.TMPDIR = deep;
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const events: EmittedEvent[] = [];
+    let stderrLines: string[] = [];
+    try {
+      const registry = new ExecutorRegistry();
+      registry.register(new FsWriterStub([{ ok: true }]));
+      const factory: Factory = {
+        name: "f",
+        brief: "none",
+        nodes: {
+          writer: {
+            executor: "fs-writer",
+            terminal: true,
+            outputs: { findings: { type: "value", required: true } },
+          },
+        },
+        edges: [],
+      };
+      const result = await runFactory(wrap(factory), {
+        registry,
+        runId: "r3",
+        onEvent: (e) => events.push(e),
+      });
+      expect(result.status).toBe("succeeded");
+    } finally {
+      // `process.env.X = undefined` stores the string "undefined"; delete
+      // is the only way to actually unset it.
+      // biome-ignore lint/performance/noDelete: env var unset, not a hot path
+      if (savedTmpdir === undefined) delete process.env.TMPDIR;
+      else process.env.TMPDIR = savedTmpdir;
+      stderrLines = errSpy.mock.calls.map((c) => String(c[0]));
+      errSpy.mockRestore();
+    }
+
+    const warning = events.find((e) => e.nodeId === "__mcp__" && e.event.kind === "stderr");
+    expect(warning).toBeDefined();
+    const line = (warning?.event as { line: string }).line;
+    expect(line).toMatch(/mcp server failed to start/);
+    expect(line).toMatch(/over the \d+-byte platform limit/);
+    expect(line).toMatch(/mcp__minifac__report_\* tools will be absent/);
+    // ...and on process stderr, not only the event stream.
+    expect(stderrLines.some((l) => l.includes("[minifac mcp] mcp server failed to start"))).toBe(
+      true,
+    );
   });
 
   it("missing_required_output fires under MCP when tool not called and no fallback file", async () => {

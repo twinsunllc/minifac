@@ -228,19 +228,31 @@ interface WorktreeConfig {
 ## Per-run state directory layout
 
 Runs that involve a [[Factory]] with `value` outputs and an MCP-capable
-executor (Claude) use an inline MCP server. The server's socket and per-
-node config files live alongside the per-run outputs tree under
-`${MINIFAC_HOME}/outputs/`:
+executor (Claude) use an inline MCP server. The per-node config files
+live in the per-run outputs tree under `${MINIFAC_HOME}/outputs/`; the
+server's socket lives in a short per-run directory under the OS temp
+dir (`os.tmpdir()`, i.e. `$TMPDIR`), **not** under `MINIFAC_HOME`:
 
 ```
 ${MINIFAC_HOME}/outputs/
-  <run-id>.mcp.sock                 # per-run unix socket
   <run-id>/<node-id>/<iteration>/
     .mcp.json                       # per-dispatch MCP client config (cleaned at run end)
     <key>.json                      # `value` output, written via MCP or Write
     <key>.<ext>                     # `file` output
     <key>/                          # `directory` output
+
+$TMPDIR/
+  minifac-<run-id-prefix>-XXXXXX/   # per-run runtime dir (mkdtemp; removed at run end)
+    mcp.sock                        # per-run unix socket
 ```
+
+The socket is kept out of `MINIFAC_HOME` because unix socket paths are
+capped at 104 bytes on macOS (108 on Linux); a deep `MINIFAC_HOME` used
+to push the path over the limit and the run silently lost its
+`mcp__minifac__report_*` tools (issue #35). The runner checks the path
+against the limit before binding; if even the temp-dir path is too long
+it says so on stderr and in the run log and falls back to file outputs.
+Shorten `TMPDIR` to fix that.
 
 The socket path is computed by the runner at run start and is **not** a
 `config.yaml` key — operators don't tune socket paths, and surfacing it

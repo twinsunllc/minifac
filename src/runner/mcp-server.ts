@@ -10,10 +10,14 @@
 //
 // Architecture notes:
 //
-// - One unix socket per run. Sibling of the per-run outputs directory at
-//   `<outputs_root>/<run-id>.mcp.sock`. Per-run scoping matches the rest of
-//   the run state tree and lets concurrent runs use distinct sockets without
-//   coordination.
+// - One unix socket per run, in a fresh per-run directory under the OS
+//   temp dir: `<tmpdir>/minifac-<run-id-prefix>-XXXXXX/mcp.sock`. The
+//   socket deliberately does NOT live under `MINIFAC_HOME`: `sun_path` is
+//   capped at 104 bytes on macOS (108 on Linux) and a deep `MINIFAC_HOME`
+//   pushed the old `<outputs_root>/../<run-id>.mcp.sock` past it, so
+//   `listen` failed with EINVAL and the run silently lost its MCP tools
+//   (issue #35). `mkdtemp` gives concurrent runs distinct sockets without
+//   coordination; the directory is removed on `close()`.
 // - One McpServer instance per *connection*. The `claude` CLI spawns its
 //   own MCP client (the small stdio wrapper in `mcp-stdio-wrapper.ts`) per
 //   dispatch, dials the socket, and bridges its stdio to the socket. When
@@ -30,8 +34,9 @@
 // "MCP-to-filesystem bridge for `value` output tool calls").
 
 import { randomBytes } from "node:crypto";
-import { mkdir, rename, unlink, writeFile } from "node:fs/promises";
+import { mkdtemp, rename, rm, unlink, writeFile } from "node:fs/promises";
 import * as net from "node:net";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -58,14 +63,17 @@ export interface RunnerMcpServer {
    * MCP layer. */
   clearNodeOutputs(nodeId: string): void;
   /** Stop the server: close all connections, close the listening socket,
-   * remove the socket file from disk. Idempotent. */
+   * remove the socket file and its per-run runtime directory from disk.
+   * Idempotent. */
   close(): Promise<void>;
 }
 
 export interface StartRunnerMcpServerOptions {
   runId: string;
-  outputsRoot: string;
   onOutput?: OnOutputCallback;
+  /** Directory the per-run socket directory is created under. Defaults to
+   * `os.tmpdir()` (which honors `$TMPDIR`). Exposed for tests. */
+  runtimeDir?: string;
 }
 
 interface NodeRegistration {
@@ -81,40 +89,67 @@ interface ActiveConnection {
   tools: Map<string, Map<string, { remove(): void }>>;
 }
 
+/** Basename of the socket inside the per-run runtime directory. */
+const SOCKET_BASENAME = "mcp.sock";
+
 /**
- * Compute the per-run socket path. Sibling of the per-run outputs tree.
- * Per ADR-0029 D9.
+ * Longest unix socket path the platform will bind, in bytes: the size of
+ * `sockaddr_un.sun_path` (104 on macOS/BSD, 108 on Linux). Measured, not
+ * inferred — macOS accepts exactly 104 and rejects 105 with EINVAL.
  */
-export function runnerSocketPath(outputsRoot: string, runId: string): string {
-  return path.join(outputsRoot, "..", `${runId}.mcp.sock`);
+export function maxSocketPathBytes(platform: NodeJS.Platform = process.platform): number {
+  return platform === "darwin" || platform.endsWith("bsd") ? 104 : 108;
+}
+
+/** Thrown by `startRunnerMcpServer` when even the short runtime-dir socket
+ * path would exceed the platform limit (e.g. a very deep `$TMPDIR`). */
+export class SocketPathTooLongError extends Error {
+  readonly socketPath: string;
+  readonly limit: number;
+  constructor(socketPath: string, limit: number) {
+    super(
+      `unix socket path is ${Buffer.byteLength(socketPath)} bytes, over the ${limit}-byte platform limit: ${socketPath} (set TMPDIR to a shorter directory)`,
+    );
+    this.name = "SocketPathTooLongError";
+    this.socketPath = socketPath;
+    this.limit = limit;
+  }
+}
+
+/**
+ * Compute the per-run socket path template: `<runtimeDir>/<prefix>XXXXXX/mcp.sock`
+ * where `XXXXXX` is what `mkdtemp` will fill in. Same byte length as the
+ * real path, so it can be checked against the platform limit before
+ * anything is created.
+ */
+function socketPathPrefix(runtimeDir: string, runId: string): string {
+  return path.join(path.resolve(runtimeDir), `minifac-${runId.slice(0, 8)}-`);
 }
 
 /**
  * Start the per-run MCP server. Resolves once the socket is bound and ready
- * to accept connections. Rejects if the socket cannot be bound (e.g. a
- * stale socket file is in the way and reclaim fails).
+ * to accept connections. Rejects with `SocketPathTooLongError` before
+ * touching the filesystem if the socket path cannot fit `sun_path`, and
+ * rejects (after removing the runtime directory) if the bind itself fails.
  */
 export async function startRunnerMcpServer(
   opts: StartRunnerMcpServerOptions,
 ): Promise<RunnerMcpServer> {
-  const socketPath = path.resolve(runnerSocketPath(opts.outputsRoot, opts.runId));
+  const prefix = socketPathPrefix(opts.runtimeDir ?? tmpdir(), opts.runId);
+  const limit = maxSocketPathBytes();
+  const candidate = path.join(`${prefix}XXXXXX`, SOCKET_BASENAME);
+  if (Buffer.byteLength(candidate) > limit) {
+    throw new SocketPathTooLongError(candidate, limit);
+  }
+
+  // Fresh per-run directory: no stale-socket reclaim needed, and concurrent
+  // runs (even with the same run-id prefix) never collide.
+  const runtimeDir = await mkdtemp(prefix);
+  const socketPath = path.join(runtimeDir, SOCKET_BASENAME);
 
   const registrations = new Map<string, NodeRegistration>();
   const connections = new Set<ActiveConnection>();
   let closed = false;
-
-  // mkdirp the socket's parent directory. The per-run outputs root is the
-  // sibling directory and may not exist yet at run-setup time; the bind
-  // would otherwise fail with EACCES / ENOENT.
-  await mkdir(path.dirname(socketPath), { recursive: true, mode: 0o755 });
-
-  // Best-effort reclaim of a stale socket file. If it points at a still-live
-  // listener the bind below will fail with EADDRINUSE and we surface that.
-  try {
-    await unlink(socketPath);
-  } catch {
-    /* most common case: ENOENT — fine */
-  }
 
   const server = net.createServer((socket) => {
     if (closed) {
@@ -133,19 +168,24 @@ export async function startRunnerMcpServer(
     });
   });
 
-  await new Promise<void>((resolve, reject) => {
-    const onError = (err: Error) => {
-      server.off("listening", onListening);
-      reject(err);
-    };
-    const onListening = () => {
-      server.off("error", onError);
-      resolve();
-    };
-    server.once("error", onError);
-    server.once("listening", onListening);
-    server.listen(socketPath);
-  });
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const onError = (err: Error) => {
+        server.off("listening", onListening);
+        reject(err);
+      };
+      const onListening = () => {
+        server.off("error", onError);
+        resolve();
+      };
+      server.once("error", onError);
+      server.once("listening", onListening);
+      server.listen(socketPath);
+    });
+  } catch (err) {
+    await rm(runtimeDir, { recursive: true, force: true });
+    throw err;
+  }
 
   async function handleConnection(socket: net.Socket): Promise<void> {
     const mcp = new McpServer(
@@ -351,11 +391,8 @@ export async function startRunnerMcpServer(
       await new Promise<void>((resolve) => {
         server.close(() => resolve());
       });
-      try {
-        await unlink(socketPath);
-      } catch {
-        /* already gone */
-      }
+      // Removes the socket file and its per-run directory together.
+      await rm(runtimeDir, { recursive: true, force: true });
     },
   };
 }
