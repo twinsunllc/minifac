@@ -74,10 +74,9 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
   const log: ExecutionLogEntry[] = [];
   const outputsRoot = path.join(minifacHome(), "outputs", runId);
 
-  // The per-run MCP server's socket lives sibling to the run's outputs
-  // tree. The bind needs the parent directory present, and per-node outputs
-  // dirs are mkdirp'd ad-hoc when a node dispatches — so we mkdirp the root
-  // here unconditionally rather than wait for the first dispatch.
+  // Per-node outputs dirs are mkdirp'd ad-hoc when a node dispatches; we
+  // mkdirp the per-run root here unconditionally so the run's state tree
+  // exists from run start rather than from the first dispatch.
   try {
     await mkdir(outputsRoot, { recursive: true, mode: 0o755 });
   } catch (err) {
@@ -91,10 +90,14 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
   let perDispatchTransports: Map<string, "mcp" | "fs"> | null = null;
 
   let mcpServer: RunnerMcpServer | null = null;
+  /** Set when the MCP server failed to start; replayed into the run's event
+   * log once the store is ready so the fallback is visible after the fact. */
+  let mcpStartFailure: EmittedEvent | null = null;
   try {
+    // The socket lives under `os.tmpdir()`, not `MINIFAC_HOME` — see
+    // `mcp-server.ts` for the `sun_path` length rationale (issue #35).
     mcpServer = await startRunnerMcpServer({
       runId,
-      outputsRoot,
       onOutput: (nodeId, key) => {
         // Only mark when we're inside the dispatching node; tool calls
         // landing during another node's window are defensive impossibilities
@@ -105,19 +108,22 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
       },
     });
   } catch (err) {
-    // Surface server-start failures on stderr and continue — the v1
+    // Surface server-start failures LOUDLY and continue — the v1
     // filesystem-JSON transport is still available as a fallback for
-    // every executor (`supportsMcp: false` semantics).
-    const entry: EmittedEvent = {
+    // every executor (`supportsMcp: false` semantics), but the
+    // `mcp__minifac__report_*` tools will be absent from every session in
+    // this run, which is easy to misread as "the model didn't call them"
+    // (issue #35). So: process stderr, the run's event stream, and (below,
+    // once the store is up) the run log.
+    const line = `mcp server failed to start: ${(err as Error).message}; falling back to filesystem-JSON transport — mcp__minifac__report_* tools will be absent for this run`;
+    mcpStartFailure = {
       nodeId: "__mcp__",
       iteration: 0,
       emittedAt: Date.now() - runStart,
-      event: {
-        kind: "stderr",
-        line: `mcp server failed to start: ${(err as Error).message}; falling back to filesystem-JSON transport`,
-      },
+      event: { kind: "stderr", line },
     };
-    onEvent?.(entry);
+    console.error(`[minifac mcp] ${line}`);
+    onEvent?.(mcpStartFailure);
   }
   /** Absolute paths of every `.mcp.json` written during the run; cleaned up
    * at run termination so the per-node outputs dirs are left containing
@@ -183,6 +189,16 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
         reportStoreError(onEvent, runStart, err);
       }
     };
+
+    if (mcpStartFailure) {
+      await appendStoreEvent(
+        mcpStartFailure.nodeId,
+        mcpStartFailure.iteration,
+        "stderr",
+        mcpStartFailure.event,
+        mcpStartFailure.emittedAt,
+      );
+    }
 
     const iterations = new Map<string, number>();
     const edgeTraversals = new Map<string, number>();

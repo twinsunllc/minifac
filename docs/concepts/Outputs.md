@@ -132,8 +132,8 @@ operators see the actual failure reason, not a misleading
 same `<outputs_dir>/<key>.json` file:
 
 1. **MCP transport (preferred, default for Claude).** The runner
-   starts a per-run inline MCP server on a unix socket sibling to
-   the per-run outputs tree (see [[Config]]). For each dispatching
+   starts a per-run inline MCP server on a unix socket in a short
+   per-run directory under `$TMPDIR` (see [[Config]]). For each dispatching
    node, it registers one MCP tool per declared `type: "value"`
    output: `mcp__minifac__report_<key>(value: <derived schema>)`.
    When the model calls the tool, the runner's bridge validates the

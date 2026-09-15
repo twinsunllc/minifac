@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
 import * as net from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -8,7 +8,12 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { ReadBuffer, serializeMessage } from "@modelcontextprotocol/sdk/shared/stdio.js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OutputDef } from "../factory/schema.js";
-import { type RunnerMcpServer, startRunnerMcpServer } from "./mcp-server.js";
+import {
+  type RunnerMcpServer,
+  SocketPathTooLongError,
+  maxSocketPathBytes,
+  startRunnerMcpServer,
+} from "./mcp-server.js";
 
 /**
  * In-process MCP client transport: speaks the SDK's stdio framing over a
@@ -93,15 +98,12 @@ interface Harness {
 }
 
 async function setupHarness(): Promise<Harness> {
-  // Use /tmp directly to keep the socket path short (unix sockets are
-  // capped around 104 chars on macOS).
   const tmpRoot = await mkdtemp(path.join(tmpdir(), "minfc-"));
   const runId = "abcd";
   const outputsRoot = path.join(tmpRoot, "outputs", runId);
   const outputsByCall: Array<{ nodeId: string; key: string; value: unknown }> = [];
   const server = await startRunnerMcpServer({
     runId,
-    outputsRoot,
     onOutput: (nodeId, key, value) => {
       outputsByCall.push({ nodeId, key, value });
     },
@@ -131,19 +133,28 @@ describe("startRunnerMcpServer — lifecycle", () => {
     await teardown(h);
   });
 
-  it("binds a sibling socket file relative to outputsRoot", async () => {
-    const expected = path.resolve(h.outputsRoot, "..", `${h.runId}.mcp.sock`);
-    expect(h.server.socketPath).toBe(expected);
-    const s = await stat(h.server.socketPath);
+  it("binds the socket in a per-run directory under os.tmpdir(), not under outputsRoot", async () => {
+    const sp = h.server.socketPath;
+    expect(path.basename(sp)).toBe("mcp.sock");
+    expect(path.dirname(sp).startsWith(path.join(path.resolve(tmpdir()), "minifac-abcd-"))).toBe(
+      true,
+    );
+    expect(sp.startsWith(h.outputsRoot)).toBe(false);
+    expect(Buffer.byteLength(sp)).toBeLessThanOrEqual(maxSocketPathBytes());
+    const s = await stat(sp);
     expect(s.isSocket()).toBe(true);
   });
 
-  it("removes the socket file on close()", async () => {
+  it("removes the socket file and its directory on close()", async () => {
     const sp = h.server.socketPath;
     await h.server.close();
     await expect(stat(sp)).rejects.toThrow();
-    // Re-bind the same socket should succeed (file is gone).
-    h.server = await startRunnerMcpServer({ runId: h.runId, outputsRoot: h.outputsRoot });
+    await expect(stat(path.dirname(sp))).rejects.toThrow();
+    // Restarting the same run id gets a fresh directory.
+    h.server = await startRunnerMcpServer({ runId: h.runId });
+    expect(h.server.socketPath).not.toBe(sp);
+    const s = await stat(h.server.socketPath);
+    expect(s.isSocket()).toBe(true);
   });
 
   it("close() is idempotent", async () => {
@@ -151,26 +162,75 @@ describe("startRunnerMcpServer — lifecycle", () => {
     await expect(h.server.close()).resolves.toBeUndefined();
   });
 
-  it("reclaims a stale socket file at startup", async () => {
-    const sp = h.server.socketPath;
-    await h.server.close();
-    // Drop a stale file at the path.
-    const { writeFile } = await import("node:fs/promises");
-    await writeFile(sp, "stale", { encoding: "utf8" });
-    h.server = await startRunnerMcpServer({ runId: h.runId, outputsRoot: h.outputsRoot });
-    const s = await stat(h.server.socketPath);
-    expect(s.isSocket()).toBe(true);
-  });
-
   it("concurrent runs use distinct sockets", async () => {
-    const outputsRootB = path.join(h.tmpRoot, "outputs", "wxyz");
-    const serverB = await startRunnerMcpServer({ runId: "wxyz", outputsRoot: outputsRootB });
+    const serverB = await startRunnerMcpServer({ runId: "wxyz" });
     expect(serverB.socketPath).not.toBe(h.server.socketPath);
     const sA = await stat(h.server.socketPath);
     const sB = await stat(serverB.socketPath);
     expect(sA.isSocket()).toBe(true);
     expect(sB.isSocket()).toBe(true);
     await serverB.close();
+  });
+
+  it("concurrent runs sharing a run-id prefix still get distinct sockets", async () => {
+    const serverB = await startRunnerMcpServer({ runId: "abcd-efgh" });
+    expect(serverB.socketPath).not.toBe(h.server.socketPath);
+    await serverB.close();
+  });
+});
+
+describe("startRunnerMcpServer — socket path length guard", () => {
+  // `<runtimeDir>/minifac-<8-char-id>-XXXXXX/mcp.sock` adds 29 bytes to
+  // the runtime dir's own length.
+  const OVERHEAD = "/minifac-abcdefgh-XXXXXX/mcp.sock".length;
+
+  /** Make a directory under tmpRoot whose absolute path is exactly `len`
+   * bytes long. */
+  async function dirOfLength(tmpRoot: string, len: number): Promise<string> {
+    const base = `${tmpRoot}/`;
+    if (len <= base.length) throw new Error(`tmpRoot too long for test: ${tmpRoot}`);
+    const dir = base + "x".repeat(len - base.length);
+    await mkdir(dir, { recursive: true });
+    return dir;
+  }
+
+  let tmpRoot: string;
+  beforeEach(async () => {
+    tmpRoot = await mkdtemp(path.join(tmpdir(), "minfc-"));
+  });
+  afterEach(async () => {
+    await rm(tmpRoot, { recursive: true, force: true });
+  });
+
+  it("reports the platform sun_path limit", () => {
+    expect(maxSocketPathBytes("darwin")).toBe(104);
+    expect(maxSocketPathBytes("freebsd")).toBe(104);
+    expect(maxSocketPathBytes("linux")).toBe(108);
+  });
+
+  it("binds when the socket path is exactly at the limit", async () => {
+    const runtimeDir = await dirOfLength(tmpRoot, maxSocketPathBytes() - OVERHEAD);
+    const server = await startRunnerMcpServer({ runId: "abcdefgh-1234", runtimeDir });
+    try {
+      expect(Buffer.byteLength(server.socketPath)).toBe(maxSocketPathBytes());
+      const s = await stat(server.socketPath);
+      expect(s.isSocket()).toBe(true);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("rejects one byte over the limit before creating anything, naming the path and limit", async () => {
+    const runtimeDir = await dirOfLength(tmpRoot, maxSocketPathBytes() - OVERHEAD + 1);
+    const p = startRunnerMcpServer({ runId: "abcdefgh-1234", runtimeDir });
+    await expect(p).rejects.toBeInstanceOf(SocketPathTooLongError);
+    await expect(p).rejects.toThrow(
+      new RegExp(`${maxSocketPathBytes() + 1} bytes, over the ${maxSocketPathBytes()}-byte`),
+    );
+    await expect(p).rejects.toThrow(/TMPDIR/);
+    await expect(p).rejects.toThrow(path.join(runtimeDir, "minifac-abcdefgh-"));
+    // Nothing left behind: no `minifac-*` directory was created.
+    expect(await readdir(runtimeDir)).toEqual([]);
   });
 });
 
