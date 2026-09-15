@@ -666,7 +666,7 @@ When a factory node declares `uses:`, the loader SHALL validate the node's `inpu
 - **Type mismatch.** For each input the node supplies, the supplied value's type SHALL match the step's declared `type` for that input. Type matching SHALL be the structural JavaScript type (`typeof value === "string" | "number" | "boolean"`; arrays SHALL be `Array.isArray(value)`; objects SHALL be plain objects, not arrays, not null, and not other typed values). Mismatch SHALL be rejected with an error naming the factory, the node, the step, the input key, the declared type, and the supplied type.
 - **Unknown input key.** Any key in the node's `inputs:` that does not appear in the step's declared input schema SHALL be rejected with an error naming the factory, the node, the step, and the offending key.
 - **Default fill-in.** For each input the step declares with `required: false` and a `default`, if the node's `inputs:` does not supply a value for that key, the loader SHALL fill in the declared `default` before inlining. The default SHALL be inlined verbatim (no `{{ * }}` substitution on the default itself, since defaults are step-static and there are no namespaces in scope at the moment the default is resolved).
-- **Templated input values.** A factory's input values MAY contain `{{ brief.* }}` or `{{ run.* }}` tokens. The loader SHALL NOT resolve those tokens at load time (the brief and run are not in scope at load). Instead, the tokens SHALL survive into the inlined step body verbatim, where they are resolved at dispatch time per the `graph-runner` capability's "Brief token substitution" requirement.
+- **Templated input values.** A factory's input values MAY contain `{{ brief.* }}`, `{{ run.* }}`, or `{{ priorResults.<node-id>.outputs.<key>[:read] }}` tokens. The loader SHALL NOT resolve those tokens at load time (the brief, the run, and the run's prior results are not in scope at load). Instead, the tokens SHALL survive into the inlined step body verbatim, where they are resolved at dispatch time per the `graph-runner` capability's "Brief token substitution" requirement. Inline-time substitution SHALL resolve `{{ inputs.* }}` tokens only; a token of any other namespace — including one made visible in the step body by substituting an input value — SHALL be left verbatim, never resolved against an empty scope.
 
 The validation SHALL happen immediately after step resolution and before step inlining. A validation failure SHALL prevent the inlining and surface as a `FactoryLoadError` per the "Step inlining order" requirement above.
 
@@ -724,6 +724,12 @@ The validation SHALL happen immediately after step resolution and before step in
 
 - **WHEN** the loader reads a factory whose node declares `inputs: { config: null }` and the step declares `config: { type: "object" }`
 - **THEN** the loader rejects the value as a type mismatch (null is not a plain object)
+
+#### Scenario: A priorResults token passed through inputs survives load and resolves at dispatch
+
+- **WHEN** the loader reads a factory whose `reader` node declares `uses: relay` and `inputs: { findings: "{{ priorResults.writer.outputs.findings:read }}" }`, and the `relay` step's prompt is `"<<{{ inputs.findings }}>>"`
+- **THEN** the resolved `reader` node's `with.prompt` is `"<<{{ priorResults.writer.outputs.findings:read }}>>"` (the token is not erased to the empty string at load)
+- **AND** when `writer` has run and produced a `findings` output, the executor receives `reader`'s prompt with the token replaced by the output's contents
 
 ### Requirement: Node `outputs:` block
 

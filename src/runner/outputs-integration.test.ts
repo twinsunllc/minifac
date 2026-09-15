@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -75,6 +75,53 @@ describe("integration: writer → reader via priorResults outputs", () => {
     expect(res.status).toBe("succeeded");
     const readerPrompt = exec.capturedPrompts.get("reader");
     expect(readerPrompt).toBe(`<<${JSON.stringify({ result: "writer-ran" })}>>`);
+  });
+
+  it("a uses: node receives a priorResults token passed through its inputs (#33)", async () => {
+    const { loadFactory } = await import("../factory/loader.js");
+    const repo = await mkdtemp(path.join(tmpdir(), "minifac-int-uses-"));
+    await mkdir(path.join(repo, ".minifac", "steps"), { recursive: true });
+    await writeFile(
+      path.join(repo, ".minifac", "steps", "relay.yaml"),
+      `name: relay
+version: "1"
+executor: writer
+inputs:
+  findings: { type: string, required: true }
+with:
+  prompt: "<<{{ inputs.findings }}>>"
+`,
+    );
+    const factoryPath = path.join(repo, "f.yaml");
+    await writeFile(
+      factoryPath,
+      `name: f
+nodes:
+  writer:
+    executor: writer
+    outputs:
+      findings: { type: value, required: true }
+  reader:
+    uses: relay
+    terminal: true
+    inputs:
+      findings: "{{ priorResults.writer.outputs.findings:read }}"
+edges:
+  - { from: writer, to: reader }
+`,
+    );
+    const loaded = await loadFactory(factoryPath, repo);
+    expect(loaded.factory.nodes.reader?.with?.prompt).toBe(
+      "<<{{ priorResults.writer.outputs.findings:read }}>>",
+    );
+    const exec = new WriterExecutor();
+    const reg = new ExecutorRegistry();
+    reg.register(exec);
+    const res = await runFactory(loaded, { registry: reg, runId: "rid-uses" });
+    expect(res.status).toBe("succeeded");
+    expect(exec.capturedPrompts.get("reader")).toBe(
+      `<<${JSON.stringify({ result: "writer-ran" })}>>`,
+    );
   });
 
   it("missing required output overrides writer to failed and reader is NOT scheduled", async () => {

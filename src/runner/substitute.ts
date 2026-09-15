@@ -83,6 +83,31 @@ function substituteOnce(input: string, subs: Substitutions): string {
   return out;
 }
 
+/**
+ * Load-time (step-inlining) substitution: resolve `{{ inputs.<field> }}`
+ * tokens only. Every other token — `brief.*`, `run.*`, `priorResults.*`,
+ * unknown namespaces — belongs to dispatch time and survives verbatim,
+ * including a token an input value carries into the step body. The second
+ * pass resolves an `inputs.*` token that an input value itself contained,
+ * matching `substitute`'s two-pass shape.
+ *
+ * Calling `substitute(v, { inputs })` here instead is the #33 defect: its
+ * prior-results pass runs unconditionally, so a `{{ priorResults.* }}`
+ * token supplied through a `uses:` node's `inputs:` resolved against an
+ * empty map and was erased to "" before the run began.
+ */
+export function substituteInputs(input: string, inputs: Record<string, unknown>): string {
+  const once = (s: string): string =>
+    s.replace(TOKEN_REGEX, (match, ns: string, field: string) => {
+      if (ns !== "inputs") return match;
+      if (!Object.hasOwn(inputs, field)) return "";
+      return stringifyInputValue(inputs[field]);
+    });
+  const first = once(input);
+  if (first === input) return first;
+  return once(first);
+}
+
 function substitutePriorResults(input: string, subs: Substitutions): string {
   if (!PRIOR_RESULTS_TOKEN_REGEX.test(input)) return input;
   // Reset lastIndex on the global regex before re-using.

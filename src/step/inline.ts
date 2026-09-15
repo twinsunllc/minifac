@@ -1,6 +1,6 @@
 import { FactoryLoadError } from "../factory/loader-error.js";
 import type { FactoryNode } from "../factory/schema.js";
-import { substitute } from "../runner/substitute.js";
+import { substituteInputs } from "../runner/substitute.js";
 import { StepLoadError } from "./loader-error.js";
 import { loadStep } from "./loader.js";
 import { resolveStepRef } from "./resolve.js";
@@ -122,15 +122,16 @@ export async function inlineStepIntoNode(args: InlineArgs): Promise<InlinedNode>
   }
 
   // Eagerly substitute `{{ inputs.<name> }}` tokens at inline time using the
-  // resolved inputs map. Brief and run tokens stay verbatim (they belong to
-  // dispatch time). This makes the resolved factory node show its
+  // resolved inputs map. Every other token — brief, run, priorResults —
+  // stays verbatim: it belongs to dispatch time, when the runner has the
+  // brief, the run, and the prior-results map in scope. This makes the resolved factory node show its
   // effective `with:` shape with inputs folded in — useful for snapshots
   // and structural tests, and for steps whose default values are
   // themselves `{{ run.* }}` / `{{ brief.* }}` tokens.
   const inlinedWith: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(step.with)) {
     if (typeof v === "string") {
-      inlinedWith[k] = substitute(v, { inputs: resolvedInputs });
+      inlinedWith[k] = substituteInputs(v, resolvedInputs);
     } else {
       inlinedWith[k] = v;
     }

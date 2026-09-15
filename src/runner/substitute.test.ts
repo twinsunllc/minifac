@@ -9,6 +9,7 @@ import {
   TemplateSubstitutionError,
   substitute,
   substituteBriefTokens,
+  substituteInputs,
 } from "./substitute.js";
 
 function brief(overrides: Partial<Brief> = {}): Brief {
@@ -363,5 +364,22 @@ describe("substitute priorResults.<id>.outputs.<key>", () => {
       ],
     ]);
     expect(substitute("{{   priorResults.n.outputs.k   }}", { priorResults: map })).toBe("/k.json");
+  });
+});
+
+describe("substituteInputs (load-time, step inlining)", () => {
+  it("resolves inputs tokens, including one an input value carries in", () => {
+    expect(
+      substituteInputs("{{ inputs.a }} / {{ inputs.missing }}", { a: "x{{ inputs.b }}", b: 2 }),
+    ).toBe("x2 / ");
+  });
+
+  it("leaves every non-inputs namespace verbatim, including priorResults", () => {
+    const out = substituteInputs("{{ inputs.f }} {{ brief.change }} {{ run.cwd }} {{ nope.x }}", {
+      f: "{{ priorResults.writer.outputs.findings:read }}",
+    });
+    expect(out).toBe(
+      "{{ priorResults.writer.outputs.findings:read }} {{ brief.change }} {{ run.cwd }} {{ nope.x }}",
+    );
   });
 });
