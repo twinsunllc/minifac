@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Library namespace with pinned fetch-at-ref resolution** (#44, #47,
+  [ADR 0039](docs/decisions/0039-Library-Namespace.md)). A project pins
+  one library with `library: { repo, ref }` in `factory.yaml` or
+  `.minifac/config.yaml`; `extends: library:<name>` resolves the
+  library's `workflows/<name>.yaml` at the pin and `uses: library:<name>`
+  its `steps/`. Bare `uses:` resolves local → library → built-in. A
+  factory repo (one with `factory.yaml`) gets root `steps/` and
+  `workflows/` as its local layer. Only a tag or a full 40-character sha
+  is an acceptable pin; branches, abbreviated shas, `HEAD`, `refs/…` and
+  revision expressions are refused naming the ref, a moved tag is
+  refused, and a stale pin fails naming the library's current head and
+  latest tag. Libraries are cached as a bare mirror plus one
+  content-addressed tree per sha under `$MINIFAC_HOME/cache/library/`,
+  refreshed on every load and tolerated offline with a
+  `MINIFAC_LIBRARY_OFFLINE` warning. `runs.db` schema v5 records
+  `library_repo` / `library_ref` / `library_sha` on each run (one-way
+  migration from v4), surfaced by `minifac runs --json`.
+- **Cross-node session resume with model override** (#31,
+  [ADR 0035](docs/decisions/0035-Cross-Node-Session-Resume.md)). A node
+  MAY declare `resume: <node-id>`; the runner dispatches it with
+  `--resume <that node's latest session id>` and this node's
+  `with.model`, so a continuation inherits the prior node's full
+  in-context history. The two nodes must share `cwd`; an unsatisfiable
+  resume fails the dispatch before spawning. `runs.db` schema v4 records
+  `node_executions.session_id`.
+
+### Fixed
+
+- A `{{ priorResults.* }}` token passed through a `uses:` node's
+  `inputs:` was erased to `""` at load time; load-time substitution now
+  resolves `inputs.*` only and leaves other namespaces for dispatch
+  (#33, #45).
+- An `extends:` layer that overrides a node the base does not declare
+  is a load error naming the layer and the base's nodes, unless the same
+  layer's `edges:` wires the new node in (#34, #46). Previously the
+  orphan node was added silently and, having no inbound edge, started at
+  run begin.
+- Pinned `fast-uri` to 3.1.7 to clear four high advisories
+  (GHSA-5jgf-p345-68v8 and related) within the dependency cooldown (#32).
+
 ## [0.1.2] — 2026-06-18
 
 ### Security
