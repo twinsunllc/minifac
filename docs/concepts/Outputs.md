@@ -70,32 +70,58 @@ Two reserved tokens land in this change:
   throw a `TemplateSubstitutionError` naming the key, the actual size,
   and the cap. Directory outputs cannot be `:read` (also throws).
 
+- `{{ priorResults.<node-id>.status }}` / `{{ priorResults.<node-id>.reason }}`
+  — how the latest iteration of `<node-id>` ended (`succeeded` |
+  `failed`) and its recorded reason (the sentinel REASON line,
+  `missing_required_output`, `resume_*`; empty when `null`). Lets a
+  downstream prompt branch on a verdict without parsing the preamble.
+
 Missing prior results, missing keys, or `null`-outputs entries
 substitute the empty string (same convention as missing-optional
 brief / inputs fields).
 
+A node's outputs are addressable **whether it succeeded or failed**
+([[0041-Failed-Node-Outputs]]). A verdict that routes by failing —
+evaluate's `revise`, verify's red CI — keeps its `result.json`
+readable from the `on_failure` target:
+
+```yaml
+implement:
+  with:
+    prompt: |
+      evaluate ended {{ priorResults.evaluate.status }}
+      ({{ priorResults.evaluate.reason }}):
+      {{ priorResults.evaluate.outputs.result:read }}
+```
+
 ## Post-execution validation
 
 After the executor's event stream drains and the terminal status
-resolves, the runner runs the validator. It only runs when the node:
+resolves, the runner runs the validator on every node that declared an
+`outputs:` block. The terminal status decides what is *enforced*, not
+what is *indexed*:
 
-- Declared an `outputs:` block, AND
-- Terminated `succeeded` (sentinel or non-zero exit failures skip
-  validation entirely).
+- **Succeeded.** The validator scans each declared output, builds the
+  `NodeOutputIndex` of present-and-satisfied entries, and computes the
+  missing-required set. If that set is non-empty, the validator
+  **overrides** the node's terminal status from `succeeded` to `failed`
+  with reason `missing_required_output` (after the nudge loop, below).
+  The override fires loudly: stderr names the missing keys and the
+  directory the runner expected to find them in, and the status event's
+  `meta` carries `missing_outputs`, `missing_outputs_detail`, and
+  `partial_index`. The partial index stays on the node's `priorResults`
+  entry.
+- **Failed** (sentinel failure, non-zero exit, executor error). The
+  validator scans once and indexes what landed; nothing is enforced —
+  no nudge, no override, the node's own reason is preserved. A
+  `required` output that is absent or unparseable is an
+  `outputs_warning:` line on stderr (with the validator's per-key
+  detail), so an operator sees a verdict lose its payload. Operators
+  see the actual failure reason, never a misleading
+  "missing_required_output."
 
-The validator scans each declared output, builds the `NodeOutputIndex`
-of present-and-satisfied entries, and computes the missing-required
-set. If that set is non-empty, the validator **overrides** the node's
-terminal status from `succeeded` to `failed` with reason
-`missing_required_output`. The override fires loudly: stderr names the
-missing keys and the directory the runner expected to find them in,
-and the status event's `meta` carries `missing_outputs`,
-`missing_outputs_detail`, and `partial_index`.
-
-Sentinel-failed nodes (e.g. `verify` reporting "3 tests failed") and
-non-zero-exit nodes never get the missing-output override —
-operators see the actual failure reason, not a misleading
-"missing_required_output."
+Either way `NodeResult.outputs` is the present-and-satisfied index, or
+`null` when nothing was declared or nothing landed.
 
 ## Operator surfaces
 

@@ -167,6 +167,147 @@ edges:
   });
 });
 
+describe("integration: verdict that routes by failing keeps its payload (ADR 0041, #38)", () => {
+  let savedHome: string | undefined;
+
+  beforeEach(async () => {
+    savedHome = process.env.MINIFAC_HOME;
+    const dir = await mkdtemp(path.join(tmpdir(), "minifac-int-38-"));
+    process.env.MINIFAC_HOME = dir;
+  });
+
+  afterEach(() => {
+    if (savedHome === undefined) Reflect.deleteProperty(process.env, "MINIFAC_HOME");
+    else process.env.MINIFAC_HOME = savedHome;
+  });
+
+  const revise = {
+    verdict: "revise",
+    findings: [{ id: "F1", severity: "must", text: "criterion 2 unmet" }],
+    criteria_grades: { c1: "pass", c2: "fail" },
+    cycle_summary: "one must-fix remains",
+  };
+
+  /** evaluate writes result.json then fails on purpose (verdict=revise);
+   * implement is reached via on_failure and must see the structured
+   * findings, not just the REASON line. */
+  class EvaluateExecutor implements NodeExecutor {
+    readonly type = "eval";
+    readonly supportsMcp = false;
+    readonly supportsNudge = false;
+    readonly supportsResume = false;
+    readonly capturedPrompts = new Map<string, string>();
+    readonly capturedPrior = new Map<string, readonly unknown[]>();
+    async *run(node: ResolvedNode, ctx: RunContext): AsyncIterable<NodeEvent> {
+      this.capturedPrompts.set(node.id, (node.with?.prompt as string | undefined) ?? "");
+      this.capturedPrior.set(node.id, ctx.priorResults);
+      if (node.id === "evaluate") {
+        await writeFile(path.join(ctx.outputsDir, "result.json"), JSON.stringify(revise));
+        yield {
+          kind: "status",
+          status: "failed",
+          meta: { reason: "sentinel_failed", sentinel: "revise: criterion 2 unmet" },
+        };
+        return;
+      }
+      yield { kind: "status", status: "succeeded" };
+    }
+  }
+
+  it("implement receives evaluate's result.json, status and reason via tokens", async () => {
+    const factory: Factory = {
+      name: "f",
+      nodes: {
+        evaluate: {
+          executor: "eval",
+          terminal: false,
+          outputs: { result: { type: "value", required: true } },
+        },
+        implement: {
+          executor: "eval",
+          terminal: true,
+          with: {
+            prompt: [
+              "evaluate ended {{ priorResults.evaluate.status }} ({{ priorResults.evaluate.reason }}).",
+              "Findings: {{ priorResults.evaluate.outputs.result:read }}",
+              "Path: {{ priorResults.evaluate.outputs.result }}",
+            ].join("\n"),
+          },
+        },
+      },
+      edges: [{ from: "evaluate", to: "implement", when: "on_failure" }],
+    };
+    const exec = new EvaluateExecutor();
+    const reg = new ExecutorRegistry();
+    reg.register(exec);
+    const res = await runFactory(wrap(factory), { registry: reg, runId: "rid-38" });
+    expect(res.status).toBe("succeeded");
+    const prompt = exec.capturedPrompts.get("implement") ?? "";
+    const lines = prompt.split("\n");
+    expect(lines[0]).toBe("evaluate ended failed (revise: criterion 2 unmet).");
+    expect(lines[1]).toBe(`Findings: ${JSON.stringify(revise)}`);
+    expect(lines[2]).toMatch(/^Path: .*\/evaluate\/1\/result\.json$/);
+    // The preamble snapshot carries the same index, not null.
+    const prior = exec.capturedPrior.get("implement") as Array<{
+      nodeId: string;
+      status: string;
+      outputs: Record<string, { type: string }> | null;
+    }>;
+    expect(prior[0]?.nodeId).toBe("evaluate");
+    expect(prior[0]?.status).toBe("failed");
+    expect(prior[0]?.outputs?.result?.type).toBe("value");
+  });
+
+  it("a uses: node receives the status token through its inputs", async () => {
+    const { loadFactory } = await import("../factory/loader.js");
+    const repo = await mkdtemp(path.join(tmpdir(), "minifac-int-38-uses-"));
+    await mkdir(path.join(repo, ".minifac", "steps"), { recursive: true });
+    await writeFile(
+      path.join(repo, ".minifac", "steps", "implement.yaml"),
+      `name: implement
+version: "1"
+executor: eval
+inputs:
+  verdict: { type: string, required: true }
+  findings: { type: string, required: true }
+with:
+  prompt: "verdict={{ inputs.verdict }} findings={{ inputs.findings }}"
+`,
+    );
+    const factoryPath = path.join(repo, "f.yaml");
+    await writeFile(
+      factoryPath,
+      `name: f
+nodes:
+  evaluate:
+    executor: eval
+    outputs:
+      result: { type: value, required: true }
+  implement:
+    uses: implement
+    terminal: true
+    inputs:
+      verdict: "{{ priorResults.evaluate.status }}"
+      findings: "{{ priorResults.evaluate.outputs.result:read }}"
+edges:
+  - { from: evaluate, to: implement, when: on_failure }
+`,
+    );
+    const loaded = await loadFactory(factoryPath, repo);
+    expect(loaded.factory.nodes.implement?.with?.prompt).toBe(
+      "verdict={{ priorResults.evaluate.status }} findings={{ priorResults.evaluate.outputs.result:read }}",
+    );
+    const exec = new EvaluateExecutor();
+    const reg = new ExecutorRegistry();
+    reg.register(exec);
+    const res = await runFactory(loaded, { registry: reg, runId: "rid-38-uses" });
+    expect(res.status).toBe("succeeded");
+    expect(exec.capturedPrompts.get("implement")).toBe(
+      `verdict=failed findings=${JSON.stringify(revise)}`,
+    );
+  });
+});
+
 describe("integration: existing examples still load and run", () => {
   it("hello.yaml loads (no outputs declared)", async () => {
     const { loadFactory } = await import("../factory/loader.js");
