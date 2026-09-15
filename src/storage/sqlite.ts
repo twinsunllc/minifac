@@ -148,7 +148,7 @@ export class SqliteRunStore implements RunStore {
       this.db
         .prepare(
           `UPDATE node_executions
-              SET status = ?, ended_at = ?, sentinel_status = ?, exit_code = ?
+              SET status = ?, ended_at = ?, sentinel_status = ?, exit_code = ?, session_id = ?
             WHERE run_id = ? AND node_id = ? AND iteration = ?`,
         )
         .run(
@@ -156,6 +156,7 @@ export class SqliteRunStore implements RunStore {
           end.at,
           end.sentinelStatus ?? null,
           end.exitCode ?? null,
+          end.sessionId ?? null,
           runId,
           nodeId,
           iteration,
@@ -165,8 +166,8 @@ export class SqliteRunStore implements RunStore {
       this.db
         .prepare(
           `INSERT INTO node_executions
-            (run_id, node_id, iteration, status, started_at, ended_at, sentinel_status, exit_code)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            (run_id, node_id, iteration, status, started_at, ended_at, sentinel_status, exit_code, session_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           runId,
@@ -177,6 +178,7 @@ export class SqliteRunStore implements RunStore {
           end.at,
           end.sentinelStatus ?? null,
           end.exitCode ?? null,
+          end.sessionId ?? null,
         );
     }
   }

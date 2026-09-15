@@ -350,3 +350,200 @@ edges: []
     await expect(loadFactory(file)).rejects.toThrowError(/briefs/);
   });
 });
+
+describe("loadFactory — node `resume:`", () => {
+  it("loads a node declaring `resume:` alongside executor + with", async () => {
+    const file = await writeFactory(
+      "resume-ok.yaml",
+      `name: cascade
+nodes:
+  plan:
+    executor: claude
+    with:
+      prompt: explore
+  apply:
+    executor: claude
+    resume: plan
+    terminal: true
+    with:
+      prompt: continue
+      model: cheap-model
+edges:
+  - from: plan
+    to: apply
+`,
+    );
+    const loaded = await loadFactory(file);
+    expect(loaded.factory.nodes.apply?.resume).toBe("plan");
+    expect(loaded.factory.nodes.plan?.resume).toBeUndefined();
+  });
+
+  it("rejects `resume:` naming an undeclared node", async () => {
+    const file = await writeFactory(
+      "resume-unknown.yaml",
+      `name: cascade
+nodes:
+  plan:
+    executor: claude
+  apply:
+    executor: claude
+    resume: explore
+    terminal: true
+edges:
+  - from: plan
+    to: apply
+`,
+    );
+    await expect(loadFactory(file)).rejects.toThrowError(
+      /apply.*resume: explore.*no node "explore"/s,
+    );
+  });
+
+  it("rejects self-resume", async () => {
+    const file = await writeFactory(
+      "resume-self.yaml",
+      `name: cascade
+nodes:
+  apply:
+    executor: claude
+    resume: apply
+    terminal: true
+edges: []
+`,
+    );
+    await expect(loadFactory(file)).rejects.toThrowError(/cannot resume itself/);
+  });
+
+  it("rejects a `resume:` pair whose `cwd` differs", async () => {
+    const file = await writeFactory(
+      "resume-cwd.yaml",
+      `name: cascade
+nodes:
+  plan:
+    executor: claude
+    cwd: "{{ run.cwd }}"
+  apply:
+    executor: claude
+    cwd: /other/repo
+    resume: plan
+    terminal: true
+edges:
+  - from: plan
+    to: apply
+`,
+    );
+    await expect(loadFactory(file)).rejects.toThrowError(
+      /cwd. differs.*apply.*\/other\/repo.*plan.*run\.cwd/s,
+    );
+  });
+
+  it("accepts a `resume:` pair that both omit `cwd`", async () => {
+    const file = await writeFactory(
+      "resume-nocwd.yaml",
+      `name: cascade
+nodes:
+  plan:
+    executor: claude
+  apply:
+    executor: claude
+    resume: plan
+    terminal: true
+edges:
+  - from: plan
+    to: apply
+`,
+    );
+    const loaded = await loadFactory(file);
+    expect(loaded.factory.nodes.apply?.resume).toBe("plan");
+  });
+
+  it("accepts a `resume:` pair with identical explicit `cwd`", async () => {
+    const file = await writeFactory(
+      "resume-samecwd.yaml",
+      `name: cascade
+nodes:
+  plan:
+    executor: claude
+    cwd: "{{ run.cwd }}"
+  apply:
+    executor: claude
+    cwd: "{{ run.cwd }}"
+    resume: plan
+    terminal: true
+edges:
+  - from: plan
+    to: apply
+`,
+    );
+    const loaded = await loadFactory(file);
+    expect(loaded.factory.nodes.apply?.resume).toBe("plan");
+  });
+
+  it("rejects an empty `resume:` string", async () => {
+    const file = await writeFactory(
+      "resume-empty.yaml",
+      `name: cascade
+nodes:
+  plan:
+    executor: claude
+  apply:
+    executor: claude
+    resume: ""
+    terminal: true
+edges:
+  - from: plan
+    to: apply
+`,
+    );
+    await expect(loadFactory(file)).rejects.toThrowError(/resume/);
+  });
+
+  it("rejects a non-string `resume:` value", async () => {
+    const file = await writeFactory(
+      "resume-nonstring.yaml",
+      `name: cascade
+nodes:
+  plan:
+    executor: claude
+  apply:
+    executor: claude
+    resume: [plan]
+    terminal: true
+edges:
+  - from: plan
+    to: apply
+`,
+    );
+    await expect(loadFactory(file)).rejects.toThrowError(/resume/);
+  });
+
+  it("does NOT reachability-check the target: a later-running target loads fine", async () => {
+    // `apply` resumes `verify`, but the only edge into `verify` starts at
+    // `apply` — so `verify` cannot have run before `apply`'s first
+    // iteration. That's a runtime failure (resume_unavailable), not a load
+    // error: the graph is cyclic by design and reachability isn't
+    // statically decidable.
+    const file = await writeFactory(
+      "resume-later.yaml",
+      `name: cascade
+nodes:
+  apply:
+    executor: claude
+    resume: verify
+    max_iterations: 2
+  verify:
+    executor: claude
+    terminal: true
+edges:
+  - from: apply
+    to: verify
+  - from: verify
+    to: apply
+    when: on_failure
+    max_traversals: 1
+`,
+    );
+    const loaded = await loadFactory(file);
+    expect(loaded.factory.nodes.apply?.resume).toBe("verify");
+  });
+});

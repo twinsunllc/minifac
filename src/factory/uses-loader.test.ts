@@ -330,4 +330,48 @@ edges: []
     const { factory } = await loadFactory(fac, repo);
     expect(factory.nodes.a?.terminal).toBe(true);
   });
+
+  it("preserves `resume:` through step inlining and leaves the step body untouched", async () => {
+    const repo = await makeRepo();
+    await writeAt(repo, "examples/steps/myfac-propose.yaml", PROPOSE_STEP);
+    await writeAt(repo, "examples/steps/myfac-verify.yaml", VERIFY_STEP);
+    const fac = await writeAt(
+      repo,
+      "fac.yaml",
+      `name: f
+nodes:
+  propose:
+    uses: minifac:myfac-propose
+    inputs: { change: foo }
+  verify:
+    uses: minifac:myfac-verify
+    inputs: { change: foo }
+    resume: propose
+    terminal: true
+edges:
+  - from: propose
+    to: verify
+`,
+    );
+    const { factory } = await loadFactory(fac, repo);
+    expect(factory.nodes.verify?.resume).toBe("propose");
+    // The step body is byte-identical to what the same step yields for a
+    // node that declares no `resume:` — `resume` is a node-level fact the
+    // step has no opinion on.
+    const facNoResume = await writeAt(
+      repo,
+      "fac2.yaml",
+      `name: f
+nodes:
+  verify:
+    uses: minifac:myfac-verify
+    inputs: { change: foo }
+    terminal: true
+edges: []
+`,
+    );
+    const { factory: plain } = await loadFactory(facNoResume, repo);
+    expect(factory.nodes.verify?.with).toEqual(plain.nodes.verify?.with);
+    expect(plain.nodes.verify?.resume).toBeUndefined();
+  });
 });

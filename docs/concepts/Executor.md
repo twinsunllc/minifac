@@ -36,6 +36,36 @@ Future:
 YAML keys are snake_case; the claude CLI maps to camelCase
 internally (`bypass_permissions` → `bypassPermissions`).
 
+## Session resume
+
+When a node declares `resume: <node-id>` (see [[Factory#Cross-node
+session resume]]), the [[Runner]] resolves the target's captured
+session id and threads it through the run context. The claude executor
+turns that into `--resume <session-id>` on the spawned CLI, emitted
+after `--mcp-config` and **before** `--model`, the authority flags, and
+the `with.args` passthrough. Nodes without `resume:` produce a
+byte-identical argv to before the feature existed.
+
+`--resume` and `--model` are emitted together on purpose — continuing
+an expensive node's conversation on a cheaper model is the point.
+Three things are worth knowing:
+
+- **The cache is invalidated by the model swap.** The resumed turn
+  re-sends the accumulated history uncached at the new model's rate,
+  so a cascade pays for the context transfer once. Expected, not a
+  regression — and still cheaper than making the second model
+  re-explore.
+- **MCP config does not carry over.** A resumed invocation applies the
+  `--mcp-config` it is given; the original invocation's servers are
+  *not* restored. Each node sees exactly its own per-dispatch tool set.
+- **Nothing is validated locally.** The executor never inspects the
+  CLI's session storage. An unreadable session or an unknown model id
+  surfaces as a non-zero exit through the ordinary exit-code path.
+
+Whether an executor can do this at all is declared by its
+`supportsResume` flag (the claude executor sets it `true`); the runner
+refuses a `resume:` node routed to an executor that sets it `false`.
+
 ## Status signaling
 
 The claude executor combines two mechanisms:

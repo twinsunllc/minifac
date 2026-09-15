@@ -39,7 +39,7 @@ describe("SqliteRunStore", () => {
     }
   });
 
-  it("creates the DB file lazily and applies migrations through v3", async () => {
+  it("creates the DB file lazily and applies migrations through v4", async () => {
     const dbPath = path.join(dir, "nested", "runs.db");
     store = SqliteRunStore.open(dbPath);
     // Verify by opening a parallel read-only handle.
@@ -52,7 +52,7 @@ describe("SqliteRunStore", () => {
       const ver = inspector
         .prepare("SELECT COALESCE(MAX(version), 0) AS v FROM schema_version")
         .get() as { v: number };
-      expect(ver.v).toBe(3);
+      expect(ver.v).toBe(4);
       const tables = inspector
         .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
         .all() as Array<{ name: string }>;
@@ -69,6 +69,11 @@ describe("SqliteRunStore", () => {
         .prepare("SELECT name FROM sqlite_master WHERE type='index'")
         .all() as Array<{ name: string }>;
       expect(indexes.map((i) => i.name)).toContain("idx_node_outputs_run_node_iter");
+      // session_id column added by 0004.
+      const neCols = inspector.prepare("PRAGMA table_info(node_executions)").all() as Array<{
+        name: string;
+      }>;
+      expect(neCols.map((c) => c.name)).toContain("session_id");
     } finally {
       inspector.close();
     }
@@ -137,7 +142,7 @@ describe("SqliteRunStore", () => {
       const ver = inspector
         .prepare("SELECT COALESCE(MAX(version), 0) AS v FROM schema_version")
         .get() as { v: number };
-      expect(ver.v).toBe(3);
+      expect(ver.v).toBe(4);
       const cols = inspector.prepare("PRAGMA table_info(runs)").all() as Array<{ name: string }>;
       expect(cols.map((c) => c.name)).toContain("branch_name");
     } finally {
@@ -173,6 +178,127 @@ describe("SqliteRunStore", () => {
     expect(byId.get("without-branch")?.branchName).toBeNull();
   });
 
+  it("applies 0004 to a pre-existing v3 database without touching other tables", async () => {
+    const dbPath = path.join(dir, "v3.db");
+    const seed = new DatabaseSync(dbPath);
+    seed.exec("CREATE TABLE schema_version (version INTEGER PRIMARY KEY)");
+    seed.prepare("INSERT INTO schema_version (version) VALUES (?)").run(3);
+    seed.exec(`
+      CREATE TABLE runs (
+        id TEXT PRIMARY KEY,
+        factory_path TEXT NOT NULL,
+        factory_name TEXT NOT NULL,
+        brief_path TEXT,
+        change TEXT,
+        base_branch TEXT,
+        worktree_path TEXT,
+        status TEXT NOT NULL,
+        reason TEXT,
+        proximate_node_id TEXT,
+        started_at INTEGER NOT NULL,
+        ended_at INTEGER,
+        branch_name TEXT
+      );
+      CREATE TABLE node_executions (
+        run_id TEXT NOT NULL,
+        node_id TEXT NOT NULL,
+        iteration INTEGER NOT NULL,
+        status TEXT NOT NULL,
+        started_at INTEGER NOT NULL,
+        ended_at INTEGER,
+        sentinel_status TEXT,
+        exit_code INTEGER,
+        PRIMARY KEY (run_id, node_id, iteration)
+      );
+    `);
+    seed
+      .prepare(
+        "INSERT INTO runs (id, factory_path, factory_name, status, started_at) VALUES (?,?,?,?,?)",
+      )
+      .run("legacy-run", "/p/f.yaml", "f", "succeeded", 1);
+    seed
+      .prepare(
+        `INSERT INTO node_executions (run_id, node_id, iteration, status, started_at, ended_at)
+         VALUES (?,?,?,?,?,?)`,
+      )
+      .run("legacy-run", "plan", 1, "succeeded", 1, 2);
+    seed.close();
+
+    store = SqliteRunStore.open(dbPath);
+    const inspector = new DatabaseSync(dbPath);
+    try {
+      const ver = inspector
+        .prepare("SELECT COALESCE(MAX(version), 0) AS v FROM schema_version")
+        .get() as { v: number };
+      expect(ver.v).toBe(4);
+      const cols = inspector.prepare("PRAGMA table_info(node_executions)").all() as Array<{
+        name: string;
+      }>;
+      expect(cols.map((c) => c.name)).toContain("session_id");
+      // Pre-v4 rows survive and read back null.
+      const row = inspector
+        .prepare("SELECT node_id, session_id FROM node_executions WHERE run_id = ?")
+        .get("legacy-run") as { node_id: string; session_id: string | null } | undefined;
+      expect(row?.node_id).toBe("plan");
+      expect(row?.session_id).toBeNull();
+      // The runs table is untouched.
+      const runRow = inspector.prepare("SELECT id FROM runs").get() as { id: string } | undefined;
+      expect(runRow?.id).toBe("legacy-run");
+    } finally {
+      inspector.close();
+    }
+  });
+
+  it("recordNodeEnd round-trips sessionId, and null when omitted", async () => {
+    const dbPath = path.join(dir, "sid.db");
+    store = SqliteRunStore.open(dbPath);
+    await store.createRun({ id: "r1", factoryPath: "/p", factoryName: "f", startedAt: 0 });
+    await store.recordNodeStart("r1", "plan", 1, 1);
+    await store.recordNodeEnd("r1", "plan", 1, {
+      status: "succeeded",
+      sessionId: "abc-123",
+      at: 2,
+    });
+    // No start row (skipped-node path) and no sessionId supplied.
+    await store.recordNodeEnd("r1", "skipped", 1, { status: "skipped", at: 3 });
+
+    const inspector = new DatabaseSync(dbPath);
+    try {
+      const rows = inspector
+        .prepare(
+          "SELECT node_id, session_id FROM node_executions WHERE run_id = ? ORDER BY node_id",
+        )
+        .all("r1") as Array<{ node_id: string; session_id: string | null }>;
+      const byNode = new Map(rows.map((r) => [r.node_id, r.session_id]));
+      expect(byNode.get("plan")).toBe("abc-123");
+      expect(byNode.get("skipped")).toBeNull();
+    } finally {
+      inspector.close();
+    }
+  });
+
+  it("two node executions in one run may share a session id", async () => {
+    // `apply` continued `plan`'s conversation, so both rows carry one id.
+    // The PK is (run_id, node_id, iteration) — no uniqueness constraint.
+    const dbPath = path.join(dir, "shared-sid.db");
+    store = SqliteRunStore.open(dbPath);
+    await store.createRun({ id: "r1", factoryPath: "/p", factoryName: "f", startedAt: 0 });
+    await store.recordNodeStart("r1", "plan", 1, 1);
+    await store.recordNodeEnd("r1", "plan", 1, { status: "succeeded", sessionId: "abc", at: 2 });
+    await store.recordNodeStart("r1", "apply", 1, 3);
+    await store.recordNodeEnd("r1", "apply", 1, { status: "succeeded", sessionId: "abc", at: 4 });
+
+    const inspector = new DatabaseSync(dbPath);
+    try {
+      const rows = inspector
+        .prepare("SELECT node_id FROM node_executions WHERE run_id = ? AND session_id = ?")
+        .all("r1", "abc") as Array<{ node_id: string }>;
+      expect(rows.map((r) => r.node_id).sort()).toEqual(["apply", "plan"]);
+    } finally {
+      inspector.close();
+    }
+  });
+
   it("refuses to open a DB whose schema_version exceeds the binary's highest", async () => {
     const dbPath = path.join(dir, "future.db");
     const seed = new DatabaseSync(dbPath);
@@ -192,10 +318,12 @@ describe("SqliteRunStore", () => {
       endedAt: 100,
       outputs: null,
       nudges_used: 2,
+      session_id: "abc-123",
     };
     const json = JSON.stringify(result);
     const parsed = JSON.parse(json) as NodeResult;
     expect(parsed.nudges_used).toBe(2);
+    expect(parsed.session_id).toBe("abc-123");
     expect(parsed.nodeId).toBe("a");
   });
 

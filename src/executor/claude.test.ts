@@ -109,6 +109,7 @@ describe("buildStreamJsonInput", () => {
           endedAt: 12,
           outputs: null,
           nudges_used: 0,
+          session_id: null,
         },
         {
           nodeId: "v",
@@ -119,12 +120,13 @@ describe("buildStreamJsonInput", () => {
           endedAt: 20,
           outputs: null,
           nudges_used: 0,
+          session_id: null,
         },
       ],
       "prompt here",
     );
     expect(out).toMatchInlineSnapshot(`
-      "{"type":"user","message":{"role":"user","content":"[{\\"nodeId\\":\\"a\\",\\"iteration\\":1,\\"status\\":\\"succeeded\\",\\"reason\\":null,\\"startedAt\\":0,\\"endedAt\\":12,\\"outputs\\":null,\\"nudges_used\\":0},{\\"nodeId\\":\\"v\\",\\"iteration\\":1,\\"status\\":\\"failed\\",\\"reason\\":\\"verify hit error\\",\\"startedAt\\":13,\\"endedAt\\":20,\\"outputs\\":null,\\"nudges_used\\":0}]\\n\\n---\\n\\nprompt here"}}
+      "{"type":"user","message":{"role":"user","content":"[{\\"nodeId\\":\\"a\\",\\"iteration\\":1,\\"status\\":\\"succeeded\\",\\"reason\\":null,\\"startedAt\\":0,\\"endedAt\\":12,\\"outputs\\":null,\\"nudges_used\\":0,\\"session_id\\":null},{\\"nodeId\\":\\"v\\",\\"iteration\\":1,\\"status\\":\\"failed\\",\\"reason\\":\\"verify hit error\\",\\"startedAt\\":13,\\"endedAt\\":20,\\"outputs\\":null,\\"nudges_used\\":0,\\"session_id\\":null}]\\n\\n---\\n\\nprompt here"}}
       "
     `);
   });
@@ -253,6 +255,7 @@ describe("ClaudeExecutor", () => {
           endedAt: 1,
           outputs: null,
           nudges_used: 0,
+          session_id: null,
         },
       ],
     });
@@ -402,6 +405,105 @@ describe("buildCliArgs", () => {
   it("omits --mcp-config when mcpConfigPath is an empty string", () => {
     const args = buildCliArgs({ prompt: "hi" }, "");
     expect(args).not.toContain("--mcp-config");
+  });
+
+  it("emits --resume when a resumeSessionId is passed in", () => {
+    const args = buildCliArgs({ prompt: "hi" }, undefined, "abc-123");
+    const idx = args.indexOf("--resume");
+    expect(idx).toBeGreaterThanOrEqual(0);
+    expect(args[idx + 1]).toBe("abc-123");
+  });
+
+  it("places --resume after --mcp-config and before --model, knobs, passthrough", () => {
+    const args = buildCliArgs(
+      {
+        prompt: "hi",
+        model: "cheap-model",
+        permission_mode: "bypass_permissions",
+        args: ["--debug"],
+      },
+      "/tmp/x/.mcp.json",
+      "abc-123",
+    );
+    const mcpIdx = args.indexOf("--mcp-config");
+    const resumeIdx = args.indexOf("--resume");
+    const modelIdx = args.indexOf("--model");
+    const authIdx = args.indexOf("--permission-mode");
+    const passthroughIdx = args.indexOf("--debug");
+    expect(mcpIdx).toBeGreaterThanOrEqual(0);
+    expect(resumeIdx).toBeGreaterThan(mcpIdx);
+    expect(modelIdx).toBeGreaterThan(resumeIdx);
+    expect(authIdx).toBeGreaterThan(modelIdx);
+    expect(passthroughIdx).toBeGreaterThan(authIdx);
+  });
+
+  it("emits --resume and --model together for a model cascade (snapshot)", () => {
+    expect(
+      buildCliArgs({ prompt: "hi", model: "cheap-model" }, undefined, "abc-123"),
+    ).toMatchInlineSnapshot(`
+      [
+        "--print",
+        "--verbose",
+        "--input-format",
+        "stream-json",
+        "--output-format",
+        "stream-json",
+        "--resume",
+        "abc-123",
+        "--model",
+        "cheap-model",
+      ]
+    `);
+  });
+
+  it("omits --resume when resumeSessionId is undefined", () => {
+    const args = buildCliArgs({ prompt: "hi" }, "/tmp/x/.mcp.json");
+    expect(args).not.toContain("--resume");
+  });
+
+  it("omits --resume when resumeSessionId is an empty string", () => {
+    const args = buildCliArgs({ prompt: "hi" }, undefined, "");
+    expect(args).not.toContain("--resume");
+  });
+});
+
+describe("ClaudeExecutor resume wiring", () => {
+  it("forwards ctx.resumeSessionId to the spawned CLI as --resume <id>", async () => {
+    let argsSeen: readonly string[] | null = null;
+    const executor = new ClaudeExecutor({
+      spawn: (_bin, args, _opts) => {
+        argsSeen = args;
+        const c = makeFakeChild();
+        setImmediate(() => c.finish(0));
+        return c as unknown as ReturnType<typeof import("node:child_process").spawn>;
+      },
+    });
+    await collect(executor, makeNode(), makeCtx({ resumeSessionId: "abc-123" }));
+    expect(argsSeen).not.toBeNull();
+    const idx = (argsSeen as readonly string[]).indexOf("--resume");
+    expect(idx).toBeGreaterThanOrEqual(0);
+    expect((argsSeen as readonly string[])[idx + 1]).toBe("abc-123");
+  });
+
+  it("omits --resume when ctx carries no resumeSessionId", async () => {
+    let argsSeen: readonly string[] | null = null;
+    const executor = new ClaudeExecutor({
+      spawn: (_bin, args, _opts) => {
+        argsSeen = args;
+        const c = makeFakeChild();
+        setImmediate(() => c.finish(0));
+        return c as unknown as ReturnType<typeof import("node:child_process").spawn>;
+      },
+    });
+    await collect(executor, makeNode(), makeCtx());
+    expect(argsSeen).not.toBeNull();
+    expect(argsSeen).not.toContain("--resume");
+    // Byte-identical to the pre-change argv for a defaults-only payload.
+    expect(argsSeen).toEqual(buildCliArgs({ prompt: "hello" }));
+  });
+
+  it("supportsResume is true on the Claude executor", () => {
+    expect(new ClaudeExecutor().supportsResume).toBe(true);
   });
 });
 

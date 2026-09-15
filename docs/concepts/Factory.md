@@ -230,7 +230,49 @@ it and inlines the step's `executor` and `with`, discarding any
 | `terminal` | boolean | no | `false` | When `true`, a successful exit from this node ends the run. Use on the last node in a forward-flow path. |
 | `max_iterations` | positive integer | no | — | Maximum times this node may be dispatched across the entire run (counting all edge traversals). Absent means unlimited, subject to `max_traversals` on inbound edges. |
 | `outputs` | map (string → [[#Output fields\|output]]) | no | — | Declared outputs the node produces (typed JSON values, files, or directories under the per-iteration outputs directory). Keys match the same identifier grammar as step input keys. See [[Outputs]] for the full contract. |
+| `resume` | string (min 1) | no | — | Names another node in this factory whose conversation this node continues instead of starting a fresh one. Pair it with a `with.model` override to build a **cascade**: an expensive explore/plan node, then a cheap continuation that already has the context. Validated at load time — see [[#Cross-node session resume\|below]]. Runtime behavior lives in the [[Runner]]. |
 | `output_nudge_budget` | non-negative integer | no | `1` | How many in-turn nudge retries the runner MAY use to recover a missing-required-output protocol mistake before recording the node as `failed`. Setting `0` opts the node out of nudging entirely; the missing-outputs override fires on the first validation pass. Per-node only; no factory-level default. The budget is per-node-iteration — a graph-level recovery edge that re-dispatches the same node gets a fresh budget. See [[Outputs#Nudge recovery]] and [[0028-Node-Outputs-Nudge]]. |
+
+### Cross-node session resume
+
+`resume:` points a node at another node's conversation:
+
+```yaml
+nodes:
+  plan:
+    executor: claude
+    with:
+      prompt: "Explore the repo and plan the change."
+  apply:
+    executor: claude
+    resume: plan          # continue plan's conversation...
+    with:
+      model: <cheap-model> # ...on a cheaper model
+      prompt: "Now implement the plan you just formed."
+    terminal: true
+edges:
+  - from: plan
+    to: apply
+```
+
+`apply` inherits everything `plan` learned in-context — no plan file,
+no re-reading the repo. The model override is the already-existing
+`with.model`; `resume:` supplies the other half.
+
+The loader enforces three rules against the resolved factory:
+
+1. the target must be a declared node id;
+2. a node may not resume itself (self-chaining across iterations is a
+   different feature, deliberately not built);
+3. the two nodes' declared `cwd` strings must be identical — sessions
+   are scoped per project directory, so a mismatched pair could never
+   resolve at run time.
+
+The loader does **not** check that the target actually runs first.
+Cycles are first-class, so reachability isn't statically decidable; an
+unreachable target fails at dispatch. See [[Runner#Cross-node session
+resume]] for the runtime rules, the failure modes, and what happens
+across iterations.
 
 ### Output fields
 

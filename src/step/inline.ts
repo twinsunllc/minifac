@@ -147,6 +147,10 @@ export async function inlineStepIntoNode(args: InlineArgs): Promise<InlinedNode>
   if (node.max_iterations !== undefined) out.max_iterations = node.max_iterations;
   if (node.cwd !== undefined) out.cwd = node.cwd;
   if (node.outputs !== undefined) out.outputs = node.outputs;
+  // `resume:` names a sibling node, which is a factory-level fact the step
+  // body has no opinion on — so it rides through inlining untouched, on the
+  // same independence basis as `outputs` / `output_nudge_budget`.
+  if (node.resume !== undefined) out.resume = node.resume;
 
   // Attach the inputs map as a non-enumerable property so it doesn't
   // appear in serialized factory snapshots but is reachable at runtime.
