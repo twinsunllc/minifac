@@ -710,17 +710,51 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
         mcpServer.clearNodeOutputs(nodeId);
       }
 
-      // Post-execution outputs validation. Runs only when the node:
-      //  - declared an `outputs:` block, AND
-      //  - terminated `succeeded`.
-      // Sentinel-failed and other-failed nodes skip validation; their
-      // `NodeResult.outputs` stays null. For nudge-capable executors the
-      // nudge loop may have already populated `lastValidation` during the
-      // stream drain — reuse it so we don't double-scan the directory.
+      // Post-execution outputs validation. Runs whenever the node declared
+      // an `outputs:` block, whatever its terminal status (ADR 0041).
+      //  - `succeeded`: required outputs are enforced — a missing one
+      //    routes through the nudge loop and then overrides the status to
+      //    `failed` / `missing_required_output`. For nudge-capable
+      //    executors the nudge loop may already have populated
+      //    `lastValidation` during the stream drain — reuse it so we don't
+      //    double-scan the directory.
+      //  - `failed`: nothing is enforced and the reason is preserved; the
+      //    scan only indexes what is present-and-satisfied so a verdict
+      //    that routes by failing (revise, CI failed) keeps its structured
+      //    payload addressable downstream. An unsatisfied required key is
+      //    a stderr warning, not a status change.
+      // Either way `NodeResult.outputs` carries the present-and-satisfied
+      // index, or null when nothing was declared or nothing landed.
       let outputsForResult: NodeOutputIndex | null = null;
       let resultReason: string | null = extractReason(finalStatus, terminalMeta);
       let validatedIndex: NodeOutputIndex = {};
-      if (finalStatus === "succeeded" && node.outputs) {
+      if (finalStatus === "failed" && node.outputs) {
+        const validation = await validateDeclaredOutputs(node, outputsDir, {
+          mcpAvailable: mcpInScope,
+          mcpReported: perDispatchTransports,
+        });
+        validatedIndex = validation.index;
+        outputsForResult = Object.keys(validation.index).length > 0 ? validation.index : null;
+        if (validation.missing.length > 0) {
+          const lines: string[] = [
+            `outputs_warning: node "${nodeId}" failed and is missing required outputs: ${validation.missing.join(", ")} (dir: ${outputsDir}); indexed: ${Object.keys(validation.index).join(", ") || "none"}`,
+          ];
+          for (const key of validation.missing) {
+            const d = validation.detail[key];
+            if (d) lines.push(`  - ${d}`);
+          }
+          for (const line of lines) {
+            const entry: EmittedEvent = {
+              nodeId,
+              iteration,
+              emittedAt: Date.now() - runStart,
+              event: { kind: "stderr", line },
+            };
+            onEvent?.(entry);
+            await appendStoreEvent(nodeId, iteration, "stderr", entry.event, entry.emittedAt);
+          }
+        }
+      } else if (finalStatus === "succeeded" && node.outputs) {
         const validation =
           lastValidation !== null
             ? lastValidation
@@ -729,6 +763,9 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
                 mcpReported: perDispatchTransports,
               });
         validatedIndex = validation.index;
+        // What landed is addressable downstream whether or not the
+        // override below fires.
+        outputsForResult = Object.keys(validation.index).length > 0 ? validation.index : null;
         if (validation.missing.length > 0) {
           finalStatus = "failed";
           resultReason = "missing_required_output";
@@ -792,10 +829,6 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
             statusEvent.event,
             statusEvent.emittedAt,
           );
-          // outputs on the prior-results snapshot is null when overridden.
-          outputsForResult = null;
-        } else {
-          outputsForResult = Object.keys(validation.index).length > 0 ? validation.index : null;
         }
       }
 

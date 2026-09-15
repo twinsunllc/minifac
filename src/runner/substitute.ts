@@ -8,6 +8,12 @@ const TOKEN_REGEX = /\{\{\s*(brief|run|inputs)\.([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}/
 const PRIOR_RESULTS_TOKEN_REGEX =
   /\{\{\s*priorResults\.([a-zA-Z_][a-zA-Z0-9_-]*)\.outputs\.([a-zA-Z_][a-zA-Z0-9_]*)(:read)?\s*\}\}/g;
 
+/** `{{ priorResults.<id>.status }}` / `{{ priorResults.<id>.reason }}` —
+ * the latest-iteration terminal status and sentinel REASON of a node, so a
+ * downstream prompt can branch on how its source ended (ADR 0041). */
+const PRIOR_RESULTS_FIELD_TOKEN_REGEX =
+  /\{\{\s*priorResults\.([a-zA-Z_][a-zA-Z0-9_-]*)\.(status|reason)\s*\}\}/g;
+
 export const PRIOR_RESULTS_READ_CAP = 64 * 1024;
 
 export interface Substitutions {
@@ -22,15 +28,17 @@ export interface Substitutions {
    * tokens pass through verbatim. */
   inputs?: Record<string, unknown>;
   /** Latest-iteration NodeResult per node id, used to resolve
-   * `{{ priorResults.<id>.outputs.<key>[:read] }}` tokens. */
+   * `{{ priorResults.<id>.outputs.<key>[:read] }}` and
+   * `{{ priorResults.<id>.status|reason }}` tokens. */
   priorResults?: ReadonlyMap<string, NodeResult>;
 }
 
 /**
- * Substitute `{{ <ns>.<field> }}` tokens (ns ∈ {brief, run, inputs}) and
- * `{{ priorResults.<id>.outputs.<key>[:read] }}` tokens in `input` using
- * values from `subs`. Unknown ns or unknown fields under a known ns pass
- * through verbatim.
+ * Substitute `{{ <ns>.<field> }}` tokens (ns ∈ {brief, run, inputs}),
+ * `{{ priorResults.<id>.outputs.<key>[:read] }}` tokens and
+ * `{{ priorResults.<id>.status|reason }}` tokens in `input` using values
+ * from `subs`. Unknown ns or unknown fields under a known ns pass through
+ * verbatim.
  */
 export function substitute(input: string, subs: Substitutions): string {
   const first = substituteOnce(input, subs);
@@ -40,6 +48,7 @@ export function substitute(input: string, subs: Substitutions): string {
 
 function substituteOnce(input: string, subs: Substitutions): string {
   let out = substitutePriorResults(input, subs);
+  out = substitutePriorResultFields(out, subs);
   out = out.replace(TOKEN_REGEX, (match, ns: string, field: string) => {
     if (ns === "brief") {
       const brief = subs.brief;
@@ -157,6 +166,23 @@ function substitutePriorResults(input: string, subs: Substitutions): string {
       }
     },
   );
+}
+
+/**
+ * `{{ priorResults.<id>.status }}` → `succeeded` | `failed`;
+ * `{{ priorResults.<id>.reason }}` → the recorded reason string. A node
+ * with no prior result in this run, or a null reason, substitutes the
+ * empty string — the same convention as a missing output key.
+ */
+function substitutePriorResultFields(input: string, subs: Substitutions): string {
+  if (!PRIOR_RESULTS_FIELD_TOKEN_REGEX.test(input)) return input;
+  PRIOR_RESULTS_FIELD_TOKEN_REGEX.lastIndex = 0;
+  return input.replace(PRIOR_RESULTS_FIELD_TOKEN_REGEX, (_match, nodeId: string, field: string) => {
+    const result = subs.priorResults?.get(nodeId);
+    if (!result) return "";
+    if (field === "status") return result.status;
+    return result.reason ?? "";
+  });
 }
 
 function stringifyInputValue(value: unknown): string {

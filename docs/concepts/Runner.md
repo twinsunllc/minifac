@@ -43,7 +43,9 @@ nudges_used, session_id }`). The
 sees *what completed* and *why anything failed* without paying to
 pull every prior event into its prompt. The second propose sees the
 first verify's REASON; that's what makes propose → apply → verify →
-propose loops iterative.
+propose loops iterative. `outputs` is populated whatever the status
+([[0041-Failed-Node-Outputs]]), so a verdict that routes by failing
+keeps its structured payload readable via the [[Outputs]] tokens.
 
 Raw events still stream to `onEvent` consumers (CLI, viewer) in
 real time and persist to the [[Runs-DB]] — they're just no longer

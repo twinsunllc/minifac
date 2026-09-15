@@ -383,3 +383,63 @@ describe("substituteInputs (load-time, step inlining)", () => {
     );
   });
 });
+
+describe("substitute priorResults.<id>.status / .reason (ADR 0041)", () => {
+  function failedResult(nodeId: string, reason: string | null): NodeResult {
+    return { ...nodeResult(nodeId, null), status: "failed", reason };
+  }
+
+  it("substitutes status and reason of a failed source", () => {
+    const map = new Map<string, NodeResult>([
+      ["evaluate", failedResult("evaluate", "revise: two criteria unmet")],
+    ]);
+    expect(
+      substitute(
+        "evaluate ended {{ priorResults.evaluate.status }}: {{ priorResults.evaluate.reason }}",
+        { priorResults: map },
+      ),
+    ).toBe("evaluate ended failed: revise: two criteria unmet");
+  });
+
+  it("substitutes succeeded and an empty reason when reason is null", () => {
+    const map = new Map<string, NodeResult>([["plan", nodeResult("plan", null)]]);
+    expect(
+      substitute("{{ priorResults.plan.status }}/{{ priorResults.plan.reason }}", {
+        priorResults: map,
+      }),
+    ).toBe("succeeded/");
+  });
+
+  it("substitutes empty string when the node has no prior result", () => {
+    expect(
+      substitute("[{{ priorResults.nonexistent.status }}|{{ priorResults.nonexistent.reason }}]", {
+        priorResults: new Map(),
+      }),
+    ).toBe("[|]");
+  });
+
+  it("substitutes empty string when no priorResults map is in scope", () => {
+    expect(substitute("{{ priorResults.a.status }}", {})).toBe("");
+  });
+
+  it("does not match other fields under a node id", () => {
+    const map = new Map<string, NodeResult>([["a", nodeResult("a", null)]]);
+    expect(substitute("{{ priorResults.a.iteration }}", { priorResults: map })).toBe(
+      "{{ priorResults.a.iteration }}",
+    );
+  });
+
+  it("survives the load-time inputs pass and resolves through an input value", () => {
+    const inlined = substituteInputs("<<{{ inputs.verdict }}>>", {
+      verdict: "{{ priorResults.evaluate.status }}",
+    });
+    expect(inlined).toBe("<<{{ priorResults.evaluate.status }}>>");
+    const map = new Map<string, NodeResult>([["evaluate", failedResult("evaluate", "revise")]]);
+    expect(
+      substitute("<<{{ inputs.verdict }}>>", {
+        inputs: { verdict: "{{ priorResults.evaluate.status }}" },
+        priorResults: map,
+      }),
+    ).toBe("<<failed>>");
+  });
+});

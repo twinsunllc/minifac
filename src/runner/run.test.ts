@@ -1555,15 +1555,17 @@ describe("runFactory — outputs directory and validation", () => {
     expect(res.status).toBe("succeeded");
   });
 
-  it("sentinel-failed node skips validation, preserves reason and outputs:null", async () => {
+  it("sentinel-failed node with no outputs written: reason preserved, outputs:null, warning emitted (ADR 0041)", async () => {
     const factory: Factory = {
       name: "f",
       nodes: {
         a: makeNode({
+          terminal: false,
           outputs: { results: { type: "value", required: true } },
         }),
+        b: makeNode({}),
       },
-      edges: [],
+      edges: [{ from: "a", to: "b", when: "on_failure" }],
     };
     const exec = new FakeExecutor("fake", {
       a: () => [
@@ -1573,14 +1575,175 @@ describe("runFactory — outputs directory and validation", () => {
           meta: { reason: "sentinel_failed", sentinel: "verify hit error" },
         } as NodeEvent,
       ],
+      b: () => [succeeded],
     });
     const reg = new ExecutorRegistry();
     reg.register(exec);
     const store = new FakeStore();
-    const res = await runFactory(wrap(factory), { registry: reg, runId: "rid", store });
-    expect(res.status).toBe("failed");
-    // Sentinel reason preserved (NOT missing_required_output).
+    const events: EmittedEvent[] = [];
+    const res = await runFactory(wrap(factory), {
+      registry: reg,
+      runId: "rid",
+      store,
+      onEvent: (e) => events.push(e),
+    });
+    expect(res.status).toBe("succeeded");
+    // Sentinel reason preserved (NOT missing_required_output); nothing indexed.
+    const aResult = exec.contexts.get("b")?.[0]?.priorResults[0];
+    expect(aResult?.status).toBe("failed");
+    expect(aResult?.reason).toBe("verify hit error");
+    expect(aResult?.outputs).toBeNull();
     expect(store.nodeOutputs.length).toBe(0);
+    // No status re-emit: exactly one status event for a, the executor's own.
+    const aStatus = events.filter((e) => e.nodeId === "a" && e.event.kind === "status");
+    expect(aStatus.length).toBe(1);
+    // The warning names the node, the missing key and what was indexed.
+    const warn = events
+      .filter((e) => e.nodeId === "a" && e.event.kind === "stderr")
+      .map((e) => (e.event as { line: string }).line);
+    expect(warn[0]).toMatch(
+      /^outputs_warning: node "a" failed and is missing required outputs: results \(dir: .*\); indexed: none$/,
+    );
+    expect(warn[1]).toMatch(/value output "results" not found/);
+    // Persisted like any other stderr event.
+    const stored = (store.events.get("rid") ?? []).filter(
+      (e) => e.nodeId === "a" && e.kind === "stderr",
+    );
+    expect(stored.length).toBe(2);
+  });
+
+  it("sentinel-failed node with a parseable output: reason preserved, outputs indexed, no warning (ADR 0041)", async () => {
+    const { writeFileSync } = await import("node:fs");
+    const factory: Factory = {
+      name: "f",
+      nodes: {
+        evaluate: makeNode({
+          terminal: false,
+          outputs: { result: { type: "value", required: true } },
+        }),
+        implement: makeNode({
+          with: {
+            prompt:
+              "{{ priorResults.evaluate.status }}|{{ priorResults.evaluate.reason }}|{{ priorResults.evaluate.outputs.result:read }}",
+          },
+        }),
+      },
+      edges: [{ from: "evaluate", to: "implement", when: "on_failure" }],
+    };
+    const payload = JSON.stringify({ verdict: "revise", findings: ["x"] });
+    const exec = new FakeExecutor("fake", {
+      evaluate: (ctx) => {
+        writeFileSync(path.join(ctx.outputsDir, "result.json"), payload);
+        return [
+          {
+            kind: "status",
+            status: "failed",
+            meta: { reason: "sentinel_failed", sentinel: "revise: two criteria unmet" },
+          } as NodeEvent,
+        ];
+      },
+      implement: () => [succeeded],
+    });
+    const reg = new ExecutorRegistry();
+    reg.register(exec);
+    const store = new FakeStore();
+    const events: EmittedEvent[] = [];
+    const res = await runFactory(wrap(factory), {
+      registry: reg,
+      runId: "rid",
+      store,
+      onEvent: (e) => events.push(e),
+    });
+    expect(res.status).toBe("succeeded");
+    const evalResult = exec.contexts.get("implement")?.[0]?.priorResults[0];
+    expect(evalResult?.status).toBe("failed");
+    expect(evalResult?.reason).toBe("revise: two criteria unmet");
+    expect(evalResult?.outputs?.result?.type).toBe("value");
+    expect(
+      evalResult?.outputs?.result?.path.endsWith(path.join("evaluate", "1", "result.json")),
+    ).toBe(true);
+    expect(evalResult?.outputs?.result?.size).toBe(payload.length);
+    // Store received the same index.
+    expect(store.nodeOutputs.length).toBe(1);
+    expect(Object.keys(store.nodeOutputs[0]?.outputs ?? {})).toEqual(["result"]);
+    // Downstream prompt: status, reason and inlined contents.
+    const implPrompt = exec.nodes.get("implement")?.[0]?.with?.prompt;
+    expect(implPrompt).toBe(`failed|revise: two criteria unmet|${payload}`);
+    // No warning when every required output landed.
+    const warn = events.filter(
+      (e) =>
+        e.nodeId === "evaluate" &&
+        e.event.kind === "stderr" &&
+        (e.event as { line: string }).line.startsWith("outputs_warning"),
+    );
+    expect(warn.length).toBe(0);
+  });
+
+  it("failed node with an unparseable required value indexes the rest and warns (ADR 0041)", async () => {
+    const { writeFileSync } = await import("node:fs");
+    const factory: Factory = {
+      name: "f",
+      nodes: {
+        a: makeNode({
+          outputs: {
+            result: { type: "value", required: true },
+            notes: { type: "value", required: false },
+          },
+        }),
+      },
+      edges: [],
+    };
+    const exec = new FakeExecutor("fake", {
+      a: (ctx) => {
+        writeFileSync(path.join(ctx.outputsDir, "result.json"), "{not json");
+        writeFileSync(path.join(ctx.outputsDir, "notes.json"), JSON.stringify(["n"]));
+        return [
+          {
+            kind: "status",
+            status: "failed",
+            meta: { reason: "sentinel_failed", sentinel: "crashed" },
+          } as NodeEvent,
+        ];
+      },
+    });
+    const reg = new ExecutorRegistry();
+    reg.register(exec);
+    const store = new FakeStore();
+    const events: EmittedEvent[] = [];
+    await runFactory(wrap(factory), {
+      registry: reg,
+      runId: "rid",
+      store,
+      onEvent: (e) => events.push(e),
+    });
+    expect(Object.keys(store.nodeOutputs[0]?.outputs ?? {})).toEqual(["notes"]);
+    const warn = events
+      .filter((e) => e.nodeId === "a" && e.event.kind === "stderr")
+      .map((e) => (e.event as { line: string }).line);
+    expect(warn[0]).toMatch(/missing required outputs: result \(dir: .*\); indexed: notes$/);
+    expect(warn[1]).toMatch(/failed to parse as JSON/);
+    expect(store.nodeEnds[0]?.end.status).toBe("failed");
+  });
+
+  it("status/reason tokens on a succeeded source substitute succeeded and empty", async () => {
+    const factory: Factory = {
+      name: "f",
+      nodes: {
+        plan: makeNode({ terminal: false }),
+        next: makeNode({
+          with: { prompt: "{{ priorResults.plan.status }}/{{ priorResults.plan.reason }}" },
+        }),
+      },
+      edges: [{ from: "plan", to: "next", when: "on_success" }],
+    };
+    const exec = new FakeExecutor("fake", {
+      plan: () => [succeeded],
+      next: () => [succeeded],
+    });
+    const reg = new ExecutorRegistry();
+    reg.register(exec);
+    await runFactory(wrap(factory), { registry: reg, runId: "rid" });
+    expect(exec.nodes.get("next")?.[0]?.with?.prompt).toBe("succeeded/");
   });
 
   it("optional output missing does not fail the node", async () => {
@@ -1632,6 +1795,42 @@ describe("runFactory — outputs directory and validation", () => {
     const recorded = store.nodeOutputs[0];
     if (!recorded) throw new Error("expected one nodeOutputs entry");
     expect(Object.keys(recorded.outputs)).toEqual(["notes"]);
+  });
+
+  it("missing-required override carries the partial index on priorResults (ADR 0041)", async () => {
+    const { writeFileSync } = await import("node:fs");
+    const factory: Factory = {
+      name: "f",
+      nodes: {
+        a: makeNode({
+          terminal: false,
+          outputs: {
+            findings: { type: "value", required: true },
+            notes: { type: "value", required: false },
+          },
+        }),
+        b: makeNode({
+          with: { prompt: "{{ priorResults.a.reason }}:{{ priorResults.a.outputs.notes:read }}" },
+        }),
+      },
+      edges: [{ from: "a", to: "b", when: "on_failure" }],
+    };
+    const exec = new FakeExecutor("fake", {
+      a: (ctx) => {
+        writeFileSync(path.join(ctx.outputsDir, "notes.json"), JSON.stringify(["a"]));
+        return [succeeded];
+      },
+      b: () => [succeeded],
+    });
+    const reg = new ExecutorRegistry();
+    reg.register(exec);
+    const res = await runFactory(wrap(factory), { registry: reg, runId: "rid" });
+    expect(res.status).toBe("succeeded");
+    const aResult = exec.contexts.get("b")?.[0]?.priorResults[0];
+    expect(aResult?.status).toBe("failed");
+    expect(aResult?.reason).toBe("missing_required_output");
+    expect(Object.keys(aResult?.outputs ?? {})).toEqual(["notes"]);
+    expect(exec.nodes.get("b")?.[0]?.with?.prompt).toBe('missing_required_output:["a"]');
   });
 
   it("NodeResult.outputs is null when no outputs declared", async () => {

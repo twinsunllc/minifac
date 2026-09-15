@@ -807,9 +807,10 @@ other cases (successful executions, non-sentinel non-output
 failures), `reason` SHALL be `null`.
 
 The `outputs` field SHALL be populated per the
-"`NodeResult.outputs` field on prior results" requirement: a
-populated `NodeOutputIndex` for satisfied outputs on succeeded
-nodes; `null` otherwise.
+"`NodeResult.outputs` field on prior results" requirement: the
+`NodeOutputIndex` of present-and-satisfied outputs whatever the
+node's terminal status; `null` when the node declared no `outputs:`
+or none of its declared outputs were present.
 
 The `session_id` field SHALL be populated per the "Per-dispatch
 session id capture" requirement: the id announced by the dispatch's
@@ -843,7 +844,7 @@ to receive every event in real time, unchanged.
   `priorResults` with two entries in order: P iter 1 (status
   `succeeded`, `reason: null`, `outputs: null`), then V iter 1
   (status `failed`, `reason: "verify hit error"`,
-  `outputs: null`)
+  `outputs: null`) — neither node declared `outputs:`
 
 #### Scenario: Prior-results snapshot is stable for the duration of a node run
 
@@ -856,20 +857,33 @@ to receive every event in real time, unchanged.
 
 #### Scenario: Non-sentinel failure records null reason
 
-- **WHEN** a node fails via non-zero exit code with no
-  `MINIFAC_STATUS:` sentinel in the final result event
+- **WHEN** a node that declares no `outputs:` fails via non-zero
+  exit code with no `MINIFAC_STATUS:` sentinel in the final result
+  event
 - **THEN** the entry appended to `priorResults` has `status:
   "failed"`, `reason: null`, and `outputs: null`
 
 #### Scenario: Missing-required-output override records the named reason
 
-- **WHEN** a node terminates `succeeded` at the executor layer
-  but the outputs validator overrides it to `failed` because a
-  required output is missing
+- **WHEN** a node declaring `findings` (required) and `notes`
+  (optional) terminates `succeeded` at the executor layer having
+  written only `notes.json`, and the outputs validator overrides it
+  to `failed` because `findings` is missing
 - **THEN** the entry appended to `priorResults` has `status:
-  "failed"`, `reason: "missing_required_output"`, and
-  `outputs: null` (the partial index lives on the per-execution
-  failure metadata, not on the prior-results snapshot)
+  "failed"`, `reason: "missing_required_output"`, and `outputs`
+  populated with the partial index `{ notes }` (the same index the
+  failure event's `meta.partial_index` and the store carry)
+
+#### Scenario: Sentinel-failed node with a parseable output records the index
+
+- **WHEN** node `evaluate` declares
+  `outputs: { result: { type: "value", required: true } }`, writes
+  `result.json` containing `{"verdict":"revise"}`, and terminates
+  `failed` with sentinel REASON `"revise: two criteria unmet"`
+- **THEN** the entry appended to `priorResults` has `status:
+  "failed"`, `reason: "revise: two criteria unmet"`, and `outputs`
+  populated with the `result` entry (`type: "value"`, its absolute
+  path, `size`, `mtime`)
 
 #### Scenario: Successful execution with satisfied outputs records the index
 
@@ -885,7 +899,8 @@ to receive every event in real time, unchanged.
   because `plan` captured no session
 - **THEN** the entry appended to `priorResults` has
   `status: "failed"`, `reason: "resume_unavailable"`,
-  `outputs: null`, and `session_id: null`
+  `outputs: null` (nothing was dispatched, so nothing landed), and
+  `session_id: null`
 
 #### Scenario: Skipped node is not appended
 
@@ -994,19 +1009,32 @@ For `type: "file"` and `type: "directory"` outputs, there is
 only one transport — the model writes files via its existing
 Write tool. No MCP tools are exposed for these output types.
 
-Validation SHALL run only when ALL of the following hold:
+Validation SHALL run whenever the node declares an `outputs:`
+block (per the `factory-schema` capability's "Node `outputs:`
+block" requirement), whatever the node's resolved terminal status.
+The terminal status decides what is **enforced**, not what is
+**indexed**:
 
-- The node declares an `outputs:` block (per the
-  `factory-schema` capability's "Node `outputs:` block"
-  requirement); AND
-- The node's resolved terminal status is `succeeded` (sentinel
-  succeeded; non-sentinel exit-zero terminations also count).
-
-When the node's resolved terminal status is `failed` for any
-reason (sentinel failure, non-zero exit, executor error), the
-outputs validation pass SHALL be skipped entirely. The node's
-existing failure reason is preserved; the `NodeResult.outputs`
-field SHALL be `null` for a skipped-validation node.
+- When the node's resolved terminal status is `succeeded`
+  (sentinel succeeded; non-sentinel exit-zero terminations also
+  count), required outputs are enforced as described below (nudge
+  loop, then terminal-status override).
+- When the node's resolved terminal status is `failed` for any
+  reason (sentinel failure, non-zero exit, executor error), the
+  validator SHALL scan the outputs directory exactly once and
+  populate the `NodeOutputIndex` with every present-and-satisfied
+  output, and SHALL NOT enforce anything: the nudge loop is not
+  entered, the node's terminal status and existing failure reason
+  are preserved unchanged, and no `missing_required_output`
+  override fires. When one or more `required: true` outputs are
+  unsatisfied on a failed node, the runner SHALL emit a stderr
+  event beginning `outputs_warning:` that names the node, the
+  unsatisfied keys, the outputs directory and the keys that were
+  indexed, followed by one stderr line per unsatisfied key carrying
+  the validator's detail string; these events SHALL be persisted
+  like any other stderr event. A failed node's `NodeResult.outputs`
+  is populated per the "`NodeResult.outputs` field on prior
+  results" requirement.
 
 For each declared output `(key, def)` in the node's `outputs:`
 map, the validator SHALL:
@@ -1043,10 +1071,10 @@ the directory) and record `{ type, path, size, mtime }` in the
   `file` outputs; for `directory` outputs, the latest `mtime`
   of any contained file.
 
-After scanning all declared outputs, the validator SHALL collect
-the keys whose `required: true` declaration is unsatisfied
-(absent, present-but-invalid, present-but-ambiguous, or
-present-but-empty). When that set is non-empty, the runner's
+After scanning all declared outputs on a `succeeded` node, the
+validator SHALL collect the keys whose `required: true` declaration
+is unsatisfied (absent, present-but-invalid, present-but-ambiguous,
+or present-but-empty). When that set is non-empty, the runner's
 next step SHALL be governed by the "Post-execution nudge loop"
 requirement, NOT an immediate terminal-status override.
 
@@ -1085,9 +1113,10 @@ the validator SHALL override the node's terminal status:
   also note the number of nudges spent.
 
 The `NodeOutputIndex` (for the keys that *were* present) SHALL
-still be populated and persisted even when the override fires;
-operators inspecting the failed node can still see what the model
-did write.
+still be populated, persisted, and carried on the node's
+`priorResults` entry even when the override fires; operators
+inspecting the failed node can still see what the model did write,
+and downstream nodes can still address it.
 
 When all required outputs are satisfied (or none are required),
 the node's existing terminal status is preserved unchanged and
@@ -1098,33 +1127,32 @@ the `NodeOutputIndex` is populated for every present output
 
 - **WHEN** node `propose` declares
   `outputs: { findings: { type: "value", required: true } }`,
-  the dispatching executor's `supportsMcp` is `true`, the
-  model calls `mcp__minifac__report_findings({ value: [...] })`,
-  and the bridge writes `<outputs_dir>/findings.json`
-- **THEN** the validator finds the file, parses it as JSON,
-  the node's terminal status remains `succeeded`, and the
-  `NodeOutputIndex` carries
-  `findings: { type: "value", path, size, mtime }`
+  the executor's `supportsMcp` is `true`, and during the
+  dispatch the model calls `mcp__minifac__report_findings`
+  with a valid payload
+- **THEN** the bridge writes `<outputs_dir>/findings.json`; the
+  validator finds it and parses it; the node's terminal status
+  remains `succeeded`; the `NodeOutputIndex` for `propose`
+  contains `findings` with `type: "value"`, `path` ending in
+  `/findings.json`, and a positive `size`
 
 #### Scenario: Required value output landed via Write fallback passes
 
 - **WHEN** node `propose` declares
   `outputs: { findings: { type: "value", required: true } }`,
-  the dispatching executor's `supportsMcp` is `true`, the
-  model uses its ordinary Write tool to land
-  `<outputs_dir>/findings.json` directly (ignoring the MCP
-  tool)
-- **THEN** the validator finds the file, parses it as JSON,
-  the node's terminal status remains `succeeded`, and the
-  `NodeOutputIndex` carries the standard present-output
-  entry; the MCP transport's availability does not change the
-  validator's behavior when the file is present
+  the executor's `supportsMcp` is `true`, the MCP tool was
+  registered, but the model instead used its Write tool to
+  create `<outputs_dir>/findings.json` with valid JSON
+- **THEN** the validator finds and parses the file exactly as
+  in the MCP case; the node's terminal status remains
+  `succeeded`; the `NodeOutputIndex` is populated
 
 #### Scenario: Required value output landed via filesystem-JSON on non-MCP executor
 
 - **WHEN** node `propose` declares
-  `outputs: { findings: { type: "value", required: true } }`
-  and the dispatching executor's `supportsMcp` is `false`
+  `outputs: { findings: { type: "value", required: true } }`,
+  the resolved executor's `supportsMcp` is `false`, and the
+  model writes `<outputs_dir>/findings.json` via its Write tool
 - **THEN** no MCP tool is registered; the model writes the
   file via its own tools; the validator finds the file at
   `<outputs_dir>/findings.json` and the node's terminal status
@@ -1183,14 +1211,44 @@ the `NodeOutputIndex` is populated for every present output
 
 #### Scenario: Failed-sentinel node skips outputs validation
 
+- **WHEN** node `evaluate` declares `outputs: { result:
+  { type: "value", required: true } }`, writes
+  `<outputs_dir>/result.json` containing valid JSON, and
+  terminates `failed` with reason `"revise: two criteria unmet"`
+  (sentinel failure)
+- **THEN** the enforcing half of validation is skipped — the nudge
+  loop is not entered and no override fires — and the node's
+  terminal status remains `failed` with the sentinel reason
+  preserved verbatim; the indexing half still runs:
+  `NodeResult.outputs` contains
+  `result` with `type: "value"`, its absolute path, `size` and
+  `mtime`; the store's `recordNodeOutputs` receives the same
+  index; no `outputs_warning` stderr event is emitted
+
+#### Scenario: Failed-sentinel node missing a required output warns and preserves its reason
+
 - **WHEN** node `verify` declares `outputs: { results:
-  { type: "value", required: true } }` and terminates `failed`
-  with reason `"verify hit 3 test failures"` (sentinel failure)
-- **THEN** the outputs validation pass is skipped regardless
-  of whether MCP tool calls landed during the dispatch; the
-  node's terminal status remains `failed` with the sentinel
-  reason preserved verbatim; `NodeResult.outputs` is `null`;
+  { type: "value", required: true } }`, writes nothing, and
+  terminates `failed` with reason `"verify hit 3 test failures"`
+- **THEN** the node's terminal status remains `failed` with the
+  sentinel reason preserved verbatim (NOT
+  `missing_required_output`); `NodeResult.outputs` is `null`;
+  the runner emits a stderr event beginning
+  `outputs_warning: node "verify" failed and is missing required outputs: results`
+  naming the outputs directory, followed by the validator's
+  detail line for `results`; no `status` event is re-emitted;
   the nudge loop is not entered
+
+#### Scenario: Failed node with an unparseable value output warns and indexes the rest
+
+- **WHEN** node `evaluate` declares `result` (required) and
+  `notes` (optional) as `value` outputs, writes a `result.json`
+  that is not valid JSON and a valid `notes.json`, and
+  terminates `failed` with a sentinel reason
+- **THEN** `NodeResult.outputs` contains `notes` only; the
+  `outputs_warning` stderr event names `result` as unsatisfied,
+  its detail line carries the JSON parse error, and the warning
+  reports `indexed: notes`; the sentinel reason is preserved
 
 #### Scenario: Missing outputs route through the nudge loop when budget remains
 
@@ -1214,17 +1272,23 @@ The runner SHALL extend the `NodeResult` shape (per the existing "Prior-results 
   `{ type: "value" | "file" | "directory"; path: string;
   size: number; mtime: number }`. The map's keys are the
   declared output keys; entries are present only for outputs the
-  validator determined were present-and-satisfied.
-- `null` — when the node declared no `outputs:`, when the node
-  terminated `failed` (validation was skipped), or when the
-  validator found no present outputs (none declared as
-  satisfied).
+  validator determined were present-and-satisfied. The index is
+  populated **whatever the node's terminal status**: a
+  `succeeded` node, a node the validator overrode to `failed`
+  for a missing required output (the partial index), and a node
+  that terminated `failed` on its own (sentinel failure, non-zero
+  exit, executor error) all carry the outputs that landed.
+- `null` — when the node declared no `outputs:`, or when the
+  validator found no present-and-satisfied outputs.
 
 The field SHALL be added to the snapshot the runner passes
 through the run context as `ctx.priorResults`. Downstream nodes
 (in the same run) consume it via the `priorResults.<id>.outputs.<key>`
 template token (per the modified "Brief token substitution"
-requirement below).
+requirement below), and can read the producing node's terminal
+status via the `priorResults.<id>.status` token (per the
+"Prior-result status and reason tokens" requirement) to decide how
+to treat what they read.
 
 #### Scenario: NodeResult carries outputs index on success
 
@@ -1234,10 +1298,21 @@ requirement below).
   as a `NodeOutputIndex` containing both keys with `type`,
   `path`, `size`, `mtime` populated
 
+#### Scenario: NodeResult carries outputs index on failure
+
+- **WHEN** node `evaluate` declares `result` as a value output,
+  writes a parseable `result.json`, and terminates `failed` with
+  a sentinel reason
+- **THEN** the `priorResults` entry for `evaluate` has `outputs`
+  as a `NodeOutputIndex` containing `result`, and a downstream
+  node reached via `on_failure` whose prompt contains
+  `{{ priorResults.evaluate.outputs.result:read }}` receives the
+  file's contents inline
+
 #### Scenario: NodeResult.outputs is null on failure
 
-- **WHEN** node `verify` declares outputs and terminates
-  `failed` for any reason
+- **WHEN** node `verify` declares outputs, writes none of them,
+  and terminates `failed`
 - **THEN** the `priorResults` entry for `verify` has
   `outputs: null`
 
@@ -2107,4 +2182,57 @@ Nodes that declare no `resume:` SHALL be dispatched with
 - **THEN** the runner traverses the edge and schedules `recover`, and
   `recover`'s `priorResults` contains `apply`'s entry with
   `status: "failed"` and `reason: "resume_unavailable"`
+
+### Requirement: Prior-result status and reason tokens
+
+In addition to the `priorResults.<node-id>.outputs.<key>[:read]`
+forms (per the "Brief token substitution before node dispatch"
+requirement), the runner SHALL substitute two further tokens under the
+`priorResults` namespace, resolved against the same latest-iteration
+`Map<nodeId, NodeResult>`:
+
+- `priorResults.<node-id>.status`: substitute the latest entry's
+  `status` — the literal string `succeeded` or `failed`.
+- `priorResults.<node-id>.reason`: substitute the latest entry's
+  `reason` string verbatim (the sentinel REASON,
+  `missing_required_output`, `resume_unavailable`,
+  `resume_unsupported`). When `reason` is `null`, substitute the empty
+  string.
+
+When the named node has no prior result in this run, both tokens
+SHALL substitute the empty string (the same convention as a missing
+output key). These tokens are resolved at dispatch time only; the
+load-time inputs pass SHALL leave them verbatim, so a token supplied
+through a `uses:` node's `inputs:` reaches the dispatch pass intact.
+
+#### Scenario: `{{ priorResults.<id>.status }}` on a failed source
+
+- **WHEN** node `evaluate` terminates `failed` with sentinel REASON
+  `"revise: two criteria unmet"` and node `implement` (reached via
+  `on_failure`) has `with.prompt`
+  `"evaluate ended {{ priorResults.evaluate.status }}: {{ priorResults.evaluate.reason }}"`
+- **THEN** the executor receives the prompt
+  `"evaluate ended failed: revise: two criteria unmet"`
+
+#### Scenario: `{{ priorResults.<id>.status }}` on a succeeded source with null reason
+
+- **WHEN** node `plan` terminates `succeeded` with no sentinel REASON
+  and a downstream prompt is
+  `"{{ priorResults.plan.status }}/{{ priorResults.plan.reason }}"`
+- **THEN** the executor receives `"succeeded/"`
+
+#### Scenario: Status token with no prior result substitutes empty
+
+- **WHEN** a prompt references `{{ priorResults.nonexistent.status }}`
+  and no node `nonexistent` has run
+- **THEN** the token substitutes the empty string
+
+#### Scenario: Status token passes through a `uses:` node's inputs
+
+- **WHEN** a `uses:` node supplies
+  `inputs: { verdict: "{{ priorResults.evaluate.status }}" }` to a
+  step whose body contains `{{ inputs.verdict }}`
+- **THEN** the inlined prompt still contains the literal
+  `{{ priorResults.evaluate.status }}` after load, and the dispatch
+  pass resolves it to `evaluate`'s latest status
 

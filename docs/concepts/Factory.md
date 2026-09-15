@@ -106,7 +106,13 @@ Recognized namespaces:
   substitutes the absolute filesystem path; the `:read` suffix inlines
   the file's contents (64 KB cap; throws on oversize or directory
   outputs). Missing prior result or missing key substitutes the empty
-  string.
+  string. Outputs are addressable whether `<node-id>` succeeded or
+  failed ([[0041-Failed-Node-Outputs]]).
+- `priorResults.<node-id>.status` / `priorResults.<node-id>.reason` —
+  the latest iteration's terminal status (`succeeded` | `failed`) and
+  recorded reason (empty when `null`; empty when the node has no prior
+  result). Lets an `on_failure` target branch on the verdict it was
+  reached by.
 - `inputs.*` — sourced from the per-node inputs map produced by step
   inlining. Only present on nodes that were inlined from a [[Step]] via
   `uses:`. Strings substitute verbatim; numbers/booleans via
