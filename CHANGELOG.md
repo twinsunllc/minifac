@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Resume a run at one node** (SCARIFW-1285,
+  [ADR 0042](docs/decisions/0042-Resume-At-Node.md)). A node that
+  escalates fails with no `on_failure` edge, so the run ends naming
+  that node and its `REASON` line is the ask — and until now there was
+  no way back in. `RunOptions.resume = { at, priorResults, iterations,
+  feedback }` seeds the queue with the named node ALONE (no declared
+  start node runs), rehydrates the parked run's prior results and
+  per-node iteration counters, and delivers the human's answer twice:
+  as the new `{{ run.feedback }}` token for the whole run, and as a
+  delimited `## Human answer (resume)` block appended to the seeded
+  dispatch's prompt only. The seed is exempt from the resumed node's
+  `max_iterations` and spends no `max_traversals` slot — the ask is not
+  a cycle — while every dispatch after it is checked normally.
+  `minifac run --resume <run> --at <node> [--feedback <file>]` builds
+  that state from `runs.db` and continues the SAME run row in its
+  recorded worktree and branch: no second run, no new worktree, no
+  lockfile. `RunStore` gains two optional methods
+  (`getNodeExecutions`, `reopenRun`) and `GetEventsOptions` a `kind`
+  filter; both methods are optional so a structurally-typed adapter
+  keeps compiling. Edge-traversal counters deliberately start fresh for
+  the resumed segment — the consequence is stated in the ADR, and
+  persisting them was deferred.
 - **Declared start nodes** (#36, #50,
   [ADR 0040](docs/decisions/0040-Declared-Start-Nodes.md)). A start node
   is a node with no inbound edge from another node, of any kind, or one

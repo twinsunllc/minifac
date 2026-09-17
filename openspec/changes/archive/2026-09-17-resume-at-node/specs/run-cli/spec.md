@@ -1,0 +1,556 @@
+## ADDED Requirements
+
+### Requirement: `minifac run --resume` resumes a recorded run at one node
+
+The `run` subcommand SHALL accept three further flags:
+
+- `--resume <run>` — a run id, or a prefix of at least 6 characters of
+  one (hex digits and hyphens, so a whole UUID copied out of
+  `minifac runs` is accepted);
+- `--at <node>` — the node to resume at;
+- `--feedback <file>` — a file whose contents are the human's answer.
+
+`--resume` SHALL be mutually exclusive with the positional `<thing>`
+argument: a caller who supplied both has two different runs in mind
+and only one of them can happen. `--in-place`, `--force`,
+`--require-clean` and `--factory` SHALL each be refused with
+`--resume`, naming the flag; a resumed run cuts no worktree, gates no
+brief and continues the factory it already ran. `--at` and
+`--feedback` without `--resume` SHALL be refused naming both flags.
+
+When the invocation is accepted the CLI SHALL:
+
+1. Resolve `--resume` to exactly one run row by id prefix, with no
+   change-name fallback and with no status filter — a parked run is a
+   FAILED run, so refusing to resume one would refuse every case this
+   exists for.
+2. Use the run's recorded `worktree_path` as the run cwd and its
+   recorded `branch_name` as the branch. No worktree SHALL be
+   created, no lazy prune SHALL run, and no per-change lockfile SHALL
+   be claimed.
+3. Load the factory from the run's recorded `factory_path`, and
+   reload the run's brief by its recorded `change` when it has one so
+   `{{ brief.* }}` still binds. A brief that can no longer be loaded
+   SHALL be a warning on stderr, not a refusal.
+4. Rebuild the run's `ResumeState` from the store (per the
+   `run-storage` capability's "Resume-state reconstruction"
+   requirement) and call the runner with it and with the ORIGINAL run
+   id, so the resumed dispatches append to the same `runs` row.
+5. Exit `0` on a succeeded run, `3` on `budget_exhausted`, and `2`
+   otherwise — the existing `run` exit-code contract.
+
+Each of the following SHALL exit non-zero with a single sentence on
+stderr naming the problem, having dispatched nothing:
+
+- `--resume` given without `--at`;
+- a `--resume` value that is not a run id or a run-id prefix;
+- a run-id prefix matching no run;
+- a run-id prefix matching more than one run (the message lists them);
+- an `--at` naming no node in the run's factory (the message lists the
+  factory's nodes);
+- a recorded `worktree_path` that no longer exists;
+- a `--feedback` path that cannot be read.
+
+#### Scenario: A recorded run is resumed at one node
+
+- **WHEN** `runs.db` holds a finished run of factory `scarif` whose
+  `plan` succeeded and whose `evaluate` failed, and the operator runs
+  `minifac run --resume <prefix> --at evaluate --feedback answer.txt`
+- **THEN** only `evaluate` is dispatched, its prompt carries the
+  answer, `runs.db` still holds exactly one run row for that id, and a
+  new `node_executions` row is appended for `evaluate` at the next
+  iteration
+
+#### Scenario: A missing `--at` is refused
+
+- **WHEN** the operator runs `minifac run --resume <prefix>`
+- **THEN** the CLI exits non-zero with a message stating that
+  `--resume` requires `--at <node>`
+
+#### Scenario: An ambiguous prefix is refused, listing the matches
+
+- **WHEN** two runs share the supplied prefix
+- **THEN** the CLI exits non-zero with a message naming the prefix as
+  ambiguous and listing both run ids
+
+#### Scenario: A vanished worktree is refused
+
+- **WHEN** the run's recorded `worktree_path` no longer exists
+- **THEN** the CLI exits non-zero with a message naming the path,
+  rather than resuming the node against a tree that never saw the
+  run's work
+
+#### Scenario: An unreadable feedback file is refused
+
+- **WHEN** `--feedback` names a path that cannot be read
+- **THEN** the CLI exits non-zero with a message naming the path
+
+## MODIFIED Requirements
+
+### Requirement: `minifac run` command
+
+The CLI SHALL expose a `run` subcommand that takes an OPTIONAL
+positional argument `<thing>`, an optional `--in-place` flag, an
+optional `--force` flag, an optional `--factory <name>` flag, and the
+`--resume` / `--at` / `--feedback` flags defined by the
+"`minifac run --resume` resumes a recorded run at one node"
+requirement. `<thing>` and `--resume` are mutually exclusive, and an
+invocation with neither SHALL exit `1` with a message naming both
+forms.
+
+When `<thing>` IS supplied, the CLI SHALL resolve it to a brief, a
+factory, or an error using the following lookup precedence, evaluated
+in order against the directory the CLI was invoked from (cwd):
+
+1. **Brief by path.** If `<thing>` contains a path separator OR ends
+   in `.md`, treat `<thing>` as a brief path. Resolve relative paths
+   against cwd, absolute paths verbatim. If the file does not exist,
+   exit `1` with an error naming the resolved path.
+2. **Brief by name.** Else, if `inputs/<thing>.md` exists in cwd, treat
+   it as a brief by name and load it via that path.
+3. **Factory by name.** Else, treat the run as a brief-less factory
+   invocation. Resolve `<thing>` as a factory name using the
+   precedence defined below; if neither candidate exists, fall
+   through to step 4.
+4. **Else.** Write an error to stderr explaining that `<thing>` could
+   not be resolved as a brief path, brief name, or factory name and
+   exit `1`.
+
+**Factory-by-name resolution** (used by step 3 above, by the brief's
+`factory:` field when the brief is loaded via step 1 or 2, AND by
+the `--factory <name>` flag value when supplied) SHALL accept two
+forms:
+
+- `minifac:<name>` — the `minifac:` prefix SHALL skip the local
+  lookup and resolve via the install-root-first / source-tree-
+  fallback two-step lookup:
+    1. `<install-root>/examples/<name>.yaml`, where `<install-root>`
+       is the directory containing the running runner's `package.json`.
+    2. `<cwd>/examples/<name>.yaml`.
+  The first existing file wins. When running from the minifac source
+  tree, the two paths collapse to the same file. The local
+  `.minifac/factories/<name>.yaml` SHALL NOT be consulted for
+  `minifac:<name>` references.
+- `<name>` (no prefix) — try, in order:
+    1. `<cwd>/.minifac/factories/<name>.yaml`;
+    2. `<cwd>/workflows/<name>.yaml`, only when `<cwd>` is a factory
+       repo (its root carries `factory.yaml`, per the
+       `library-resolution` capability);
+    3. `<library-root>/workflows/<name>.yaml`, only when the project
+       declares a library (per the `library-resolution` capability),
+       where `<library-root>` is the library's tree at the pinned sha;
+    4. `<cwd>/examples/<name>.yaml`.
+  A bare `<name>` lookup SHALL NOT consult the install root. A
+  `<name>` lookup succeeds at whichever candidate exists first; if
+  none exists, factory-by-name resolution fails. Reading the
+  project's library for step 3 fetches and verifies the pin, so a
+  branch, abbreviated, or stale pin SHALL fail resolution with the
+  pin error rather than reading as a missing factory.
+
+A brief whose `factory:` field uses the `minifac:` prefix SHALL
+resolve via the install-root-first lookup even when an equally-named
+`.minifac/factories/<name>.yaml` exists. A brief whose `factory:`
+field is a bare `<name>` SHALL prefer the local file when present
+and SHALL NOT consult the install root. The same precedence applies
+to the `--factory` flag value.
+
+When a brief is resolved (steps 1 or 2), the CLI SHALL further
+resolve the brief's frontmatter `factory:` field using the same
+factory-by-name resolution above. A brief whose `factory:` field
+does not resolve to any candidate path SHALL exit `1` with an error
+naming the missing factory and, for the `minifac:<name>` form, both
+paths tried (install-root and source-tree); for the bare `<name>`
+form, every path tried in order (local `.minifac/factories/`, the
+factory repo's `workflows/` and the library's `workflows/` when those
+layers apply, and source-tree `examples/`).
+
+**`--factory <name>` override.** When `--factory <name>` is
+supplied (steps 1 or 2 — i.e. a brief-driven invocation), the flag
+value SHALL replace the brief's `factory:` field for this
+invocation. The brief file SHALL NOT be modified. The flag value
+SHALL be resolved through the same factory-by-name resolution
+above and SHALL be subject to the same error contract: a flag
+value that does not resolve to any candidate path SHALL exit `1`
+with an error naming the unresolved value and both paths tried for
+that form. The override SHALL take effect *before* the
+factory's `brief:` mode is enforced and before the lockfile key is
+derived. When `--factory` is not supplied, behavior is unchanged
+from the brief's declared factory. The `--factory` flag on a
+brief-less factory invocation (step 3) SHALL be a usage error
+(exit `1`) with a stderr message naming the conflict
+("--factory is only meaningful with a brief; <thing> resolved as
+a factory invocation"), since brief-less runs already name the
+factory positionally.
+
+The CLI SHALL enforce the factory's declared brief mode (per the
+`factory-schema` capability's "Factory brief-mode declaration"
+requirement) before any node executes:
+
+- `brief: "required"` invoked without a brief (step 3 resolution) →
+  exit `1` with a message naming the factory and instructing the user
+  to invoke with a brief.
+- `brief: "none"` invoked with a brief (step 1 or 2 resolution) →
+  exit `1` with a message naming the factory and the conflict.
+- `brief: "optional"` → accept either invocation mode.
+
+Direct invocation by factory YAML path (e.g. `minifac run
+examples/sdd.yaml`) SHALL NOT be supported. A `.yaml` or `.yml`
+extension on `<thing>` falls into step 1 (treated as a brief path),
+which will fail to parse as a brief; the CLI SHALL exit `1` with the
+brief-load error in that case, surfacing the misuse directly.
+
+When a brief is resolved (steps 1 or 2), the CLI SHALL — before any
+worktree creation, lockfile claim, or node execution — compute the
+brief's state via the `brief-state` capability's "Combined brief
+state and dep satisfaction" requirement. If the computed state is
+`blocked` and `--force` was NOT supplied, the CLI SHALL exit `1`
+with a stderr message naming each unsatisfied dep and its current
+doneness. If the computed state is `blocked` and `--force` WAS
+supplied, the CLI SHALL emit a single stderr warning line naming
+the overridden deps and proceed. If `computeBriefState` throws a
+cycle error, the CLI SHALL exit `1` with a stderr message naming
+the full cycle regardless of `--force`.
+
+After resolution succeeds, and before any node executes, the CLI
+SHALL sequence the run as follows:
+
+1. Determine **mode**: `in-place` if `--in-place` is supplied OR (a
+   brief is resolved AND its frontmatter declares
+   `mode: "in-place"`); otherwise `worktree`.
+2. Load worktree-management configuration (per the
+   `worktree-management` capability's "Optional configuration files"
+   requirement).
+3. If mode is `worktree`, run the lazy-prune pass (per the
+   `worktree-management` capability's "Lazy-prune at `minifac run`
+   start" requirement).
+4. Claim the per-key lockfile (per the `worktree-management`
+   capability's "Per-key lockfile with PID-bearing claim"
+   requirement). The lock key SHALL be derived as follows:
+   - For brief-driven runs:
+     `<repo-hash>-<change>-<factory-name>`, where `<factory-name>`
+     is the loaded factory's top-level `name` field (which reflects
+     the `--factory` override when supplied, else the brief's
+     declared factory).
+   - For brief-less factory runs:
+     `<repo-hash>-<factory-name>-<timestamp>` (unchanged).
+5. If mode is `worktree`, create the worktree via
+   `git worktree add` (per the `worktree-management` capability's
+   "Worktree creation via git worktree" requirement). Set the run's
+   `runCwd` to the resolved worktree path.
+6. If mode is `in-place`, skip worktree creation. Set the run's
+   `runCwd` to `process.cwd()`.
+7. Invoke the runner, passing `runCwd` (per the `graph-runner`
+   capability's "Run-level cwd resolution" requirement) and the
+   brief (when resolved).
+8. On any run termination (success or failure), in a `try/finally`:
+   - If the terminal status is not `succeeded`, append a journal
+     entry per the `worktree-management` capability's "Failed-run
+     journal" requirement.
+   - Release the lockfile.
+   - Emit a single final stderr line that names the run's
+     `runCwd` (the worktree path or the in-place cwd) and the
+     terminal run status, so the operator knows where the work
+     landed.
+
+The runner streams node events to the terminal per the existing
+event-output requirement, which is unchanged by this revision. The
+final stderr summary line is in addition to the existing per-event
+output, not a replacement for it.
+
+The factory actually used for the run (overridden or default)
+SHALL be recorded in the persisted run row's `factoryName` and
+`factoryPath` columns (per the `run-storage` capability), so
+listings (`minifac runs --change <change>`) accurately reflect
+which factory produced which branch.
+
+#### Scenario: Brief by path loads and runs
+
+- **WHEN** the user invokes `minifac run inputs/foo.md` and that file
+  is a valid brief whose `factory:` resolves to `examples/sdd.yaml`
+- **THEN** the CLI loads the brief, loads `examples/sdd.yaml`, claims
+  a lock, creates a worktree, and runs the factory with the brief in
+  scope and `runCwd` set to the worktree path; streaming output
+  begins before the process exits
+
+#### Scenario: Brief by bare name resolves via inputs/<name>.md
+
+- **WHEN** the user invokes `minifac run my-change` and
+  `inputs/my-change.md` exists as a valid brief
+- **THEN** the CLI loads that brief, resolves its factory by name,
+  claims a lock, creates a worktree, and runs the factory with the
+  brief in scope and `runCwd` set to the worktree path
+
+#### Scenario: Factory by bare name runs brief-less
+
+- **WHEN** the user invokes `minifac run hello`,
+  `inputs/hello.md` does not exist, `examples/hello.yaml` exists, and
+  `examples/hello.yaml` declares `brief: "none"`
+- **THEN** the CLI loads `examples/hello.yaml`, claims a lock keyed
+  on `<repo-hash>-hello-<timestamp>`, creates a worktree at that
+  same key, and runs the factory with `runCwd` set to the worktree
+  path; streaming output begins before the process exits
+
+#### Scenario: Brief takes precedence over a same-named factory
+
+- **WHEN** both `inputs/sdd.md` and `examples/sdd.yaml` exist and the
+  user invokes `minifac run sdd`
+- **THEN** the CLI loads `inputs/sdd.md` (step 2) and ignores
+  `examples/sdd.yaml` at the top-level lookup; the factory is then
+  resolved through the brief's `factory:` field
+
+#### Scenario: Brief-required factory invoked brief-less is rejected
+
+- **WHEN** the user invokes `minifac run sdd`, `inputs/sdd.md` does
+  not exist, and `examples/sdd.yaml` declares `brief: "required"`
+- **THEN** the CLI exits `1` writing an error that names the factory
+  and indicates a brief is required; no worktree is created, no
+  lock is claimed, and no node executes
+
+#### Scenario: Brief-none factory invoked with a brief is rejected
+
+- **WHEN** the user invokes `minifac run hello-brief` and
+  `inputs/hello-brief.md` is a brief whose `factory:` resolves to
+  `examples/hello.yaml`, which declares `brief: "none"`
+- **THEN** the CLI exits `1` writing an error naming the factory and
+  the conflict; no worktree is created, no lock is claimed, and no
+  node executes
+
+#### Scenario: Direct factory-YAML path is no longer supported
+
+- **WHEN** the user invokes `minifac run examples/sdd.yaml`
+- **THEN** the CLI treats the argument as a brief path (step 1), fails
+  to parse it as a brief, and exits `1` with the brief-load error
+
+#### Scenario: Missing thing reports a clear resolution error
+
+- **WHEN** the user invokes `minifac run nonexistent` and none of
+  `nonexistent`, `inputs/nonexistent.md`,
+  `.minifac/factories/nonexistent.yaml`, or
+  `examples/nonexistent.yaml` resolves
+- **THEN** the CLI writes an error to stderr explaining that
+  `nonexistent` could not be resolved as a brief path, brief name, or
+  factory name, and exits `1`
+
+#### Scenario: Brief whose factory does not resolve is rejected
+
+- **WHEN** the user invokes `minifac run inputs/foo.md`, the brief
+  loads cleanly, its `factory:` field is `nonexistent`, and neither
+  `.minifac/factories/nonexistent.yaml` nor
+  `examples/nonexistent.yaml` exists
+- **THEN** the CLI exits `1` with an error naming the missing factory
+
+#### Scenario: --in-place skips worktree creation
+
+- **WHEN** the user invokes `minifac run inputs/foo.md --in-place`
+- **THEN** the CLI claims a lock per the worktree-management
+  contract, does NOT invoke `git worktree add`, does NOT create
+  any directory under `worktrees_dir`, sets `runCwd` to
+  `process.cwd()`, and proceeds with the run
+
+#### Scenario: Brief mode: in-place sets in-place mode
+
+- **WHEN** the user invokes `minifac run inputs/foo.md` (no
+  `--in-place` flag) and `inputs/foo.md`'s frontmatter declares
+  `mode: in-place`
+- **THEN** the CLI treats the run as in-place: a lock is claimed,
+  no worktree is created, and `runCwd` is `process.cwd()`
+
+#### Scenario: Final stderr summary names runCwd and status
+
+- **WHEN** a run terminates (succeeded or failed)
+- **THEN** the CLI's final stderr line names the run's `runCwd`
+  (worktree path or in-place cwd) and the terminal run status
+
+#### Scenario: Failed worktree run appends to journal
+
+- **WHEN** a worktree-mode run terminates with status `failed`
+- **THEN** an entry is appended to `~/.minifac/failed-runs.json`
+  whose `worktreeDir` is the worktree path of this run and whose
+  `status` is `failed`
+
+#### Scenario: Failed in-place run appends to journal
+
+- **WHEN** an in-place run terminates with status `failed`
+- **THEN** an entry is appended to `~/.minifac/failed-runs.json`
+  whose `worktreeDir` is `process.cwd()` at run time and whose
+  `status` is `failed`
+
+#### Scenario: Brief's bare `factory:` prefers local custom over built-in
+
+- **WHEN** the user invokes `minifac run inputs/foo.md`, the brief's
+  frontmatter declares `factory: sdd`, and both
+  `.minifac/factories/sdd.yaml` and `examples/sdd.yaml` exist
+- **THEN** the CLI loads `.minifac/factories/sdd.yaml` (the local
+  custom factory), not `examples/sdd.yaml`
+
+#### Scenario: Brief's bare `factory:` falls back to source-tree built-in
+
+- **WHEN** the user invokes `minifac run inputs/foo.md`, the brief's
+  frontmatter declares `factory: sdd`,
+  `.minifac/factories/sdd.yaml` does not exist, and
+  `<cwd>/examples/sdd.yaml` exists
+- **THEN** the CLI loads `<cwd>/examples/sdd.yaml`; the install
+  root is NOT consulted for bare references
+
+#### Scenario: Brief's `minifac:<name>` resolves from install root first
+
+- **WHEN** the user invokes `minifac run inputs/foo.md`, the brief's
+  frontmatter declares `factory: minifac:sdd`,
+  `<install-root>/examples/sdd.yaml` exists, and both
+  `.minifac/factories/sdd.yaml` and `<cwd>/examples/sdd.yaml` exist
+- **THEN** the CLI loads `<install-root>/examples/sdd.yaml`; the
+  local file and the source-tree `examples/` are not consulted
+
+#### Scenario: Brief's `minifac:<name>` falls back to source-tree
+
+- **WHEN** the user invokes `minifac run inputs/foo.md`, the brief's
+  frontmatter declares `factory: minifac:sdd`,
+  `<install-root>/examples/sdd.yaml` does not exist, and
+  `<cwd>/examples/sdd.yaml` exists
+- **THEN** the CLI loads `<cwd>/examples/sdd.yaml`
+
+#### Scenario: Brief's `minifac:<name>` with no matching built-in fails
+
+- **WHEN** the user invokes `minifac run inputs/foo.md`, the brief's
+  frontmatter declares `factory: minifac:nonexistent`, neither
+  `<install-root>/examples/nonexistent.yaml` nor
+  `<cwd>/examples/nonexistent.yaml` exists
+- **THEN** the CLI exits `1` with an error naming
+  `minifac:nonexistent` and both absolute paths tried, even if a
+  `.minifac/factories/nonexistent.yaml` happens to exist
+
+#### Scenario: Brief-less factory by name resolves from local first
+
+- **WHEN** the user invokes `minifac run sdd-fast`,
+  `inputs/sdd-fast.md` does not exist, and
+  `.minifac/factories/sdd-fast.yaml` exists
+- **THEN** the CLI loads `.minifac/factories/sdd-fast.yaml` as a
+  brief-less factory invocation; `examples/sdd-fast.yaml` (if any)
+  is not consulted
+
+#### Scenario: Blocked brief is refused before worktree creation
+
+- **WHEN** the user invokes `minifac run foo`, `inputs/foo.md`
+  declares `depends_on: [bar]`, and `inputs/bar.md` exists
+  (so `bar` is active, not done)
+- **THEN** the CLI exits `1` with a stderr message naming `bar`
+  and its current doneness (`active`); no lockfile is claimed,
+  no worktree is created, and no node executes
+
+#### Scenario: Missing dep is refused before worktree creation
+
+- **WHEN** the user invokes `minifac run foo`, `inputs/foo.md`
+  declares `depends_on: [bar]`, and neither `inputs/bar.md` nor
+  `inputs/done/bar.md` exists
+- **THEN** the CLI exits `1` with a stderr message naming `bar`
+  and the doneness `missing`; no worktree is created
+
+#### Scenario: Satisfied deps proceed normally
+
+- **WHEN** the user invokes `minifac run foo`, `inputs/foo.md`
+  declares `depends_on: [bar]`, and `inputs/done/bar.md` exists
+- **THEN** the CLI proceeds with normal `run` sequencing (lock,
+  worktree, runner) as if `depends_on` were empty
+
+#### Scenario: --force overrides a blocked brief
+
+- **WHEN** the user invokes `minifac run foo --force`,
+  `inputs/foo.md` declares `depends_on: [bar]`, and `bar` is not
+  done
+- **THEN** the CLI writes a single stderr warning naming the
+  overridden deps and proceeds with the run (lock, worktree,
+  runner)
+
+#### Scenario: Dependency cycle is refused even with --force
+
+- **WHEN** the user invokes `minifac run foo` (with or without
+  `--force`), `inputs/foo.md` declares `depends_on: [bar]`, and
+  `inputs/bar.md` declares `depends_on: [foo]`
+- **THEN** the CLI exits `1` with a stderr message naming the full
+  cycle (`foo -> bar -> foo`); no worktree is created and no node
+  executes
+
+#### Scenario: --factory override replaces the brief's declared factory
+
+- **WHEN** the user invokes `minifac run foo --factory bar`,
+  `inputs/foo.md` declares `factory: sdd`, and
+  `examples/bar.yaml` exists (no `.minifac/factories/bar.yaml`)
+- **THEN** the CLI loads `examples/bar.yaml` (not
+  `examples/sdd.yaml`), the persisted run row's `factoryName` is
+  `bar`, and `inputs/foo.md` is unchanged on disk
+
+#### Scenario: --factory with `minifac:` prefix forces built-in via install root
+
+- **WHEN** the user invokes `minifac run foo --factory minifac:sdd`,
+  `<install-root>/examples/sdd.yaml` exists, and both
+  `.minifac/factories/sdd.yaml` and `<cwd>/examples/sdd.yaml` exist
+- **THEN** the CLI loads `<install-root>/examples/sdd.yaml`,
+  ignoring the local file and the source-tree `examples/`; the run
+  row's `factoryName` is `sdd` and `factoryPath` resolves to the
+  install-root file
+
+#### Scenario: --factory with unknown name is rejected
+
+- **WHEN** the user invokes `minifac run foo --factory nonexistent`
+  and neither `.minifac/factories/nonexistent.yaml` nor
+  `examples/nonexistent.yaml` exists
+- **THEN** the CLI exits `1` with a stderr message naming
+  `nonexistent` and both paths tried (matching the error shape
+  produced when a brief's `factory:` field cannot be resolved); no
+  worktree is created, no lock is claimed
+
+#### Scenario: --factory with `minifac:<name>` and no built-in is rejected
+
+- **WHEN** the user invokes `minifac run foo
+  --factory minifac:nonexistent`, neither
+  `<install-root>/examples/nonexistent.yaml` nor
+  `<cwd>/examples/nonexistent.yaml` exists
+- **THEN** the CLI exits `1` with a stderr message naming
+  `minifac:nonexistent` and both absolute paths tried, in order;
+  the local `.minifac/factories/nonexistent.yaml` (if any) is not
+  consulted
+
+#### Scenario: --factory on a brief-less invocation is a usage error
+
+- **WHEN** the user invokes `minifac run hello --factory sdd`,
+  `inputs/hello.md` does not exist, `examples/hello.yaml` exists,
+  and the invocation would otherwise resolve as a brief-less
+  factory run
+- **THEN** the CLI exits `1` with a stderr message naming the
+  conflict (`--factory` is only meaningful with a brief); no
+  worktree is created, no lock is claimed
+
+#### Scenario: Factory repo resolves a bare name from root workflows/
+
+- **WHEN** `<cwd>` carries `factory.yaml` and `workflows/impl.yaml`,
+  there is no `.minifac/factories/impl.yaml`, and a brief declares
+  `factory: impl`
+- **THEN** the CLI resolves the factory to `<cwd>/workflows/impl.yaml`
+
+#### Scenario: Root workflows/ is ignored outside a factory repo
+
+- **WHEN** `<cwd>` has `workflows/impl.yaml` but no `factory.yaml`, and
+  nothing else named `impl` resolves
+- **THEN** factory-by-name resolution of `impl` fails
+
+#### Scenario: A bare name falls back to the library's workflow
+
+- **WHEN** the project pins a library whose tree has
+  `workflows/standard.yaml`, and no local candidate named `standard`
+  exists
+- **THEN** the CLI resolves `standard` to the library's
+  `workflows/standard.yaml` at the pinned sha
+
+#### Scenario: A bad pin is reported as a pin error
+
+- **WHEN** the project's `library.ref` is a branch name and the user
+  invokes `minifac run standard`
+- **THEN** the CLI exits `1` with an error naming the non-immutable
+  ref, not a "could not resolve" error
+
+#### Scenario: Neither an argument nor `--resume`
+
+- **WHEN** the operator runs `minifac run` with no positional
+  argument and no `--resume`
+- **THEN** the CLI exits `1` with a message naming both the
+  brief/factory argument and `--resume <run> --at <node>`

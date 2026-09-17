@@ -117,6 +117,25 @@ describe("substitute (Substitutions record)", () => {
     expect(substitute("{{ env.HOME }}", { run: { cwd: "/x" } })).toBe("{{ env.HOME }}");
   });
 
+  // ADR 0042 — the human answer a resumed run carries.
+  it("substitutes {{ run.feedback }} with the answer", () => {
+    expect(substitute("answer: {{ run.feedback }}", { run: { feedback: "waive AC-13" } })).toBe(
+      "answer: waive AC-13",
+    );
+  });
+
+  it("substitutes {{ run.feedback }} to the empty string when the run has no answer", () => {
+    // NOT a pass-through, unlike the other run.* fields: a step binding this
+    // token is asking what the human said, and the literal token would read
+    // to the model as an instruction.
+    expect(substitute("answer=[{{ run.feedback }}]", { run: { cwd: "/x" } })).toBe("answer=[]");
+    expect(substitute("answer=[{{ run.feedback }}]", { run: { feedback: "" } })).toBe("answer=[]");
+  });
+
+  it("passes {{ run.feedback }} through verbatim when no run scope exists at all", () => {
+    expect(substitute("answer={{ run.feedback }}", {})).toBe("answer={{ run.feedback }}");
+  });
+
   it("substitutes {{ run.base_branch }} in with.base equivalent string", () => {
     expect(substitute("base={{ run.base_branch }}", { run: { base_branch: "main" } })).toBe(
       "base=main",

@@ -30,6 +30,7 @@ import type {
   GetEventsOptions,
   GetNodeOutputsFilter,
   ListRunsFilter,
+  NodeExecutionRow,
   NodeOutputIndex,
   NodeOutputRow,
   NodeOutputType,
@@ -253,6 +254,50 @@ export class SqliteRunStore implements RunStore {
     }));
   }
 
+  async getNodeExecutions(runId: RunId): Promise<NodeExecutionRow[]> {
+    const rows = this.db
+      .prepare(
+        `SELECT run_id, node_id, iteration, status, started_at, ended_at, session_id
+           FROM node_executions
+          WHERE run_id = ?
+          ORDER BY node_id ASC, iteration ASC`,
+      )
+      .all(runId) as Array<{
+      run_id: string;
+      node_id: string;
+      iteration: number;
+      status: string;
+      started_at: number;
+      ended_at: number | null;
+      session_id: string | null;
+    }>;
+    return rows.map((r) => ({
+      runId: r.run_id,
+      nodeId: r.node_id,
+      iteration: r.iteration,
+      status: r.status as NodeExecutionRow["status"],
+      startedAt: r.started_at,
+      endedAt: r.ended_at ?? null,
+      sessionId: r.session_id ?? null,
+    }));
+  }
+
+  /**
+   * Put a finished run back to `running` so a resumed segment appends to the
+   * same row. `ended_at`, `reason` and `proximate_node_id` are cleared
+   * because they describe a termination that is no longer the run's last
+   * word — `finalizeRun` writes the resumed segment's own at the end.
+   */
+  async reopenRun(runId: RunId): Promise<void> {
+    this.db
+      .prepare(
+        `UPDATE runs
+            SET status = 'running', reason = NULL, proximate_node_id = NULL, ended_at = NULL
+          WHERE id = ?`,
+      )
+      .run(runId);
+  }
+
   async deleteNodeOutputsForRun(runId: RunId): Promise<void> {
     this.db.prepare("DELETE FROM node_outputs WHERE run_id = ?").run(runId);
   }
@@ -304,6 +349,10 @@ export class SqliteRunStore implements RunStore {
     if (sinceSeq !== undefined) {
       sql += " AND seq > ?";
       args.push(sinceSeq);
+    }
+    if (opts?.kind !== undefined) {
+      sql += " AND kind = ?";
+      args.push(opts.kind);
     }
     sql += " ORDER BY seq ASC";
     if (limit !== undefined) {

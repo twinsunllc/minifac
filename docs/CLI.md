@@ -46,6 +46,7 @@ Options:
 
 ```
 minifac run [options] <thing>
+minifac run --resume <run> --at <node> [--feedback <file>]
 ```
 
 ### Description
@@ -71,7 +72,7 @@ Resolution order for `<thing>`:
 
 | Argument | Description |
 |---|---|
-| `<thing>` | Brief path, brief name (resolved under `inputs/`), or factory name |
+| `<thing>` | Brief path, brief name (resolved under `inputs/`), or factory name. Optional, and mutually exclusive with `--resume` |
 
 ### Options
 
@@ -83,12 +84,43 @@ Resolution order for `<thing>`:
 | `--force` | off | Override a blocked-deps refusal. Does **not** bypass cycle detection |
 | `--factory <name>` | (brief's declared factory) | Override the factory for this invocation. Only valid when `<thing>` resolves to a brief — see [[0020-Factory-Override-At-Invocation]] |
 | `--require-clean` | off | Refuse to run if the brief (or any `depends_on` ancestor) is uncommitted. No-op for brief-less factory invocations |
+| `--resume <run>` | — | Resume a recorded run at `--at` instead of starting a new one. Takes a run id or a prefix of at least 6 characters (hex digits and hyphens, so a whole id from `minifac runs` works) |
+| `--at <node>` | — | With `--resume`: the node to resume at. Required |
+| `--feedback <file>` | — | With `--resume`: a file whose contents are the human answer to deliver |
 
 `--raw` and `--tui` are mutually exclusive. When neither is passed, the
 TUI is used when stdout is a TTY; raw output is used otherwise (e.g. in CI).
 
 `--in-place` is also implied when the brief's own frontmatter sets
 `mode: "in-place"`.
+
+#### Resuming a parked run
+
+A node that escalates fails with no `on_failure` edge, so the run ends
+naming that node and its `REASON` line is the ask (see
+[[0042-Resume-At-Node]]). `--resume` is how the answer gets back in:
+
+```
+minifac run --resume 3f9a21 --at evaluate --feedback answer.txt
+```
+
+That dispatches `evaluate` ALONE — no declared start node runs — in the
+run's own recorded worktree and on its own branch, with the parked run's
+`priorResults` rehydrated so `{{ priorResults.<id>.outputs.<key>:read }}`,
+`.status` and `.reason` resolve exactly as they did. The answer arrives
+twice: as `{{ run.feedback }}` for the whole resumed run, and as a
+delimited `## Human answer (resume)` block appended to the seeded
+dispatch's prompt (and to that dispatch only).
+
+The seeded dispatch is exempt from the resumed node's `max_iterations`
+and spends no `max_traversals` slot — the ask is not a cycle. Every
+dispatch after it is checked normally against the rehydrated counters.
+
+The resumed dispatches append to the SAME `runs.db` row: no second run,
+no new worktree, no lazy prune, no lockfile. Refusals — an unknown or
+ambiguous run, a missing or unknown `--at`, a worktree that is gone, an
+unreadable `--feedback` file, `--resume` alongside `<thing>` — each exit
+non-zero with one sentence naming the problem.
 
 #### Brief cleanliness
 
@@ -108,7 +140,7 @@ and [[Auto-Mode]] → "Cleanliness gate".
 |---|---|
 | `0` | Run succeeded |
 | `1` | Usage error, resolution failure, lock conflict, or worktree setup failure |
-| `2` | Run failed (`node_failed`, `graph_drained`, `unknown_executor`, or `user_quit`) |
+| `2` | Run failed (`node_failed`, `graph_drained`, `unknown_executor`, `resume_unknown_node`, or `user_quit`) |
 | `3` | Run failed due to budget exhaustion (`budget_exhausted`) |
 
 ### Environment variables
@@ -136,6 +168,12 @@ Run a factory directly (no brief, no worktree branch tracking):
 
 ```
 minifac run sdd
+```
+
+Resume a parked run at the node that escalated, with the answer:
+
+```
+minifac run --resume 3f9a21 --at evaluate --feedback answer.txt
 ```
 
 ---

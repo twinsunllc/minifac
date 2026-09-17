@@ -21,6 +21,7 @@ import { type RunnerMcpServer, startRunnerMcpServer } from "./mcp-server.js";
 import { type MissingOutput, buildNudgeMessage } from "./nudge.js";
 import { type ValidateOutputsResult, validateDeclaredOutputs } from "./outputs.js";
 import type { ExecutionLogEntry, RunResult } from "./result.js";
+import { type ResumeState, humanAnswerBlock } from "./resume.js";
 import { type Substitutions, TemplateSubstitutionError, substitute } from "./substitute.js";
 
 export interface RunOptions {
@@ -51,10 +52,20 @@ export interface RunOptions {
    *  successful auto-merge. Defaults to `false` so manual `minifac run`
    *  callers retain today's behavior. */
   skipMarkDone?: boolean;
+  /** Resume this run at a named node instead of at the declared start nodes,
+   * with a parked run's results and iteration counts already in scope and a
+   * human's answer bound as feedback. See `./resume.ts` and
+   * `docs/decisions/0042-Resume-At-Node.md`. */
+  resume?: ResumeState;
 }
 
 interface QueueItem {
   nodeId: string;
+  /** True for the single dispatch a resumed run is seeded with. That dispatch
+   * is exempt from the node's `max_iterations` (a human answered; the ask is
+   * not a cycle) and carries the injected human-answer block. Every dispatch
+   * after it — including later iterations of the same node — is ordinary. */
+  resumeSeed?: boolean;
 }
 
 export async function runFactory(loaded: LoadedFactory, options: RunOptions): Promise<RunResult> {
@@ -62,12 +73,17 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
   const { registry, onEvent, brief, runCwd, runBaseBranch, store } = options;
   const baseSubs: Substitutions = {};
   if (brief) baseSubs.brief = brief;
-  const runScope: { cwd?: string; base_branch?: string } = {};
+  const resume = options.resume;
+  const runScope: { cwd?: string; base_branch?: string; feedback?: string } = {};
   if (runCwd !== undefined && runCwd.length > 0) runScope.cwd = runCwd;
   if (runBaseBranch !== undefined) runScope.base_branch = runBaseBranch;
-  if (runScope.cwd !== undefined || runScope.base_branch !== undefined) {
-    baseSubs.run = runScope;
-  }
+  // `{{ run.feedback }}` resolves for EVERY run, not only a resumed one: a
+  // step that binds it must never hand the model the literal token, and a
+  // run nobody answered has the empty answer. Set unconditionally so the
+  // run scope always exists for that token; the other `run.*` fields keep
+  // their pass-through-when-absent convention (see `substitute.ts`).
+  runScope.feedback = resume?.feedback ?? "";
+  baseSubs.run = runScope;
 
   const runStart = Date.now();
   const runId = options.runId ?? randomUUID();
@@ -153,18 +169,27 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
   try {
     if (store) {
       try {
-        await store.createRun({
-          id: runId,
-          factoryPath: sourcePath,
-          factoryName: factory.name,
-          briefPath: brief?.sourcePath ?? null,
-          change: brief?.frontmatter.change ?? null,
-          baseBranch: brief?.frontmatter.base_branch ?? null,
-          worktreePath: runCwd ?? null,
-          branchName: options.branchName ?? null,
-          library: loaded.library ?? null,
-          startedAt: runStart,
-        });
+        // A resumed run continues the row it already has. `reopenRun` puts it
+        // back to `running` and clears the termination that is no longer its
+        // last word; a store without the optional method (the droid's
+        // structurally-typed adapter) falls back to `createRun`, which is
+        // right there — it resumes under a fresh run id.
+        if (resume && typeof store.reopenRun === "function") {
+          await store.reopenRun(runId);
+        } else {
+          await store.createRun({
+            id: runId,
+            factoryPath: sourcePath,
+            factoryName: factory.name,
+            briefPath: brief?.sourcePath ?? null,
+            change: brief?.frontmatter.change ?? null,
+            baseBranch: brief?.frontmatter.base_branch ?? null,
+            worktreePath: runCwd ?? null,
+            branchName: options.branchName ?? null,
+            library: loaded.library ?? null,
+            startedAt: runStart,
+          });
+        }
       } catch (err) {
         reportStoreError(onEvent, runStart, err);
       }
@@ -207,13 +232,74 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
 
     let budgetHit = false;
 
-    // See `startNodeIds` in `../factory/start-nodes.ts`: no inbound edge
-    // from another node (any `when`), or `start: true`.
-    const startIds = startNodeIds(factory);
+    // Resumed run (ADR 0042): the queue is seeded with the named node alone
+    // and the parked run's state is rehydrated, so the resumed node's
+    // templates resolve `{{ priorResults.<id>.* }}` exactly as they did and
+    // its dispatch is numbered iteration n+1. Every declared start node is
+    // deliberately NOT dispatched: the human answered a question about one
+    // node, not a request to re-run the graph.
+    const queue: QueueItem[] = [];
+    let resumeFatal: RunResult | null = null;
+    if (resume) {
+      if (!factory.nodes[resume.at]) {
+        const known = Object.keys(factory.nodes).join(", ") || "none";
+        const line =
+          `resume_unknown_node: \`--at ${resume.at}\` names no node in factory ` +
+          `"${factory.name}" (nodes: ${known}); nothing was dispatched`;
+        const entry: EmittedEvent = {
+          nodeId: "__resume__",
+          iteration: 0,
+          emittedAt: Date.now() - runStart,
+          event: { kind: "stderr", line },
+        };
+        onEvent?.(entry);
+        await appendStoreEvent(null, 0, "stderr", entry.event, entry.emittedAt);
+        resumeFatal = {
+          status: "failed",
+          reason: "resume_unknown_node",
+          log,
+          durationMs: Date.now() - runStart,
+        };
+      } else {
+        for (const entry of resume.priorResults) {
+          priorResults.push(entry);
+          // A result implies its iteration was spent, whatever the supplied
+          // counts say. Taking the max of the two means a caller that hands
+          // over only `priorResults` still gets correct numbering.
+          const seen = iterations.get(entry.nodeId) ?? 0;
+          if (entry.iteration > seen) iterations.set(entry.nodeId, entry.iteration);
+        }
+        for (const [id, spent] of Object.entries(resume.iterations ?? {})) {
+          if (!factory.nodes[id]) continue;
+          if (!Number.isFinite(spent) || spent < 0) continue;
+          const seen = iterations.get(id) ?? 0;
+          if (spent > seen) iterations.set(id, Math.trunc(spent));
+        }
+        queue.push({ nodeId: resume.at, resumeSeed: true });
+        const answered = resume.feedback !== undefined && resume.feedback.length > 0;
+        const line = `resuming at node "${resume.at}" (iteration ${(iterations.get(resume.at) ?? 0) + 1}); the seed dispatch traverses no edge and is exempt from this node's max_iterations${answered ? "; a human answer is injected into its prompt" : ""}`;
+        const entry: EmittedEvent = {
+          nodeId: resume.at,
+          iteration: (iterations.get(resume.at) ?? 0) + 1,
+          emittedAt: Date.now() - runStart,
+          event: { kind: "runner-action", line },
+        };
+        onEvent?.(entry);
+        await appendStoreEvent(
+          resume.at,
+          entry.iteration,
+          "runner-action",
+          entry.event,
+          entry.emittedAt,
+        );
+      }
+    } else {
+      // See `startNodeIds` in `../factory/start-nodes.ts`: no inbound edge
+      // from another node (any `when`), or `start: true`.
+      for (const id of startNodeIds(factory)) queue.push({ nodeId: id });
+    }
 
-    const queue: QueueItem[] = startIds.map((id) => ({ nodeId: id }));
-
-    let result: RunResult | null = null;
+    let result: RunResult | null = resumeFatal;
 
     const resolveCwd = (
       nodeCwd: string | undefined,
@@ -253,8 +339,18 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
       const node = factory.nodes[nodeId];
       if (!node) continue;
 
+      // The resumed seed is exempt: the run was parked BECAUSE this node
+      // escalated, so its budget is typically already spent, and refusing
+      // the answer the human just gave would make the whole path useless.
+      // The exemption is one dispatch wide — a later iteration of the same
+      // node arrives through an edge and is checked normally, right here.
+      const isResumeSeed = next.resumeSeed === true;
       const usedIterations = iterations.get(nodeId) ?? 0;
-      if (node.max_iterations !== undefined && usedIterations >= node.max_iterations) {
+      if (
+        !isResumeSeed &&
+        node.max_iterations !== undefined &&
+        usedIterations >= node.max_iterations
+      ) {
         budgetHit = true;
         if (store) {
           try {
@@ -375,6 +471,27 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
           resolvedNode = { ...resolvedNode, with: nextWith };
         }
       }
+
+      // Resume answer delivery, second channel (ADR 0042). `{{ run.feedback }}`
+      // is the first, but the step library that would bind that token lives in
+      // another repository, so the answer also rides in as a delimited block
+      // the runner appends — ADR 0007's runner-injects precedent. Appended
+      // AFTER substitution, so nothing a human wrote is read as a template;
+      // and only on the seed, so a second iteration of the same node is not
+      // told the answer twice as though it were new.
+      if (isResumeSeed && resume?.feedback !== undefined && resume.feedback.length > 0) {
+        const currentWith = resolvedNode.with;
+        if (currentWith && typeof currentWith.prompt === "string") {
+          resolvedNode = {
+            ...resolvedNode,
+            with: {
+              ...currentWith,
+              prompt: `${currentWith.prompt}\n\n${humanAnswerBlock(resume.feedback)}`,
+            },
+          };
+        }
+      }
+
       const snapshot: readonly NodeResult[] = Object.freeze(priorResults.slice());
 
       // MCP integration. Per ADR-0029 D6, the runner consults the executor's

@@ -13,6 +13,16 @@ export type {
 } from "./executor/types.js";
 export { runFactory, type RunOptions } from "./runner/run.js";
 export {
+  HUMAN_ANSWER_HEADING,
+  humanAnswerBlock,
+  resumeStateFromStore,
+  ResumeStateError,
+  type NodeExecutionRow,
+  type ResumeReadStore,
+  type ResumeState,
+  type ResumeStateFromStoreInput,
+} from "./runner/resume.js";
+export {
   markBriefDone,
   type MarkBriefDoneInput,
   type MarkBriefDoneResult,

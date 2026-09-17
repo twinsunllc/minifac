@@ -21,6 +21,7 @@ import {
   resolveFactoryByName,
   resolveRunArg,
 } from "./cli/resolve.js";
+import { resumeRunAction } from "./cli/resume-run.js";
 import {
   catAction as runsCatAction,
   listAction as runsListAction,
@@ -155,7 +156,13 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
   program
     .command("run")
     .description("Run a factory by brief path, brief name, or factory name.")
-    .argument("<thing>", "brief path, brief name, or factory name")
+    .argument("[thing]", "brief path, brief name, or factory name")
+    .option(
+      "--resume <run>",
+      "Resume a finished run at --at instead of starting a new one (run id or >=6-hex prefix)",
+    )
+    .option("--at <node>", "With --resume: the node to resume at")
+    .option("--feedback <file>", "With --resume: file holding the human answer to deliver")
     .option("--in-place", "Skip worktree creation; run the factory in the current cwd")
     .option("--raw", "Force raw line-prefixed output even when stdout is a TTY")
     .option("--tui", "Force the interactive TUI even when stdout is not a TTY")
@@ -167,8 +174,11 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
     )
     .action(
       async (
-        arg: string,
+        arg: string | undefined,
         opts: {
+          resume?: string;
+          at?: string;
+          feedback?: string;
           inPlace?: boolean;
           raw?: boolean;
           tui?: boolean;
@@ -194,6 +204,84 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
           },
           io,
         );
+
+        // `--resume` is a different verb wearing the same command name: it
+        // takes a RUN, not a brief or a factory, and it neither cuts a
+        // worktree nor claims the per-change lockfile. Mutually exclusive with
+        // the argument forms rather than layered on top of them, because a
+        // caller who supplied both has two different runs in mind and only one
+        // of them can happen.
+        if (opts.resume !== undefined) {
+          if (arg !== undefined) {
+            io.stderr.write(
+              "--resume takes a run, not a brief or factory argument; drop one of the two.\n",
+            );
+            exitCode = 1;
+            return;
+          }
+          for (const [flag, value] of [
+            ["--in-place", opts.inPlace],
+            ["--force", opts.force],
+            ["--require-clean", opts.requireClean],
+          ] as const) {
+            if (value === true) {
+              io.stderr.write(`${flag} is not meaningful with --resume.\n`);
+              exitCode = 1;
+              return;
+            }
+          }
+          if (opts.factory !== undefined) {
+            io.stderr.write(
+              "--factory is not meaningful with --resume: a resumed run continues the factory it ran.\n",
+            );
+            exitCode = 1;
+            return;
+          }
+          let resumeStore: RunStore | undefined;
+          try {
+            resumeStore = await (io.openRunStore ?? openDefaultRunStore)(cwd);
+          } catch (err) {
+            io.stderr.write(`Could not open run history store: ${(err as Error).message}\n`);
+            exitCode = 1;
+            return;
+          }
+          try {
+            exitCode = await resumeRunAction({
+              runRef: opts.resume,
+              ...(opts.at !== undefined ? { at: opts.at } : {}),
+              ...(opts.feedback !== undefined ? { feedbackPath: opts.feedback } : {}),
+              cwd,
+              store: resumeStore,
+              registry: (io.buildRegistry ?? defaultRegistry)(),
+              stdout: io.stdout,
+              stderr: io.stderr,
+              onEvent: makeRawOnEvent(io),
+            });
+          } catch (err) {
+            describeError(err, io);
+            exitCode = 1;
+          } finally {
+            try {
+              await resumeStore.close();
+            } catch {
+              // best effort
+            }
+          }
+          return;
+        }
+
+        if (arg === undefined) {
+          io.stderr.write(
+            "minifac run needs a brief path, brief name, or factory name (or --resume <run> --at <node>).\n",
+          );
+          exitCode = 1;
+          return;
+        }
+        if (opts.at !== undefined || opts.feedback !== undefined) {
+          io.stderr.write("--at and --feedback are only meaningful with --resume.\n");
+          exitCode = 1;
+          return;
+        }
 
         try {
           const resolved = await resolveRunArg(arg, cwd);
