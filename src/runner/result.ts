@@ -12,6 +12,9 @@ export type RunStatus = "succeeded" | "failed";
  * - `graph_drained` — the queue drained naturally (no budget hits) without a
  *   terminal node succeeding. Almost always means the factory is mis-modeled.
  * - `unknown_executor` — a node referenced an `executor` not in the registry.
+ * - `resume_unknown_node` — a run was asked to resume at a node the factory
+ *   does not declare. Nothing is dispatched: seeding a run at a node nobody
+ *   named would run an arbitrary node against a human's answer.
  */
 export type RunReason =
   | "terminal_node_succeeded"
@@ -19,6 +22,7 @@ export type RunReason =
   | "budget_exhausted"
   | "graph_drained"
   | "unknown_executor"
+  | "resume_unknown_node"
   | "user_quit";
 
 export interface ExecutionLogEntry {

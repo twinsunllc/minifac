@@ -109,6 +109,22 @@ export interface StoredRun {
 export interface GetEventsOptions {
   sinceSeq?: number;
   limit?: number;
+  /** Return only events of this kind. A hint: an adapter that cannot filter
+   * MAY ignore it, so callers that need the guarantee filter again. The
+   * SQLite adapter pushes it into SQL, which is what keeps a resume-state
+   * rebuild off the whole (stdout-dominated) event log. */
+  kind?: StoredEventKind;
+}
+
+/** One `node_executions` row. Read back only by the resume-state rebuild. */
+export interface NodeExecutionRow {
+  runId: RunId;
+  nodeId: string;
+  iteration: number;
+  status: "running" | "succeeded" | "failed" | "skipped";
+  startedAt: number;
+  endedAt: number | null;
+  sessionId: string | null;
 }
 
 export interface NodeOutputRow {
@@ -152,4 +168,18 @@ export interface RunStore {
   /** Optional: delete `node_outputs` rows for a given run id. The SQLite
    * adapter implements this; in-memory test stubs may omit it. */
   deleteNodeOutputsForRun?(runId: RunId): Promise<void>;
+  /** Optional: every `node_executions` row of a run, ascending by node then
+   * iteration. Read by `resumeStateFromStore` to rebuild a finished run's
+   * `priorResults` and per-node iteration counts.
+   *
+   * OPTIONAL, like `deleteNodeOutputsForRun`, and for the same reason: the
+   * droid's structurally-typed adapter in twinsunllc/scarif-worker is
+   * assignable to this interface by shape alone, so a required method would
+   * break its build the moment this one shipped. */
+  getNodeExecutions?(runId: RunId): Promise<NodeExecutionRow[]>;
+  /** Optional: put a finished run back to `running`, clearing `ended_at`,
+   * `reason` and `proximate_node_id`, so a resumed segment appends to the
+   * same run row rather than opening a second one. A no-op when the run id
+   * is unknown. */
+  reopenRun?(runId: RunId): Promise<void>;
 }

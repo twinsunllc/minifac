@@ -2,15 +2,23 @@
 
 ## Purpose
 TBD - created by archiving change core-graph-runner. Update Purpose after archive.
+
 ## Requirements
+
 ### Requirement: `minifac run` command
 
-The CLI SHALL expose a `run` subcommand that takes a single positional
-argument `<thing>`, an optional `--in-place` flag, an optional
-`--force` flag, and an optional `--factory <name>` flag. The CLI
-SHALL resolve `<thing>` to a brief, a factory, or an error using the
-following lookup precedence, evaluated in order against the directory
-the CLI was invoked from (cwd):
+The CLI SHALL expose a `run` subcommand that takes an OPTIONAL
+positional argument `<thing>`, an optional `--in-place` flag, an
+optional `--force` flag, an optional `--factory <name>` flag, and the
+`--resume` / `--at` / `--feedback` flags defined by the
+"`minifac run --resume` resumes a recorded run at one node"
+requirement. `<thing>` and `--resume` are mutually exclusive, and an
+invocation with neither SHALL exit `1` with a message naming both
+forms.
+
+When `<thing>` IS supplied, the CLI SHALL resolve it to a brief, a
+factory, or an error using the following lookup precedence, evaluated
+in order against the directory the CLI was invoked from (cwd):
 
 1. **Brief by path.** If `<thing>` contains a path separator OR ends
    in `.md`, treat `<thing>` as a brief path. Resolve relative paths
@@ -457,6 +465,13 @@ which factory produced which branch.
   invokes `minifac run standard`
 - **THEN** the CLI exits `1` with an error naming the non-immutable
   ref, not a "could not resolve" error
+
+#### Scenario: Neither an argument nor `--resume`
+
+- **WHEN** the operator runs `minifac run` with no positional
+  argument and no `--resume`
+- **THEN** the CLI exits `1` with a message naming both the
+  brief/factory argument and `--resume <run> --at <node>`
 
 ### Requirement: Event output format
 
@@ -2374,3 +2389,87 @@ NOT print a separate error in that case.
 - **THEN** `--require-clean` is silently ignored (there is no
   brief to check), and the subcommand proceeds normally
 
+### Requirement: `minifac run --resume` resumes a recorded run at one node
+
+The `run` subcommand SHALL accept three further flags:
+
+- `--resume <run>` — a run id, or a prefix of at least 6 characters of
+  one (hex digits and hyphens, so a whole UUID copied out of
+  `minifac runs` is accepted);
+- `--at <node>` — the node to resume at;
+- `--feedback <file>` — a file whose contents are the human's answer.
+
+`--resume` SHALL be mutually exclusive with the positional `<thing>`
+argument: a caller who supplied both has two different runs in mind
+and only one of them can happen. `--in-place`, `--force`,
+`--require-clean` and `--factory` SHALL each be refused with
+`--resume`, naming the flag; a resumed run cuts no worktree, gates no
+brief and continues the factory it already ran. `--at` and
+`--feedback` without `--resume` SHALL be refused naming both flags.
+
+When the invocation is accepted the CLI SHALL:
+
+1. Resolve `--resume` to exactly one run row by id prefix, with no
+   change-name fallback and with no status filter — a parked run is a
+   FAILED run, so refusing to resume one would refuse every case this
+   exists for.
+2. Use the run's recorded `worktree_path` as the run cwd and its
+   recorded `branch_name` as the branch. No worktree SHALL be
+   created, no lazy prune SHALL run, and no per-change lockfile SHALL
+   be claimed.
+3. Load the factory from the run's recorded `factory_path`, and
+   reload the run's brief by its recorded `change` when it has one so
+   `{{ brief.* }}` still binds. A brief that can no longer be loaded
+   SHALL be a warning on stderr, not a refusal.
+4. Rebuild the run's `ResumeState` from the store (per the
+   `run-storage` capability's "Resume-state reconstruction"
+   requirement) and call the runner with it and with the ORIGINAL run
+   id, so the resumed dispatches append to the same `runs` row.
+5. Exit `0` on a succeeded run, `3` on `budget_exhausted`, and `2`
+   otherwise — the existing `run` exit-code contract.
+
+Each of the following SHALL exit non-zero with a single sentence on
+stderr naming the problem, having dispatched nothing:
+
+- `--resume` given without `--at`;
+- a `--resume` value that is not a run id or a run-id prefix;
+- a run-id prefix matching no run;
+- a run-id prefix matching more than one run (the message lists them);
+- an `--at` naming no node in the run's factory (the message lists the
+  factory's nodes);
+- a recorded `worktree_path` that no longer exists;
+- a `--feedback` path that cannot be read.
+
+#### Scenario: A recorded run is resumed at one node
+
+- **WHEN** `runs.db` holds a finished run of factory `scarif` whose
+  `plan` succeeded and whose `evaluate` failed, and the operator runs
+  `minifac run --resume <prefix> --at evaluate --feedback answer.txt`
+- **THEN** only `evaluate` is dispatched, its prompt carries the
+  answer, `runs.db` still holds exactly one run row for that id, and a
+  new `node_executions` row is appended for `evaluate` at the next
+  iteration
+
+#### Scenario: A missing `--at` is refused
+
+- **WHEN** the operator runs `minifac run --resume <prefix>`
+- **THEN** the CLI exits non-zero with a message stating that
+  `--resume` requires `--at <node>`
+
+#### Scenario: An ambiguous prefix is refused, listing the matches
+
+- **WHEN** two runs share the supplied prefix
+- **THEN** the CLI exits non-zero with a message naming the prefix as
+  ambiguous and listing both run ids
+
+#### Scenario: A vanished worktree is refused
+
+- **WHEN** the run's recorded `worktree_path` no longer exists
+- **THEN** the CLI exits non-zero with a message naming the path,
+  rather than resuming the node against a tree that never saw the
+  run's work
+
+#### Scenario: An unreadable feedback file is refused
+
+- **WHEN** `--feedback` names a path that cannot be read
+- **THEN** the CLI exits non-zero with a message naming the path

@@ -22,7 +22,7 @@ export interface Substitutions {
    * ones the caller actually has in scope. Tokens whose corresponding
    * field is absent pass through verbatim (matching the `brief.*`
    * convention). */
-  run?: { cwd?: string; outputsDir?: string; base_branch?: string };
+  run?: { cwd?: string; outputsDir?: string; base_branch?: string; feedback?: string };
   /** Per-node inputs map produced at step inlining time. Absent on inline
    * nodes (never inlined from a step). When absent, `{{ inputs.* }}`
    * tokens pass through verbatim. */
@@ -79,6 +79,15 @@ function substituteOnce(input: string, subs: Substitutions): string {
       }
       if (field === "base_branch") {
         return run.base_branch ?? match;
+      }
+      if (field === "feedback") {
+        // The human answer a resumed run carries (ADR 0042). The EMPTY STRING
+        // rather than a pass-through when absent: unlike `cwd` or
+        // `base_branch`, a step binding this token is asking "what did the
+        // human say", and "nobody said anything" is a real answer to that —
+        // handing the literal `{{ run.feedback }}` to the model instead would
+        // read as an instruction. Same convention as a missing `inputs.*` key.
+        return run.feedback ?? "";
       }
       return match;
     }
