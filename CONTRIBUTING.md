@@ -31,6 +31,11 @@ version:
 For tiny mechanical changes (typo fixes, doc tweaks, dependency
 bumps) the factory is overkill — a regular PR is fine.
 
+`CHANGELOG.md` is union-merged (`CHANGELOG.md merge=union` in the root
+`.gitattributes`), so two branches that each append a bullet under
+`[Unreleased]` merge and rebase without a conflict; a duplicate or
+oddly-ordered bullet left behind is tidied when a release is cut.
+
 ## GitHub Actions discipline
 
 We pin every `uses:` reference by full commit SHA, with a comment
