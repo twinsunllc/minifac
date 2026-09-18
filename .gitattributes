@@ -1,0 +1,8 @@
+# CHANGELOG.md is union-merged: when two branches each append a bullet under
+# `## [Unreleased]`, git keeps both sides' lines instead of writing conflict
+# markers (SCARIFW-1304). `union` is a built-in git merge driver, so there is no
+# merge.*.driver config and nothing for a contributor to install.
+#
+# Accepted tradeoff: union merge is line-wise, so it can leave a duplicate or
+# oddly-ordered bullet. Those are tidied when a release is cut.
+CHANGELOG.md merge=union

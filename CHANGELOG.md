@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+The `[Unreleased]` section is union-merged (`CHANGELOG.md merge=union` in
+`.gitattributes`), so two branches that each append a bullet merge without a
+conflict; a duplicate or oddly-ordered bullet is tidied when a release is cut.
+
 ## [Unreleased]
 
 ### Added
@@ -53,6 +57,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in-context history. The two nodes must share `cwd`; an unsatisfiable
   resume fails the dispatch before spawning. `runs.db` schema v4 records
   `node_executions.session_id`.
+
+### Changed
+
+- **`CHANGELOG.md` is union-merged** (SCARIFW-1304). Concurrent PRs each
+  append a bullet to the same `## [Unreleased]` block, git sees two
+  different lines added at the same position, and the conflict has to be
+  resolved by hand — always the same way, "keep both bullets". A new root
+  `.gitattributes` marks `CHANGELOG.md merge=union`, git's built-in
+  line-union driver, so there is no `merge.*.driver` config and nothing
+  for a contributor to install; it applies to `git rebase` as well as
+  `git merge`. `src/packaging/changelog-union-merge.test.ts` proves it by
+  execution rather than by reading the file: a throwaway repo in a temp
+  directory seeded with this repo's real `.gitattributes` bytes, two
+  branches inserting different bullets at the identical position, then
+  assertions that the merge exits 0 with both bullets, no conflict
+  markers and an empty unmerged index. The same helper then re-runs the
+  identical scenario with only the `merge=union` line stripped and
+  asserts it *does* conflict — the guard-deletion half, without which the
+  positive assertions would survive someone deleting the line. Every git
+  call is hermetic (`GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM`,
+  `GIT_ATTR_NOSYSTEM`, local identity, `commit.gpgsign=false`, hooks
+  disabled), the test is not env-gated, and it runs in the existing
+  `npm test` CI matrix. Accepted tradeoff, per the ticket: union merge is
+  line-wise, so it can leave a duplicate or oddly-ordered bullet, which
+  is tidied at release — no merge driver, changelog linter or
+  `changelog.d/` fragment scheme is added. `.gitattributes` is not in the
+  package `files` list, so nothing changes for consumers.
 
 ### Fixed
 
