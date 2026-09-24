@@ -42,6 +42,17 @@ export interface ResumeState {
   feedback?: string;
 }
 
+/**
+ * A follow-up run of earlier work (ADR 0043). The run starts at its declared
+ * start nodes as usual; this only changes what `{{ run.follow_up }}` and
+ * `{{ run.prior_asks }}` render. `priorAsks` is passed through as JSON
+ * without interpretation — its shape belongs to the caller (Scarif sends
+ * `{node_id, kind, answer, answered_at}` per answered ask).
+ */
+export interface FollowUpState {
+  priorAsks?: unknown[];
+}
+
 /** Heading of the block the runner appends to the seeded dispatch's prompt. */
 export const HUMAN_ANSWER_HEADING = "## Human answer (resume)";
 

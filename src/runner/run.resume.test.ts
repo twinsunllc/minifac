@@ -334,4 +334,104 @@ describe("runFactory with resume", () => {
 
     expect(exec.dispatches[0]?.iteration).toBe(4);
   });
+
+  // SCARIFW-1469 / ADR 0043. A revise that re-plans resumes at `plan`,
+  // upstream of the gate that asked. The gate is dispatched again (it is not
+  // skipped) and still sees the whole-run answer through `run.feedback`, but
+  // `run.resumed_at` names `plan`, not itself, and it gets no answer block.
+  it("re-dispatches a gate downstream of a re-plan seed with resumed_at naming the seed", async () => {
+    const factory: Factory = {
+      name: "f",
+      nodes: {
+        plan: { executor: "fake", with: { prompt: "plan it" } },
+        plan_gate: {
+          executor: "fake",
+          with: { prompt: "resumed_at=[{{ run.resumed_at }}] feedback=[{{ run.feedback }}]" },
+        },
+        implement: { executor: "fake", terminal: true },
+      },
+      edges: [
+        { from: "plan", to: "plan_gate", when: "on_success" },
+        { from: "plan_gate", to: "implement", when: "on_success" },
+      ],
+    };
+    const exec = new RecordingExecutor({});
+    const registry = new ExecutorRegistry();
+    registry.register(exec);
+
+    const result = await runFactory(wrap(factory), {
+      registry,
+      resume: {
+        at: "plan",
+        priorResults: [
+          priorResult({ nodeId: "plan" }),
+          priorResult({ nodeId: "plan_gate", status: "failed", reason: "escalated: too big" }),
+        ],
+        iterations: { plan: 1, plan_gate: 1 },
+        feedback: "only the API half",
+      },
+    });
+
+    expect(result.status).toBe("succeeded");
+    expect(exec.order()).toEqual(["plan", "plan_gate", "implement"]);
+    const [plan, gate] = exec.dispatches;
+    expect(plan?.iteration).toBe(2);
+    expect(plan?.prompt).toContain(HUMAN_ANSWER_HEADING);
+    expect(plan?.prompt).toContain("only the API half");
+    expect(gate?.iteration).toBe(2);
+    expect(gate?.prompt).toBe("resumed_at=[plan] feedback=[only the API half]");
+    expect(gate?.prompt).not.toContain(HUMAN_ANSWER_HEADING);
+  });
+
+  // SCARIFW-1469 item 1: Scarif defaults an empty approve to this text, and
+  // being non-empty it reaches the seed as a block like any other answer.
+  it("injects the answer block for Scarif's default approve text", async () => {
+    const factory: Factory = {
+      name: "f",
+      nodes: { implement: { executor: "fake", terminal: true, with: { prompt: "go" } } },
+      edges: [],
+    };
+    const exec = new RecordingExecutor({});
+    const registry = new ExecutorRegistry();
+    registry.register(exec);
+
+    await runFactory(wrap(factory), {
+      registry,
+      resume: { at: "implement", priorResults: [], feedback: "Approved by a human; proceed." },
+    });
+
+    expect(exec.dispatches[0]?.prompt).toContain(HUMAN_ANSWER_HEADING);
+    expect(exec.dispatches[0]?.prompt).toContain("Approved by a human; proceed.");
+  });
+
+  // SCARIFW-1469 item 3 / ADR 0043. A follow-up run starts at its start
+  // node as usual; the flag and the prior asks are what a gate reads to skip.
+  it("renders run.follow_up and run.prior_asks for a follow-up run, and the none-values otherwise", async () => {
+    const prompt = "fu={{ run.follow_up }} asks={{ run.prior_asks }} at=[{{ run.resumed_at }}]";
+    const factory: Factory = {
+      name: "f",
+      nodes: { plan: { executor: "fake", terminal: true, with: { prompt } } },
+      edges: [],
+    };
+    const priorAsks = [
+      {
+        node_id: "plan_gate",
+        kind: "escalation",
+        answer: "go",
+        answered_at: "2026-09-24T00:00:00Z",
+      },
+    ];
+
+    const followUp = new RecordingExecutor({});
+    const r1 = new ExecutorRegistry();
+    r1.register(followUp);
+    await runFactory(wrap(factory), { registry: r1, followUp: { priorAsks } });
+    expect(followUp.dispatches[0]?.prompt).toBe(`fu=true asks=${JSON.stringify(priorAsks)} at=[]`);
+
+    const fresh = new RecordingExecutor({});
+    const r2 = new ExecutorRegistry();
+    r2.register(fresh);
+    await runFactory(wrap(factory), { registry: r2 });
+    expect(fresh.dispatches[0]?.prompt).toBe("fu=false asks=[] at=[]");
+  });
 });

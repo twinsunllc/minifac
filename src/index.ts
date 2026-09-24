@@ -18,6 +18,7 @@ export {
   resumeStateFromStore,
   ResumeStateError,
   type NodeExecutionRow,
+  type FollowUpState,
   type ResumeReadStore,
   type ResumeState,
   type ResumeStateFromStoreInput,
