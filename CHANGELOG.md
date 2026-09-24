@@ -13,6 +13,14 @@ conflict; a duplicate or oddly-ordered bullet is tidied when a release is cut.
 
 ### Added
 
+- **Optional `effort` on the `claude` executor's `with:`** (SCARIFW-1474,
+  `openspec/changes/claude-effort`). The value is trimmed. Blank or absent
+  emits no flag, so the CLI applies its own default. One of `low`, `medium`,
+  `high`, `xhigh`, `max` emits `--effort <level>` right after `--model`.
+  Anything else fails the node with `invalid_with` before a spawn. A string,
+  not an enum, so a step can bind it as `effort: "{{ inputs.effort }}"` and
+  leave the input blank. No shipped factory sets it. Keeps the schema at
+  parity with Scarif's worker, which gains the same key.
 - **`{{ run.resumed_at }}`, `{{ run.follow_up }}` and `{{ run.prior_asks }}`**
   (SCARIFW-1469, [ADR 0043](docs/decisions/0043-Follow-Up-And-Resumed-At.md)).
   `run.resumed_at` names the node a resumed run was seeded with (empty
