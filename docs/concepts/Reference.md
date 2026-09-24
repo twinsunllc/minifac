@@ -48,6 +48,8 @@ The **local layer** is `<callerCwd>/.minifac/steps/` (steps) or
 `<callerCwd>/.minifac/factories/` (workflows), plus — in a
 **factory repo**, a project whose root carries `factory.yaml` —
 root `steps/` and `workflows/`.
+minifac reads only `library:` from `factory.yaml`; other keys there,
+such as a `services:` block, do not affect loading.
 
 The **library layer** is the project's pinned library, declared
 as `library: { repo, ref }` in `factory.yaml` or
