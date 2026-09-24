@@ -12,7 +12,7 @@ import type {
 } from "../executor/types.js";
 import type { LoadedFactory } from "../factory/loader.js";
 import type { Factory } from "../factory/schema.js";
-import { HUMAN_ANSWER_HEADING } from "./resume.js";
+import { HUMAN_ANSWER_HEADING, SPLIT_CHILD_HEADING, SPLIT_INTEGRATION_HEADING } from "./resume.js";
 import { runFactory } from "./run.js";
 
 const succeeded: NodeEvent = { kind: "status", status: "succeeded" };
@@ -433,5 +433,131 @@ describe("runFactory with resume", () => {
     r2.register(fresh);
     await runFactory(wrap(factory), { registry: r2 });
     expect(fresh.dispatches[0]?.prompt).toBe("fu=false asks=[] at=[]");
+  });
+
+  // SCARIFW-1493 / ADR 0044. A split child: the tokens resolve on every
+  // dispatch, and every prompt starts with the run-context block.
+  const split = {
+    parent_work_item_id: "wi-1",
+    parent_jira_key: "SCARIFW-1500",
+    parent_branch: "factory/parent",
+    child_index: 2,
+    child_count: 3,
+    group: [{ number: 1, title: "API half" }],
+  };
+  const splitGraph = (): Factory => ({
+    name: "f",
+    nodes: {
+      plan: {
+        executor: "fake",
+        with: { prompt: "base=[{{ run.split.parent_branch }}] i={{ run.split.child_index }}" },
+      },
+      plan_gate: {
+        executor: "fake",
+        terminal: true,
+        with: { prompt: "s={{ run.split }} si={{ run.split_integration }}" },
+      },
+    },
+    edges: [{ from: "plan", to: "plan_gate", when: "on_success" }],
+  });
+
+  it("resolves run.split tokens and prepends the split-child block for a child run", async () => {
+    const exec = new RecordingExecutor({});
+    const registry = new ExecutorRegistry();
+    registry.register(exec);
+
+    const result = await runFactory(wrap(splitGraph()), { registry, split });
+
+    expect(result.status).toBe("succeeded");
+    expect(exec.order()).toEqual(["plan", "plan_gate"]);
+    const [plan, gate] = exec.dispatches;
+    const block = `${SPLIT_CHILD_HEADING}\n`;
+    expect(plan?.prompt.startsWith(block)).toBe(true);
+    expect(plan?.prompt).toContain(JSON.stringify(split, null, 2));
+    expect(plan?.prompt.endsWith("\n\nbase=[factory/parent] i=2")).toBe(true);
+    expect(gate?.prompt.startsWith(block)).toBe(true);
+    expect(gate?.prompt.endsWith(`\n\ns=${JSON.stringify(split)} si=null`)).toBe(true);
+    expect(plan?.prompt).not.toContain(SPLIT_INTEGRATION_HEADING);
+  });
+
+  it("renders null / empty and adds no block for an ordinary run", async () => {
+    const exec = new RecordingExecutor({});
+    const registry = new ExecutorRegistry();
+    registry.register(exec);
+
+    await runFactory(wrap(splitGraph()), { registry });
+
+    expect(exec.dispatches.map((d) => d.prompt)).toEqual(["base=[] i=", "s=null si=null"]);
+  });
+
+  it("carries the integration block and the human-answer block on a resumed split parent", async () => {
+    const splitIntegration = {
+      children: [{ child_index: 1, merge_sha: "abc" }],
+      unmerged_sub_tasks: [],
+    };
+    const factory: Factory = {
+      name: "f",
+      nodes: {
+        plan: { executor: "fake", with: { prompt: "plan" } },
+        implement: {
+          executor: "fake",
+          with: { prompt: "s={{ run.split }} c={{ run.split_integration.children }}" },
+        },
+        review: { executor: "fake", terminal: true, with: { prompt: "review" } },
+      },
+      edges: [
+        { from: "plan", to: "implement", when: "on_success" },
+        { from: "implement", to: "review", when: "on_success" },
+      ],
+    };
+    const exec = new RecordingExecutor({});
+    const registry = new ExecutorRegistry();
+    registry.register(exec);
+
+    const result = await runFactory(wrap(factory), {
+      registry,
+      splitIntegration,
+      resume: {
+        at: "implement",
+        priorResults: [priorResult({ nodeId: "plan" })],
+        feedback: "integrate the children",
+      },
+    });
+
+    expect(result.status).toBe("succeeded");
+    expect(exec.order()).toEqual(["implement", "review"]);
+    const [implement, review] = exec.dispatches;
+    const p = implement?.prompt ?? "";
+    expect(p.startsWith(`${SPLIT_INTEGRATION_HEADING}\n`)).toBe(true);
+    expect(p).toContain(`s=null c=${JSON.stringify(splitIntegration.children)}`);
+    expect(p).not.toContain(SPLIT_CHILD_HEADING);
+    // The integration block leads, the template follows, the answer closes.
+    const body = p.indexOf("s=null");
+    expect(body).toBeGreaterThan(0);
+    expect(p.indexOf(HUMAN_ANSWER_HEADING)).toBeGreaterThan(body);
+    expect(p).toContain("integrate the children");
+    expect(review?.prompt.startsWith(`${SPLIT_INTEGRATION_HEADING}\n`)).toBe(true);
+    expect(review?.prompt).not.toContain(HUMAN_ANSWER_HEADING);
+  });
+
+  it("dispatches a prompt-less node unchanged under split", async () => {
+    const seen: Array<Record<string, unknown> | undefined> = [];
+    const exec = new RecordingExecutor({});
+    const original = exec.run.bind(exec);
+    exec.run = (node, ctx) => {
+      seen.push(node.with);
+      return original(node, ctx);
+    };
+    const factory: Factory = {
+      name: "f",
+      nodes: { tool: { executor: "fake", terminal: true, with: { command: "true" } } },
+      edges: [],
+    };
+    const registry = new ExecutorRegistry();
+    registry.register(exec);
+
+    await runFactory(wrap(factory), { registry, split });
+
+    expect(seen).toEqual([{ command: "true" }]);
   });
 });

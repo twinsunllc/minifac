@@ -53,6 +53,79 @@ export interface FollowUpState {
   priorAsks?: unknown[];
 }
 
+/**
+ * A split child's run context (ADR 0044): `{{ run.split }}`. Snake_case and
+ * opaque, like `FollowUpState.priorAsks`: it is the claim's `factory.split`
+ * passed through as Scarif sends it, and the runner only renders it.
+ */
+export interface SplitState {
+  parent_work_item_id: string;
+  /** Null when the parent's subject is a brief rather than a Jira issue. */
+  parent_jira_key: string | null;
+  /** The split's branch, which is this child's base. */
+  parent_branch: string;
+  /** 1-based. */
+  child_index: number;
+  child_count: number;
+  /** This child's sub-tasks, as the parent's plan wrote them. */
+  group: unknown[];
+}
+
+/**
+ * A resumed split parent's integration context (ADR 0044):
+ * `{{ run.split_integration }}`. Opaque to the runner, like `SplitState`.
+ */
+export interface SplitIntegrationState {
+  children: unknown[];
+  unmerged_sub_tasks: unknown[];
+}
+
+/** Headings of the run-context block prepended to a split run's prompts. */
+export const SPLIT_CHILD_HEADING = "## Split child (run.split)";
+export const SPLIT_INTEGRATION_HEADING = "## Split integration (run.split_integration)";
+
+/**
+ * The run-context block the runner prepends to every prompt of a split
+ * child or a resumed split parent (ADR 0044), so the context reaches a node
+ * whether or not its step binds `{{ run.split }}`. `null` when neither is
+ * set, so an ordinary run's prompts are exactly their substituted templates.
+ * Built AFTER substitution, so nothing in the JSON is read as a template.
+ */
+export function splitContextBlock(
+  split: SplitState | null | undefined,
+  splitIntegration: SplitIntegrationState | null | undefined,
+): string | null {
+  const sections: string[] = [];
+  if (split) {
+    sections.push(
+      [
+        SPLIT_CHILD_HEADING,
+        "",
+        `This run is child ${split.child_index} of ${split.child_count} of a split. Its base is the parent's branch,`,
+        "and its scope is the group of sub-tasks below.",
+        "",
+        "```json",
+        JSON.stringify(split, null, 2),
+        "```",
+      ].join("\n"),
+    );
+  }
+  if (splitIntegration) {
+    sections.push(
+      [
+        SPLIT_INTEGRATION_HEADING,
+        "",
+        "This run is a split parent resumed for integration after its children.",
+        "",
+        "```json",
+        JSON.stringify(splitIntegration, null, 2),
+        "```",
+      ].join("\n"),
+    );
+  }
+  return sections.length > 0 ? sections.join("\n\n") : null;
+}
+
 /** Heading of the block the runner appends to the seeded dispatch's prompt. */
 export const HUMAN_ANSWER_HEADING = "## Human answer (resume)";
 

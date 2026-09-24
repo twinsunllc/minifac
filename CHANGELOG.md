@@ -13,6 +13,17 @@ conflict; a duplicate or oddly-ordered bullet is tidied when a release is cut.
 
 ### Added
 
+- **`{{ run.split }}` and `{{ run.split_integration }}`** (SCARIFW-1493,
+  [ADR 0044](docs/decisions/0044-Split-Run-Context.md)). The new
+  `RunOptions.split` marks a split child and `RunOptions.splitIntegration`
+  a resumed split parent. The tokens render the object as JSON (`null`
+  when absent), and a dotted sub-path such as
+  `{{ run.split.parent_branch }}` renders one field (the empty string when
+  missing). The sub-path resolves only under these two tokens; every other
+  dotted token still passes through verbatim. A split run's prompts also
+  start with a `## Split child (run.split)` or
+  `## Split integration (run.split_integration)` block; other runs'
+  prompts are unchanged.
 - **Optional `effort` on the `claude` executor's `with:`** (SCARIFW-1474,
   `openspec/changes/claude-effort`). The value is trimmed. Blank or absent
   emits no flag, so the CLI applies its own default. One of `low`, `medium`,
