@@ -456,6 +456,41 @@ describe("buildCliArgs", () => {
     `);
   });
 
+  // SCARIFW-1474: optional per-node effort. Blank or absent emits nothing.
+  it("emits --effort right after --model and before the authority flags", () => {
+    const args = buildCliArgs(
+      {
+        prompt: "hi",
+        model: "m",
+        effort: "high",
+        permission_mode: "accept_edits",
+        args: ["--debug"],
+      },
+      undefined,
+      "abc-123",
+    );
+    expect(args.slice(args.indexOf("--model"), args.indexOf("--permission-mode"))).toEqual([
+      "--model",
+      "m",
+      "--effort",
+      "high",
+    ]);
+    expect(args.indexOf("--debug")).toBeGreaterThan(args.indexOf("--effort"));
+  });
+
+  it("emits --effort with the value trimmed", () => {
+    const args = buildCliArgs({ prompt: "hi", effort: " max " });
+    expect(args[args.indexOf("--effort") + 1]).toBe("max");
+  });
+
+  it.each([
+    ["absent", {}],
+    ["blank", { effort: "" }],
+    ["whitespace", { effort: "  " }],
+  ])("emits no --effort when effort is %s", (_label, extra) => {
+    expect(buildCliArgs({ prompt: "hi", ...extra })).not.toContain("--effort");
+  });
+
   it("omits --resume when resumeSessionId is undefined", () => {
     const args = buildCliArgs({ prompt: "hi" }, "/tmp/x/.mcp.json");
     expect(args).not.toContain("--resume");
@@ -569,6 +604,48 @@ describe("ClaudeExecutor with: validation", () => {
       status: "failed",
       meta: { reason: "invalid_with" },
     });
+  });
+
+  it.each([["turbo"], ["HIGH"], [3]])(
+    "rejects effort %j with invalid_with and spawns no child (SCARIFW-1474)",
+    async (effort) => {
+      let spawned = false;
+      const executor = new ClaudeExecutor({
+        spawn: () => {
+          spawned = true;
+          const c = makeFakeChild();
+          setImmediate(() => c.finish(0));
+          return c as unknown as ReturnType<typeof import("node:child_process").spawn>;
+        },
+      });
+      const events = await collect(
+        executor,
+        makeNode({ with: { prompt: "hi", effort } }),
+        makeCtx(),
+      );
+      expect(spawned).toBe(false);
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        kind: "status",
+        status: "failed",
+        meta: { reason: "invalid_with" },
+      });
+    },
+  );
+
+  it.each([[""], ["high"]])("accepts effort %j and spawns (SCARIFW-1474)", async (effort) => {
+    let argv: readonly string[] = [];
+    const executor = new ClaudeExecutor({
+      spawn: (_bin, args) => {
+        argv = args;
+        const c = makeFakeChild();
+        setImmediate(() => c.finish(0));
+        return c as unknown as ReturnType<typeof import("node:child_process").spawn>;
+      },
+    });
+    const events = await collect(executor, makeNode({ with: { prompt: "hi", effort } }), makeCtx());
+    expect(events.at(-1)).toMatchObject({ kind: "status", status: "succeeded" });
+    expect(argv.includes("--effort")).toBe(effort !== "");
   });
 
   it("rejects empty-string element in allowed_tools and spawns no child", async () => {

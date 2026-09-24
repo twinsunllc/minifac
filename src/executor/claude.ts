@@ -29,6 +29,7 @@
 //   [--mcp-config <path>]
 //   [--resume <session-id>]
 //   [--model <model>]
+//   [--effort <level>]
 //   [authority flags, see below]
 //   [...with.args]
 //
@@ -55,6 +56,18 @@
 // See `openspec/specs/node-executor/spec.md` (requirement: "Claude executor
 // uses stream-json for both input and output") and the `graph-runner`
 // capability's "Cross-node session resume resolution".
+//
+// ### Effort (`--effort`)
+//
+// `with.effort` (string, optional) is trimmed; blank or absent emits NO flag,
+// so the CLI applies its own default. A value in `CLAUDE_EFFORT_LEVELS` (the
+// levels `claude --help` lists for `--effort`) emits `--effort <level>` right
+// after `--model`. Anything else is `invalid_with` with no spawn. A string rather
+// than an enum so that a step can bind it as `effort: "{{ inputs.effort }}"` and
+// leave the input blank.
+//
+// See the `node-executor` capability's "Optional per-node effort in claude
+// executor `with:`" requirement.
 //
 // ### Authority knobs (all optional, opt-in; defaults emit no flag)
 //
@@ -138,10 +151,24 @@ import type { ChildProcess } from "node:child_process";
 import { z } from "zod";
 import type { NodeEvent, NodeExecutor, NodeResult, ResolvedNode, RunContext } from "./types.js";
 
+/** The levels `claude --help` lists for `--effort`. */
+export const CLAUDE_EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
+
 const WithSchema = z
   .object({
     prompt: z.string().min(1),
     model: z.string().optional(),
+    // Blank means "not set". See the header's "Effort" section.
+    effort: z
+      .string()
+      .optional()
+      .refine(
+        (v) =>
+          v === undefined ||
+          v.trim() === "" ||
+          (CLAUDE_EFFORT_LEVELS as readonly string[]).includes(v.trim()),
+        { message: `effort must be blank or one of: ${CLAUDE_EFFORT_LEVELS.join(", ")}` },
+      ),
     args: z.array(z.string()).optional(),
     permission_mode: z.enum(["default", "accept_edits", "bypass_permissions"]).optional(),
     // Use `.optional()` over `.nonempty()` so an explicit empty array is
@@ -280,6 +307,10 @@ export function buildCliArgs(
   }
   if (w.model) {
     args.push("--model", w.model);
+  }
+  const effort = w.effort?.trim();
+  if (effort) {
+    args.push("--effort", effort);
   }
   if (w.permission_mode) {
     const flagValue = PERMISSION_MODE_FLAG[w.permission_mode];
