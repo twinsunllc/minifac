@@ -161,6 +161,11 @@ first, then falls back to a built-in `minifac:<name>`. Custom factories
 can `extends:` a built-in and override per node. See
 [[0008-File-Per-Factory-Composition]].
 
+Everything a derived factory omits is inherited from its base, except
+`uses_services:`. That key is taken only from the file being loaded; a
+base's list is never inherited or merged. See
+[[0045-Workflow-Uses-Services]].
+
 The brief's `factory:` is the *default* — it can be overridden at
 invocation time with `minifac run <brief> --factory <name>`, which
 runs the same resolution precedence against the flag value and
@@ -219,6 +224,7 @@ and merge the result is validated through `FactorySchema`, which strips
 | `description` | string | no | — | Human-readable prose shown in tooling output. |
 | `brief` | `"required"` \| `"optional"` \| `"none"` | no | `"required"` | Whether the factory expects a [[Brief]]. `"required"` rejects invocations with no brief; `"optional"` accepts both; `"none"` is for brief-less factories (scheduled tasks, etc.). |
 | `extends` | string (min 1) | no | — | Reference to a parent factory. Same resolution precedence as a brief's `factory:` field. Stripped before downstream code sees the factory. Only valid in the on-disk layer; the resolved factory never carries this field. |
+| `uses_services` | list of unique, non-empty strings | no | — | Services this workflow's jobs need, by the names the factory repo's `factory.yaml` defines under `services:`. A workflow selects services and never defines one, so a map is refused. minifac carries the list on the resolved factory and ignores it; Scarif acts on it. **Not inherited through `extends:`**: only the loaded file's own key counts. See [[0045-Workflow-Uses-Services]]. |
 | `nodes` | map of node-id → [[#Node fields\|node]] | yes (post-merge) | — | Keyed by node id (the string you reference in edges). |
 | `edges` | array of [[#Edge fields\|edge]] | yes (post-merge) | `[]` | Control-flow declarations. An empty array is valid (single-node factory). |
 

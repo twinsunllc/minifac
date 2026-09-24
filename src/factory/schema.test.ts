@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { NodeSchema, OutputDefSchema, OutputsMapSchema } from "./schema.js";
+import {
+  FactoryLayerSchema,
+  FactorySchema,
+  NodeSchema,
+  OutputDefSchema,
+  OutputsMapSchema,
+} from "./schema.js";
 
 describe("OutputsMapSchema — node `outputs:` block", () => {
   it("accepts a node `outputs:` map with multiple keys", () => {
@@ -176,5 +182,67 @@ describe("NodeSchema — `start` field", () => {
 
   it("rejects a non-boolean `start`", () => {
     expect(() => NodeSchema.parse({ executor: "claude", start: "yes" })).toThrowError(/start/);
+  });
+});
+
+describe("`uses_services:` on FactorySchema and FactoryLayerSchema", () => {
+  const resolved = {
+    name: "w",
+    nodes: { a: { executor: "tool", terminal: true, with: { command: "true" } } },
+    edges: [],
+  };
+  const schemas = [
+    ["FactorySchema", FactorySchema],
+    ["FactoryLayerSchema", FactoryLayerSchema],
+  ] as const;
+
+  function firstIssuePath(schema: (typeof schemas)[number][1], value: unknown): string {
+    const result = schema.safeParse({ ...resolved, uses_services: value });
+    if (result.success) throw new Error("expected the parse to fail");
+    return result.error.issues[0]?.path.join(".") ?? "";
+  }
+
+  it.each(schemas)("%s accepts a list of service names", (_name, schema) => {
+    const out = schema.parse({ ...resolved, uses_services: ["mysql", "valkey"] });
+    expect(out.uses_services).toEqual(["mysql", "valkey"]);
+  });
+
+  it.each(schemas)("%s parses without the key and leaves it absent", (_name, schema) => {
+    const out = schema.parse(resolved);
+    expect("uses_services" in out).toBe(false);
+  });
+
+  it.each(schemas)("%s refuses a scalar", (_name, schema) => {
+    expect(firstIssuePath(schema, "mysql")).toBe("uses_services");
+  });
+
+  it.each(schemas)("%s refuses an empty-string entry", (_name, schema) => {
+    expect(firstIssuePath(schema, [""])).toBe("uses_services.0");
+  });
+
+  it.each(schemas)("%s refuses a non-string entry", (_name, schema) => {
+    expect(firstIssuePath(schema, ["mysql", 3])).toBe("uses_services.1");
+  });
+
+  it.each(schemas)("%s refuses a map of service definitions", (_name, schema) => {
+    expect(firstIssuePath(schema, { mysql: { image: "mysql:8.4" } })).toBe("uses_services");
+  });
+
+  it.each(schemas)("%s refuses a duplicate entry, naming it", (_name, schema) => {
+    const result = schema.safeParse({ ...resolved, uses_services: ["mysql", "mysql"] });
+    expect(result.success).toBe(false);
+    const issue = result.success ? undefined : result.error.issues[0];
+    expect(issue?.path).toEqual(["uses_services", 1]);
+    expect(issue?.message).toMatch(/duplicate service "mysql"/);
+  });
+
+  it.each(schemas)("%s still refuses other unknown top-level keys", (_name, schema) => {
+    for (const key of ["services", "inherits"]) {
+      const result = schema.safeParse({ ...resolved, [key]: ["mysql"] });
+      expect(result.success).toBe(false);
+      expect(result.success ? "" : result.error.issues[0]?.message).toMatch(
+        new RegExp(`Unrecognized key.*${key}`),
+      );
+    }
   });
 });

@@ -97,6 +97,30 @@ export const EdgeSchema = z
   })
   .strict();
 
+// A workflow's `uses_services:` selects, by name, services that the
+// factory repo's `factory.yaml` manifest defines under `services:` (scarif-spec
+// `ec2-per-job-lane`, ruling 3). A workflow never defines a service, so a map
+// is refused. minifac carries the list on the resolved factory and does
+// nothing else with it; Scarif acts on it. It is NOT inherited through
+// `extends:` — only the loaded file's own key counts (see `mergeLayers`).
+export const UsesServicesSchema = z
+  .array(z.string().min(1, "service name must be a non-empty string"), {
+    invalid_type_error: "uses_services must be a list of service names",
+  })
+  .superRefine((names, ctx) => {
+    const seen = new Set<string>();
+    for (const [i, name] of names.entries()) {
+      if (seen.has(name)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `duplicate service "${name}"; entries must be unique`,
+          path: [i],
+        });
+      }
+      seen.add(name);
+    }
+  });
+
 // Raw schema accepted on disk: the merged-from-disk shape, which may carry
 // `extends:` at the top level. Edges and most nodes/top-level fields may be
 // omitted in a derived layer (then inherited from the base). The loader runs
@@ -111,6 +135,7 @@ export const FactoryLayerSchema = z
     nodes: z.record(NodeSchema).optional(),
     edges: z.array(EdgeSchema).optional(),
     extends: z.string().min(1).optional(),
+    uses_services: UsesServicesSchema.optional(),
   })
   .strict();
 
@@ -124,6 +149,7 @@ export const FactorySchema = z
     brief: z.enum(["required", "optional", "none"]).default("required"),
     nodes: z.record(NodeSchema),
     edges: z.array(EdgeSchema),
+    uses_services: UsesServicesSchema.optional(),
   })
   .strict();
 

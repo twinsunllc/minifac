@@ -305,8 +305,8 @@ behavior.
 
 The `extends:` key SHALL be valid as a top-level key alongside the
 existing documented keys (`name`, `description`, `brief`, `nodes`,
-`edges`). The factory schema's strict-on-extras rule SHALL continue
-to reject any other unknown top-level key.
+`edges`, `uses_services`). The factory schema's strict-on-extras rule
+SHALL continue to reject any other unknown top-level key.
 
 #### Scenario: Factory without `extends:` loads as before
 
@@ -332,9 +332,83 @@ to reject any other unknown top-level key.
 
 - **WHEN** the loader reads a factory YAML whose top-level declares
   a key not in the documented set (`name`, `description`, `brief`,
-  `nodes`, `edges`, `extends`) — e.g. `inherits:`
+  `nodes`, `edges`, `extends`, `uses_services`) — e.g. `inherits:` or
+  `services:`
 - **THEN** schema validation fails with an error naming the
   offending key
+
+### Requirement: Workflow `uses_services:` top-level field
+
+The factory schema SHALL accept an optional top-level `uses_services:`
+field on a workflow. When present its value MUST be a list of unique,
+non-empty strings, each naming a service that the factory repo's
+`factory.yaml` manifest defines under `services:` (scarif-spec
+`ec2-per-job-lane`, ruling 3). A workflow selects services; it SHALL
+NOT define one.
+
+The loader SHALL refuse, with a `FactoryLoadError` whose source is the
+file that declares the field and whose message names the
+`uses_services` key:
+
+- a value that is not a list (a scalar, or a map of service
+  definitions);
+- a list entry that is an empty string or not a string;
+- a list with a repeated entry.
+
+The loader SHALL NOT check the names against the manifest or against a
+name pattern; Scarif does that when a job is ordered.
+
+`uses_services:` SHALL NOT be inherited through `extends:`. The
+resolved factory SHALL carry the list declared by the loaded (entry)
+file, unchanged, and SHALL carry no `uses_services` when that file
+omits it, whatever its bases declare. A base's list SHALL NOT be merged
+into the entry file's list. Every layer's value is still validated.
+
+The runner SHALL carry the resolved list and SHALL NOT act on it: no
+node dispatch, executor, run record or storage behaviour depends on it.
+
+The loader SHALL NOT read a `services:` block in a factory repo's
+`factory.yaml`. Its presence SHALL NOT change how the project's
+`library:` pin resolves or how any workflow in the repo loads.
+
+#### Scenario: A list of service names loads and is carried
+
+- **WHEN** the loader reads a workflow declaring
+  `uses_services: [mysql, valkey]`
+- **THEN** it loads, and the resolved factory's `uses_services` is
+  `["mysql", "valkey"]`
+
+#### Scenario: A malformed value is refused, naming the file and the key
+
+- **WHEN** the loader reads a workflow whose `uses_services:` is the
+  scalar `mysql`, a map `{mysql: {image: ...}}`, `[""]`, `[mysql, 7]`
+  or `[mysql, mysql]`
+- **THEN** loading fails with a `FactoryLoadError` whose source is the
+  workflow file and whose message begins
+  `Schema error at uses_services`
+
+#### Scenario: A derived workflow's own list is used
+
+- **WHEN** a workflow declaring `extends: base` and
+  `uses_services: [valkey]` is loaded, and `base` declares
+  `uses_services: [mysql]`
+- **THEN** the resolved `uses_services` is `["valkey"]`
+
+#### Scenario: A base's list is not inherited
+
+- **WHEN** a workflow declaring `extends: base` and no
+  `uses_services:` is loaded, and `base` declares
+  `uses_services: [mysql, valkey]`
+- **THEN** the resolved factory has no `uses_services`
+
+#### Scenario: A manifest `services:` block does not affect loading
+
+- **WHEN** a factory repo's `factory.yaml` declares a `services:` block
+  alongside a `library:` pin, and a workflow in `workflows/` extends
+  `library:<name>`
+- **THEN** the library resolves to its pinned sha and the workflow's
+  resolved factory equals the one loaded from the same repo without
+  the `services:` block
 
 ### Requirement: `extends:` chain resolution rules
 

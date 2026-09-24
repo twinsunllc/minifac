@@ -13,6 +13,15 @@ conflict; a duplicate or oddly-ordered bullet is tidied when a release is cut.
 
 ### Added
 
+- **Workflow `uses_services:`** (SCARIFW-1531,
+  [ADR 0045](docs/decisions/0045-Workflow-Uses-Services.md)). A workflow may
+  declare a top-level `uses_services:` list of unique, non-empty service
+  names. minifac carries it on the resolved factory
+  (`factory.uses_services`) and ignores it. It is not inherited through
+  `extends:`. A scalar, a map, an empty or non-string entry, or a duplicate
+  is a load error naming the file and the key. Other unknown top-level keys
+  are still refused. A `services:` block in a factory repo's `factory.yaml`
+  does not affect loading.
 - **`{{ run.split }}` and `{{ run.split_integration }}`** (SCARIFW-1493,
   [ADR 0044](docs/decisions/0044-Split-Run-Context.md)). The new
   `RunOptions.split` marks a split child and `RunOptions.splitIntegration`
