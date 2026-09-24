@@ -136,6 +136,24 @@ describe("substitute (Substitutions record)", () => {
     expect(substitute("answer={{ run.feedback }}", {})).toBe("answer={{ run.feedback }}");
   });
 
+  // ADR 0043 — resume seed, follow-up flag and prior asks.
+  it("substitutes {{ run.resumed_at }}, {{ run.follow_up }} and {{ run.prior_asks }}", () => {
+    const run = { resumed_at: "plan", follow_up: "true", prior_asks: '[{"node_id":"plan_gate"}]' };
+    expect(
+      substitute("at={{ run.resumed_at }} fu={{ run.follow_up }} asks={{ run.prior_asks }}", {
+        run,
+      }),
+    ).toBe('at=plan fu=true asks=[{"node_id":"plan_gate"}]');
+  });
+
+  it("renders the none-values for the ADR 0043 tokens when a run scope lacks them", () => {
+    expect(
+      substitute("at=[{{ run.resumed_at }}] fu={{ run.follow_up }} asks={{ run.prior_asks }}", {
+        run: { cwd: "/x" },
+      }),
+    ).toBe("at=[] fu=false asks=[]");
+  });
+
   it("substitutes {{ run.base_branch }} in with.base equivalent string", () => {
     expect(substitute("base={{ run.base_branch }}", { run: { base_branch: "main" } })).toBe(
       "base=main",

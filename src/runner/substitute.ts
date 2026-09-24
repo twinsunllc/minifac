@@ -22,7 +22,15 @@ export interface Substitutions {
    * ones the caller actually has in scope. Tokens whose corresponding
    * field is absent pass through verbatim (matching the `brief.*`
    * convention). */
-  run?: { cwd?: string; outputsDir?: string; base_branch?: string; feedback?: string };
+  run?: {
+    cwd?: string;
+    outputsDir?: string;
+    base_branch?: string;
+    feedback?: string;
+    resumed_at?: string;
+    follow_up?: string;
+    prior_asks?: string;
+  };
   /** Per-node inputs map produced at step inlining time. Absent on inline
    * nodes (never inlined from a step). When absent, `{{ inputs.* }}`
    * tokens pass through verbatim. */
@@ -88,6 +96,18 @@ function substituteOnce(input: string, subs: Substitutions): string {
         // handing the literal `{{ run.feedback }}` to the model instead would
         // read as an instruction. Same convention as a missing `inputs.*` key.
         return run.feedback ?? "";
+      }
+      // ADR 0043. Same empty-not-verbatim convention as `feedback`, each with
+      // the value that means "none": no resume seed, not a follow-up, no
+      // prior asks.
+      if (field === "resumed_at") {
+        return run.resumed_at ?? "";
+      }
+      if (field === "follow_up") {
+        return run.follow_up ?? "false";
+      }
+      if (field === "prior_asks") {
+        return run.prior_asks ?? "[]";
       }
       return match;
     }

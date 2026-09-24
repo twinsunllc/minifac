@@ -21,7 +21,7 @@ import { type RunnerMcpServer, startRunnerMcpServer } from "./mcp-server.js";
 import { type MissingOutput, buildNudgeMessage } from "./nudge.js";
 import { type ValidateOutputsResult, validateDeclaredOutputs } from "./outputs.js";
 import type { ExecutionLogEntry, RunResult } from "./result.js";
-import { type ResumeState, humanAnswerBlock } from "./resume.js";
+import { type FollowUpState, type ResumeState, humanAnswerBlock } from "./resume.js";
 import { type Substitutions, TemplateSubstitutionError, substitute } from "./substitute.js";
 
 export interface RunOptions {
@@ -57,6 +57,13 @@ export interface RunOptions {
    * human's answer bound as feedback. See `./resume.ts` and
    * `docs/decisions/0042-Resume-At-Node.md`. */
   resume?: ResumeState;
+  /** This run is a follow-up of an earlier one on the same work (red CI,
+   * requested changes, an unblock): it starts at the declared start nodes
+   * as usual, but `{{ run.follow_up }}` renders `true` and
+   * `{{ run.prior_asks }}` the asks the earlier run already had answered,
+   * so a gate can tell it was answered before. See
+   * `docs/decisions/0043-Follow-Up-And-Resumed-At.md`. */
+  followUp?: FollowUpState;
 }
 
 interface QueueItem {
@@ -74,7 +81,7 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
   const baseSubs: Substitutions = {};
   if (brief) baseSubs.brief = brief;
   const resume = options.resume;
-  const runScope: { cwd?: string; base_branch?: string; feedback?: string } = {};
+  const runScope: NonNullable<Substitutions["run"]> = {};
   if (runCwd !== undefined && runCwd.length > 0) runScope.cwd = runCwd;
   if (runBaseBranch !== undefined) runScope.base_branch = runBaseBranch;
   // `{{ run.feedback }}` resolves for EVERY run, not only a resumed one: a
@@ -83,6 +90,14 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
   // run scope always exists for that token; the other `run.*` fields keep
   // their pass-through-when-absent convention (see `substitute.ts`).
   runScope.feedback = resume?.feedback ?? "";
+  // Same always-resolves convention for the three tokens ADR 0043 adds.
+  // `run.feedback` stays set for the WHOLE resumed run (ADR 0042), so a node
+  // re-dispatched downstream of a re-plan seed still sees the answer;
+  // `run.resumed_at` is how it tells "I was answered" (resumed_at is its own
+  // id) from "an upstream node was re-planned" (resumed_at names that node).
+  runScope.resumed_at = resume?.at ?? "";
+  runScope.follow_up = options.followUp !== undefined ? "true" : "false";
+  runScope.prior_asks = JSON.stringify(options.followUp?.priorAsks ?? []);
   baseSubs.run = runScope;
 
   const runStart = Date.now();

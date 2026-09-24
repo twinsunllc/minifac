@@ -13,6 +13,17 @@ conflict; a duplicate or oddly-ordered bullet is tidied when a release is cut.
 
 ### Added
 
+- **`{{ run.resumed_at }}`, `{{ run.follow_up }}` and `{{ run.prior_asks }}`**
+  (SCARIFW-1469, [ADR 0043](docs/decisions/0043-Follow-Up-And-Resumed-At.md)).
+  `run.resumed_at` names the node a resumed run was seeded with (empty
+  when not resumed), so a gate re-dispatched after its answer re-planned
+  an UPSTREAM node can tell that apart from being answered itself;
+  `run.feedback` keeps its whole-run meaning. The new
+  `RunOptions.followUp = { priorAsks? }` marks a follow-up run:
+  `run.follow_up` renders `true` (else `false`) and `run.prior_asks` the
+  asks as JSON (else `[]`), so a gate can skip itself. `followUp` does not
+  change the start nodes. All three tokens always resolve; before this
+  change they passed through verbatim.
 - **Resume a run at one node** (SCARIFW-1285,
   [ADR 0042](docs/decisions/0042-Resume-At-Node.md)). A node that
   escalates fails with no `on_failure` edge, so the run ends naming
