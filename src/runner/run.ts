@@ -21,7 +21,14 @@ import { type RunnerMcpServer, startRunnerMcpServer } from "./mcp-server.js";
 import { type MissingOutput, buildNudgeMessage } from "./nudge.js";
 import { type ValidateOutputsResult, validateDeclaredOutputs } from "./outputs.js";
 import type { ExecutionLogEntry, RunResult } from "./result.js";
-import { type FollowUpState, type ResumeState, humanAnswerBlock } from "./resume.js";
+import {
+  type FollowUpState,
+  type ResumeState,
+  type SplitIntegrationState,
+  type SplitState,
+  humanAnswerBlock,
+  splitContextBlock,
+} from "./resume.js";
 import { type Substitutions, TemplateSubstitutionError, substitute } from "./substitute.js";
 
 export interface RunOptions {
@@ -64,6 +71,15 @@ export interface RunOptions {
    * so a gate can tell it was answered before. See
    * `docs/decisions/0043-Follow-Up-And-Resumed-At.md`. */
   followUp?: FollowUpState;
+  /** This run is one child of a split. `{{ run.split }}` renders it as JSON
+   * and `{{ run.split.<key> }}` its fields; every prompt-bearing dispatch
+   * gets a `## Split child (run.split)` block. Does not change the start
+   * nodes. See `docs/decisions/0044-Split-Run-Context.md`. */
+  split?: SplitState | null;
+  /** This run is a split parent resumed for integration.
+   * `{{ run.split_integration }}` renders it, and prompts get a
+   * `## Split integration (run.split_integration)` block. See ADR 0044. */
+  splitIntegration?: SplitIntegrationState | null;
 }
 
 interface QueueItem {
@@ -98,7 +114,11 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
   runScope.resumed_at = resume?.at ?? "";
   runScope.follow_up = options.followUp !== undefined ? "true" : "false";
   runScope.prior_asks = JSON.stringify(options.followUp?.priorAsks ?? []);
+  // ADR 0044. Null when absent, so the tokens render `null` / empty.
+  runScope.split = options.split ?? null;
+  runScope.split_integration = options.splitIntegration ?? null;
   baseSubs.run = runScope;
+  const splitBlock = splitContextBlock(runScope.split, runScope.split_integration);
 
   const runStart = Date.now();
   const runId = options.runId ?? randomUUID();
@@ -484,6 +504,19 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
         if (substitutionFailed) break;
         if (changed) {
           resolvedNode = { ...resolvedNode, with: nextWith };
+        }
+      }
+
+      // Split run context (ADR 0044): prepended to every prompt-bearing
+      // dispatch of a split child or resumed split parent, after substitution
+      // and before any human-answer block is appended. Absent otherwise.
+      if (splitBlock !== null) {
+        const currentWith = resolvedNode.with;
+        if (currentWith && typeof currentWith.prompt === "string") {
+          resolvedNode = {
+            ...resolvedNode,
+            with: { ...currentWith, prompt: `${splitBlock}\n\n${currentWith.prompt}` },
+          };
         }
       }
 

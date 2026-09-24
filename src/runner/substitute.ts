@@ -2,8 +2,14 @@ import { readFileSync, statSync } from "node:fs";
 import type { Brief } from "../brief/loader.js";
 import type { NodeResult } from "../executor/types.js";
 import type { NodeOutputIndex } from "../factory/schema.js";
+import type { SplitIntegrationState, SplitState } from "./resume.js";
 
-const TOKEN_REGEX = /\{\{\s*(brief|run|inputs)\.([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}/g;
+/** `{{ <ns>.<field>[.<key>...] }}`. The optional dotted sub-path (group 3)
+ * resolves only under `run.split` and `run.split_integration` (ADR 0044);
+ * any other token that carries one passes through verbatim, as it did
+ * before the grammar allowed it. */
+const TOKEN_REGEX =
+  /\{\{\s*(brief|run|inputs)\.([a-zA-Z_][a-zA-Z0-9_]*)((?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)\s*\}\}/g;
 
 const PRIOR_RESULTS_TOKEN_REGEX =
   /\{\{\s*priorResults\.([a-zA-Z_][a-zA-Z0-9_-]*)\.outputs\.([a-zA-Z_][a-zA-Z0-9_]*)(:read)?\s*\}\}/g;
@@ -30,6 +36,10 @@ export interface Substitutions {
     resumed_at?: string;
     follow_up?: string;
     prior_asks?: string;
+    /** ADR 0044. `null` (or absent) when the run is not a split child. */
+    split?: SplitState | null;
+    /** ADR 0044. `null` (or absent) except on a resumed split parent. */
+    split_integration?: SplitIntegrationState | null;
   };
   /** Per-node inputs map produced at step inlining time. Absent on inline
    * nodes (never inlined from a step). When absent, `{{ inputs.* }}`
@@ -57,7 +67,14 @@ export function substitute(input: string, subs: Substitutions): string {
 function substituteOnce(input: string, subs: Substitutions): string {
   let out = substitutePriorResults(input, subs);
   out = substitutePriorResultFields(out, subs);
-  out = out.replace(TOKEN_REGEX, (match, ns: string, field: string) => {
+  out = out.replace(TOKEN_REGEX, (match, ns: string, field: string, subPath: string) => {
+    if (ns === "run" && (field === "split" || field === "split_integration")) {
+      const run = subs.run;
+      if (!run) return match;
+      return renderRunContext(run[field] ?? null, subPath);
+    }
+    // Only the two run-context objects above have keys to walk.
+    if (subPath.length > 0) return match;
     if (ns === "brief") {
       const brief = subs.brief;
       if (!brief) return match;
@@ -136,8 +153,8 @@ function substituteOnce(input: string, subs: Substitutions): string {
  */
 export function substituteInputs(input: string, inputs: Record<string, unknown>): string {
   const once = (s: string): string =>
-    s.replace(TOKEN_REGEX, (match, ns: string, field: string) => {
-      if (ns !== "inputs") return match;
+    s.replace(TOKEN_REGEX, (match, ns: string, field: string, subPath: string) => {
+      if (ns !== "inputs" || subPath.length > 0) return match;
       if (!Object.hasOwn(inputs, field)) return "";
       return stringifyInputValue(inputs[field]);
     });
@@ -212,6 +229,29 @@ function substitutePriorResultFields(input: string, subs: Substitutions): string
     if (field === "status") return result.status;
     return result.reason ?? "";
   });
+}
+
+/**
+ * `{{ run.split[.<key>...] }}` / `{{ run.split_integration[.<key>...] }}`
+ * (ADR 0044). With no sub-path, the whole object as JSON, or `null` when the
+ * run has none. With one, walk plain-object keys: a string renders as-is, a
+ * number or boolean via `String`, an object or array as JSON. A missing key,
+ * a null value, an absent object, or a step through a non-object (an array
+ * included, so there is no indexing) renders the empty string: the
+ * empty-not-verbatim convention of `run.feedback`.
+ */
+function renderRunContext(
+  value: SplitState | SplitIntegrationState | null,
+  subPath: string,
+): string {
+  if (subPath.length === 0) return JSON.stringify(value);
+  let current: unknown = value;
+  for (const key of subPath.slice(1).split(".")) {
+    if (current === null || typeof current !== "object" || Array.isArray(current)) return "";
+    if (!Object.hasOwn(current, key)) return "";
+    current = (current as Record<string, unknown>)[key];
+  }
+  return stringifyInputValue(current);
 }
 
 function stringifyInputValue(value: unknown): string {

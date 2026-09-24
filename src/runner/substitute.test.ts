@@ -480,3 +480,84 @@ describe("substitute priorResults.<id>.status / .reason (ADR 0041)", () => {
     ).toBe("<<failed>>");
   });
 });
+
+// ADR 0044 — run.split / run.split_integration, the only tokens with a
+// dotted sub-path.
+describe("substitute run.split and run.split_integration", () => {
+  const split = {
+    parent_work_item_id: "wi-1",
+    parent_jira_key: "SCARIFW-1500",
+    parent_branch: "factory/parent",
+    child_index: 2,
+    child_count: 3,
+    group: [{ number: 1, title: "API half" }],
+  };
+  const integration = {
+    children: [{ child_index: 1, merge_sha: "abc" }],
+    unmerged_sub_tasks: [{ number: 4 }],
+  };
+
+  it("resolves a child's fields, numbers as decimal strings", () => {
+    const tpl =
+      "b={{ run.split.parent_branch }} w={{ run.split.parent_work_item_id }} " +
+      "j={{ run.split.parent_jira_key }} i={{ run.split.child_index }} n={{ run.split.child_count }}";
+    expect(substitute(tpl, { run: { split } })).toBe(
+      "b=factory/parent w=wi-1 j=SCARIFW-1500 i=2 n=3",
+    );
+  });
+
+  it("renders {{ run.split }} and {{ run.split.group }} as JSON", () => {
+    expect(substitute("{{ run.split }}", { run: { split } })).toBe(JSON.stringify(split));
+    expect(substitute("{{ run.split.group }}", { run: { split } })).toBe(
+      JSON.stringify(split.group),
+    );
+  });
+
+  it("renders null / empty for a run that is not a split child", () => {
+    const tpl =
+      "s={{ run.split }} b=[{{ run.split.parent_branch }}] " +
+      "si={{ run.split_integration }} c=[{{ run.split_integration.children }}]";
+    expect(substitute(tpl, { run: { split: null } })).toBe("s=null b=[] si=null c=[]");
+    expect(substitute(tpl, { run: { cwd: "/x" } })).toBe("s=null b=[] si=null c=[]");
+  });
+
+  it("renders the empty string for an unknown key, a null field, and a walk past a leaf", () => {
+    const tpl =
+      "u=[{{ run.split.nope }}] j=[{{ run.split.parent_jira_key }}] " +
+      "d=[{{ run.split.parent_branch.length }}] g=[{{ run.split.group.length }}]";
+    expect(substitute(tpl, { run: { split: { ...split, parent_jira_key: null } } })).toBe(
+      "u=[] j=[] d=[] g=[]",
+    );
+  });
+
+  it("passes run.split tokens through verbatim when no run scope exists at all", () => {
+    expect(substitute("{{ run.split.parent_branch }}", {})).toBe("{{ run.split.parent_branch }}");
+  });
+
+  it("renders split_integration and its fields as JSON", () => {
+    const tpl =
+      "{{ run.split_integration }}|{{ run.split_integration.children }}|" +
+      "{{ run.split_integration.unmerged_sub_tasks }}|{{ run.split }}";
+    expect(substitute(tpl, { run: { split_integration: integration } })).toBe(
+      `${JSON.stringify(integration)}|${JSON.stringify(integration.children)}|` +
+        `${JSON.stringify(integration.unmerged_sub_tasks)}|null`,
+    );
+  });
+
+  it("leaves every other dotted token verbatim", () => {
+    const tpl = "{{ brief.change.x }} {{ inputs.a.b }} {{ run.cwd.x }} {{ run.splitx.y }}";
+    expect(
+      substitute(tpl, {
+        brief: brief(),
+        inputs: { a: { b: 1 } },
+        run: { cwd: "/x", split },
+      }),
+    ).toBe(tpl);
+  });
+
+  it("substituteInputs leaves run.split tokens and dotted inputs tokens for dispatch time", () => {
+    expect(
+      substituteInputs("{{ run.split.parent_branch }} {{ inputs.a.b }} {{ inputs.a }}", { a: "v" }),
+    ).toBe("{{ run.split.parent_branch }} {{ inputs.a.b }} v");
+  });
+});

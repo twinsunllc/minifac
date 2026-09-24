@@ -14,11 +14,15 @@ export type {
 export { runFactory, type RunOptions } from "./runner/run.js";
 export {
   HUMAN_ANSWER_HEADING,
+  SPLIT_CHILD_HEADING,
+  SPLIT_INTEGRATION_HEADING,
   humanAnswerBlock,
   resumeStateFromStore,
   ResumeStateError,
   type NodeExecutionRow,
   type FollowUpState,
+  type SplitIntegrationState,
+  type SplitState,
   type ResumeReadStore,
   type ResumeState,
   type ResumeStateFromStoreInput,
