@@ -1,4 +1,4 @@
-export { loadFactory, type LoadedFactory } from "./factory/loader.js";
+export { loadFactory, type LoadedFactory, type LoadFactoryOptions } from "./factory/loader.js";
 export type { Factory, FactoryNode, FactoryEdge } from "./factory/schema.js";
 export { ExecutorRegistry } from "./executor/registry.js";
 export { ClaudeExecutor } from "./executor/claude.js";

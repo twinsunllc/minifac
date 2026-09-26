@@ -249,8 +249,12 @@ async function revParse(mirror: string, rev: string): Promise<string | undefined
 }
 
 /** The remote's default-branch head, for the stale-pin message. */
-async function describeRemoteHead(mirror: string, url: string): Promise<string> {
-  const r = await git(["--git-dir", mirror, "ls-remote", "--symref", "--", url, "HEAD"]);
+async function describeRemoteHead(
+  mirror: string,
+  url: string,
+  env: NodeJS.ProcessEnv,
+): Promise<string> {
+  const r = await git(["--git-dir", mirror, "ls-remote", "--symref", "--", url, "HEAD"], env);
   let head = "unknown";
   if (r.ok) {
     const branch = /^ref: refs\/heads\/(\S+)\s+HEAD$/m.exec(r.stdout)?.[1];
@@ -269,6 +273,7 @@ async function resolvePinnedSha(
   mirror: string,
   pinsFile: string,
   offline: string | undefined,
+  env: NodeJS.ProcessEnv,
 ): Promise<string> {
   const { ref, repo, declaredIn } = decl;
   const where = `\`library.ref: ${ref}\` (${declaredIn})`;
@@ -288,7 +293,7 @@ async function resolvePinnedSha(
       );
     }
     throw new LibraryError(
-      `${where} is stale: commit ${ref} no longer resolves in ${repo} (not reachable from any branch or tag). The library's current head: ${await describeRemoteHead(mirror, url)}`,
+      `${where} is stale: commit ${ref} no longer resolves in ${repo} (not reachable from any branch or tag). The library's current head: ${await describeRemoteHead(mirror, url, env)}`,
       declaredIn,
     );
   }
@@ -330,7 +335,7 @@ async function resolvePinnedSha(
     );
   }
   throw new LibraryError(
-    `${where} is stale: no tag or commit ${ref} in ${repo}. The library's current head: ${await describeRemoteHead(mirror, url)}`,
+    `${where} is stale: no tag or commit ${ref} in ${repo}. The library's current head: ${await describeRemoteHead(mirror, url, env)}`,
     declaredIn,
   );
 }
@@ -365,7 +370,10 @@ async function materialize(mirror: string, sha: string, dest: string): Promise<v
  * is fatal. Layer 3 otherwise: refresh the mirror so a stale pin is caught,
  * and when the remote is unreachable fall back to the cache with a warning.
  */
-async function fetchLibrary(decl: LibraryDeclaration): Promise<ResolvedLibrary> {
+async function fetchLibrary(
+  decl: LibraryDeclaration,
+  env: NodeJS.ProcessEnv,
+): Promise<ResolvedLibrary> {
   const url = repoUrl(decl.repo, decl.declaredIn);
   const dir = cacheDir(url, decl.repo);
   const mirror = path.join(dir, "mirror.git");
@@ -374,7 +382,7 @@ async function fetchLibrary(decl: LibraryDeclaration): Promise<ResolvedLibrary> 
   let offline: string | undefined;
   if (!(await dirExists(mirror))) {
     const tmp = `${mirror}.tmp-${randomUUID()}`;
-    const r = await git(["clone", "--bare", "--quiet", "--", url, tmp]);
+    const r = await git(["clone", "--bare", "--quiet", "--", url, tmp], env);
     if (!r.ok) {
       await rm(tmp, { recursive: true, force: true });
       throw new LibraryError(
@@ -384,22 +392,25 @@ async function fetchLibrary(decl: LibraryDeclaration): Promise<ResolvedLibrary> 
     }
     await renameIntoPlace(tmp, mirror);
   } else {
-    const r = await git([
-      "--git-dir",
-      mirror,
-      "fetch",
-      "--quiet",
-      "--prune",
-      "--no-write-fetch-head",
-      "--",
-      url,
-      "+refs/heads/*:refs/heads/*",
-      "+refs/tags/*:refs/tags/*",
-    ]);
+    const r = await git(
+      [
+        "--git-dir",
+        mirror,
+        "fetch",
+        "--quiet",
+        "--prune",
+        "--no-write-fetch-head",
+        "--",
+        url,
+        "+refs/heads/*:refs/heads/*",
+        "+refs/tags/*:refs/tags/*",
+      ],
+      env,
+    );
     if (!r.ok) offline = r.stderr;
   }
 
-  const sha = await resolvePinnedSha(decl, url, mirror, path.join(dir, "tags.json"), offline);
+  const sha = await resolvePinnedSha(decl, url, mirror, path.join(dir, "tags.json"), offline, env);
   const root = path.join(dir, sha);
   await materialize(mirror, sha, root);
   if (offline !== undefined) {
@@ -411,15 +422,35 @@ async function fetchLibrary(decl: LibraryDeclaration): Promise<ResolvedLibrary> 
   return { repo: decl.repo, ref: decl.ref, sha, url, declaredIn: decl.declaredIn, root };
 }
 
+/**
+ * How library git runs. `env` is merged into the environment of each library
+ * git child that reaches the remote (the mirror's clone and fetch, and the
+ * stale-pin `ls-remote`), over `process.env` and `GIT_TERMINAL_PROMPT=0`, and
+ * nowhere else: minifac never writes it into `process.env`. An embedder lends a
+ * credential this way (a `GIT_CONFIG_*` insteadOf carrying a token) without
+ * mutating its own process environment, which every other child of that
+ * process would inherit.
+ */
+export interface LibraryGitOptions {
+  env?: NodeJS.ProcessEnv;
+}
+
 // One resolution per library pin per process: a CLI invocation resolves the
-// factory name and then loads it, and both need the library.
+// factory name and then loads it, and both need the library. The key holds no
+// credential and the value holds only the resolved tree, never `env`. A failed
+// resolution is forgotten, so a later call with a working `env` retries it; a
+// call that joins one already in flight shares its outcome whatever `env` it
+// passed.
 const memo = new Map<string, Promise<ResolvedLibrary>>();
 
-export function resolveLibrary(decl: LibraryDeclaration): Promise<ResolvedLibrary> {
+export function resolveLibrary(
+  decl: LibraryDeclaration,
+  options: LibraryGitOptions = {},
+): Promise<ResolvedLibrary> {
   const key = `${minifacHome()}\0${decl.repo}\0${decl.ref}`;
   let pending = memo.get(key);
   if (pending === undefined) {
-    pending = fetchLibrary(decl);
+    pending = fetchLibrary(decl, options.env ?? {});
     memo.set(key, pending);
     pending.catch(() => memo.delete(key));
   }
@@ -435,11 +466,14 @@ export function _clearLibraryMemo(): void {
  * Read the project's layout: its pinned library (fetched and verified) and
  * whether it is a factory repo. Called once per factory load.
  */
-export async function loadProjectLayout(projectRoot: string): Promise<ProjectLayout> {
+export async function loadProjectLayout(
+  projectRoot: string,
+  options: LibraryGitOptions = {},
+): Promise<ProjectLayout> {
   const decl = await readLibraryDeclaration(projectRoot);
   const factoryRepo = await fileExists(path.join(projectRoot, "factory.yaml"));
   if (decl === undefined) return { factoryRepo };
-  return { library: await resolveLibrary(decl), factoryRepo };
+  return { library: await resolveLibrary(decl, options), factoryRepo };
 }
 
 /** Human-readable `repo@ref (sha)` for error messages. */

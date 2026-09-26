@@ -1,6 +1,7 @@
 import path from "node:path";
 import {
   LibraryError,
+  type LibraryGitOptions,
   type LibraryPin,
   type ProjectLayout,
   loadProjectLayout,
@@ -13,6 +14,12 @@ import type { Factory, FactoryNode } from "./schema.js";
 import { startNodeIds } from "./start-nodes.js";
 
 export { FactoryLoadError };
+
+/**
+ * Options for {@link loadFactory}. `env` reaches the library's git children
+ * only (see {@link LibraryGitOptions}); `process.env` is never modified.
+ */
+export type LoadFactoryOptions = LibraryGitOptions;
 
 export interface LoadedFactory {
   factory: Factory;
@@ -41,15 +48,20 @@ export interface LoadedFactory {
  * the project's `library:` pin is read from (`.minifac/config.yaml` or
  * `factory.yaml`). A declared library is fetched and verified before
  * anything else resolves, so a branch or stale pin fails the load.
+ *
+ * `options.env` is merged into the environment of each git child that reaches
+ * the library's remote (for example a `GIT_CONFIG_*` insteadOf lending a
+ * token), and nowhere else.
  */
 export async function loadFactory(
   sourcePath: string,
   callerCwd: string = process.cwd(),
+  options: LoadFactoryOptions = {},
 ): Promise<LoadedFactory> {
   const absolute = path.resolve(sourcePath);
   let layout: ProjectLayout;
   try {
-    layout = await loadProjectLayout(callerCwd);
+    layout = await loadProjectLayout(callerCwd, options);
   } catch (err) {
     if (err instanceof LibraryError) throw new FactoryLoadError(err.message, absolute);
     throw err;
