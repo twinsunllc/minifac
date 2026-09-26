@@ -447,3 +447,67 @@ describe("factory-by-name resolution with a library", () => {
     expect((err as Error).message).toMatch(/library\.ref: main.*names a branch/s);
   });
 });
+
+// SCARIFW-1632 (L-b): an embedder lends library git a credential through
+// `loadFactory(..., { env })` instead of mutating its own process.env. Here the
+// declared remote does not exist; only a `GIT_CONFIG_*` insteadOf in `env`
+// rewrites it to the real (local) remote, so resolution succeeds only if the env
+// reaches the git child.
+describe("library git env option", () => {
+  function rewriteEnv(from: string, to: string): NodeJS.ProcessEnv {
+    return {
+      GIT_CONFIG_COUNT: "1",
+      GIT_CONFIG_KEY_0: `url.${to}.insteadOf`,
+      GIT_CONFIG_VALUE_0: from,
+    };
+  }
+
+  it("resolves a library through a remote reachable only via the env option, leaving process.env unchanged", async () => {
+    const lib = await makeLibrary(root);
+    const unreachable = `file://${path.join(root, "no-such-remote", "lib.git")}`;
+    const consumer = await makeConsumer(root, unreachable, "v0.1.0");
+    const file = await writeAt(consumer, "workflows/standard.yaml", "extends: library:standard\n");
+    const env = rewriteEnv(unreachable, `file://${lib.remote}`);
+    const before = { ...process.env };
+
+    // Without the option the remote cannot be reached and nothing is cached.
+    await expect(loadFactory(file, consumer)).rejects.toThrow(
+      /could not be fetched and nothing is cached/,
+    );
+    expect(process.env).toEqual(before);
+
+    // The failure was not memoized: the same pin resolves once the env is lent.
+    const loaded = await loadFactory(file, consumer, { env });
+    expect(loaded.library).toEqual({ repo: unreachable, ref: "v0.1.0", sha: lib.v1 });
+    expect(loaded.factory.nodes.review?.with?.prompt).toBe("library review K-1");
+    expect(process.env).toEqual(before);
+    expect(Object.keys(process.env).filter((k) => k.startsWith("GIT_CONFIG_"))).toEqual(
+      Object.keys(before).filter((k) => k.startsWith("GIT_CONFIG_")),
+    );
+  });
+
+  it("loadProjectLayout passes the env to the fetch of an already-mirrored library", async () => {
+    const lib = await makeLibrary(root);
+    const unreachable = `file://${path.join(root, "no-such-remote", "lib.git")}`;
+    const consumer = await makeConsumer(root, unreachable, "v0.1.0");
+    const env = rewriteEnv(unreachable, `file://${lib.remote}`);
+    await loadProjectLayout(consumer, { env });
+
+    // A new tag on the real remote is visible only if the refresh fetch got the env.
+    git(lib.work, "commit", "--quiet", "--allow-empty", "-m", "v0.2.0");
+    git(lib.work, "tag", "-a", "v0.2.0", "-m", "v0.2.0");
+    git(lib.work, "push", "--quiet", "origin", "main", "v0.2.0");
+    const v2 = git(lib.work, "rev-parse", "HEAD");
+    _clearLibraryMemo();
+    await writeAt(
+      consumer,
+      "factory.yaml",
+      `name: c\nlibrary:\n  repo: ${unreachable}\n  ref: "v0.2.0"\n`,
+    );
+    const warn = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+
+    const layout = await loadProjectLayout(consumer, { env });
+    expect(layout.library?.sha).toBe(v2);
+    expect(warn).not.toHaveBeenCalled();
+  });
+});

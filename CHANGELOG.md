@@ -13,6 +13,17 @@ conflict; a duplicate or oddly-ordered bullet is tidied when a release is cut.
 
 ### Added
 
+- **`loadFactory(sourcePath, callerCwd, { env })`** (SCARIFW-1632). The new
+  optional third argument (`LoadFactoryOptions`, exported) is merged into
+  the environment of each library git child that reaches the remote (the
+  mirror's clone and fetch, and the stale-pin `ls-remote`), over
+  `process.env`. An embedder can lend library resolution a credential, such
+  as a `GIT_CONFIG_*` insteadOf carrying a token, without writing it into
+  its own `process.env`. minifac never modifies `process.env` with it. The
+  per-process library memo is still keyed by home, repo and ref only, and
+  never stores `env`; a failed resolution is forgotten as before, so a
+  retry with a working `env` fetches again. `loadProjectLayout` and
+  `resolveLibrary` take the same options.
 - **Workflow `uses_services:`** (SCARIFW-1531,
   [ADR 0045](docs/decisions/0045-Workflow-Uses-Services.md)). A workflow may
   declare a top-level `uses_services:` list of unique, non-empty service
