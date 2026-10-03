@@ -13,6 +13,14 @@ conflict; a duplicate or oddly-ordered bullet is tidied when a release is cut.
 
 ### Added
 
+- **A `uses:` node may carry `with: { secrets }`** (SCARIFW-2072,
+  [ADR 0046](docs/decisions/0046-Uses-Node-Secrets.md)). Beside `uses:`, a
+  node may declare a `with:` whose only key is `secrets`, a list; the loader
+  copies it unchanged into the inlined step's `with.secrets`. Any other
+  `with:` key beside `uses:` is still refused, as are an empty `with: {}`, a
+  non-list `secrets`, and a node `with.secrets` when the step's own `with`
+  already declares `secrets` (no override, no union). Each refusal is one
+  sentence naming the node.
 - **`loadFactory(sourcePath, callerCwd, { env })`** (SCARIFW-1632). The new
   optional third argument (`LoadFactoryOptions`, exported) is merged into
   the environment of each library git child that reaches the remote (the

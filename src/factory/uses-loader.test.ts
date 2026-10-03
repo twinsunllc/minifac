@@ -128,6 +128,136 @@ edges: []
     await expect(loadFactory(fac, repo)).rejects.toThrowError(/mutually exclusive/);
   });
 
+  describe("uses: with `with: { secrets }` (ADR 0046)", () => {
+    const SECRETS_STEP = `name: impl
+version: "1.0.0"
+executor: claude
+with:
+  prompt: "Implement it"
+  permission_mode: "bypass_permissions"
+`;
+
+    function facWith(withYaml: string): string {
+      return `name: f
+nodes:
+  implement:
+    uses: minifac:impl
+    with: ${withYaml}
+    terminal: true
+edges: []
+`;
+    }
+
+    async function expectRefusal(repo: string, fac: string, pattern: RegExp): Promise<string> {
+      const err = await loadFactory(fac, repo).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(FactoryLoadError);
+      const message = (err as Error).message;
+      expect(message).toContain('Node "implement"');
+      expect(message).toMatch(pattern);
+      // One sentence: no sentence break inside the message.
+      expect(message).not.toMatch(/[.!?]\s/);
+      return message;
+    }
+
+    it("accepts a local step and merges the declared list into the resolved `with`", async () => {
+      const repo = await makeRepo();
+      await writeAt(repo, "examples/steps/impl.yaml", SECRETS_STEP);
+      const fac = await writeAt(
+        repo,
+        "fac.yaml",
+        facWith("{ secrets: [A_TOKEN, { name: B_TOKEN, via: proxy }] }"),
+      );
+      const { factory } = await loadFactory(fac, repo);
+      const node = factory.nodes.implement;
+      expect(node?.executor).toBe("claude");
+      expect(node?.with).toEqual({
+        prompt: "Implement it",
+        permission_mode: "bypass_permissions",
+        secrets: ["A_TOKEN", { name: "B_TOKEN", via: "proxy" }],
+      });
+      expect((node as { uses?: unknown }).uses).toBeUndefined();
+      expect((node as { inputs?: unknown }).inputs).toBeUndefined();
+    });
+
+    it("accepts a factory-repo root `steps/` step", async () => {
+      const repo = await makeRepo();
+      await writeAt(repo, "factory.yaml", "name: c\n");
+      await writeAt(repo, "steps/impl.yaml", SECRETS_STEP);
+      const fac = await writeAt(
+        repo,
+        "workflows/w.yaml",
+        `name: w
+nodes:
+  implement:
+    uses: impl
+    with: { secrets: [PAY_KEY] }
+    terminal: true
+edges: []
+`,
+      );
+      const { factory } = await loadFactory(fac, repo);
+      expect(factory.nodes.implement?.with?.secrets).toEqual(["PAY_KEY"]);
+      expect(factory.nodes.implement?.with?.prompt).toBe("Implement it");
+    });
+
+    it("accepts an empty secrets list and merges it as empty", async () => {
+      const repo = await makeRepo();
+      await writeAt(repo, "examples/steps/impl.yaml", SECRETS_STEP);
+      const fac = await writeAt(repo, "fac.yaml", facWith("{ secrets: [] }"));
+      const { factory } = await loadFactory(fac, repo);
+      expect(factory.nodes.implement?.with?.secrets).toEqual([]);
+    });
+
+    it("refuses any other key beside `uses:`, alone or next to secrets", async () => {
+      for (const [withYaml, key] of [
+        ['{ permission_mode: "bypass_permissions" }', "permission_mode"],
+        ["{ prompt: y }", "prompt"],
+        ["{ secrets: [A_TOKEN], model: z }", "model"],
+      ] as const) {
+        const repo = await makeRepo();
+        await writeAt(repo, "examples/steps/impl.yaml", SECRETS_STEP);
+        const fac = await writeAt(repo, "fac.yaml", facWith(withYaml));
+        const message = await expectRefusal(repo, fac, /mutually exclusive/);
+        expect(message).toContain(`(${key})`);
+      }
+    });
+
+    it("refuses when the step already declares secrets, even an equal list", async () => {
+      for (const declared of ["[A_TOKEN]", "[B_TOKEN]"]) {
+        const repo = await makeRepo();
+        await writeAt(repo, "examples/steps/impl.yaml", `${SECRETS_STEP}  secrets: [A_TOKEN]\n`);
+        const fac = await writeAt(repo, "fac.yaml", facWith(`{ secrets: ${declared} }`));
+        const message = await expectRefusal(repo, fac, /already declares `secrets`/);
+        expect(message).toContain("impl.yaml");
+      }
+    });
+
+    it("refuses an empty `with: {}`", async () => {
+      const repo = await makeRepo();
+      await writeAt(repo, "examples/steps/impl.yaml", SECRETS_STEP);
+      const fac = await writeAt(repo, "fac.yaml", facWith("{}"));
+      await expectRefusal(repo, fac, /empty `with:`/);
+    });
+
+    it("refuses a non-list `with.secrets`", async () => {
+      for (const value of ["A_TOKEN", "{ name: A_TOKEN }", "null"]) {
+        const repo = await makeRepo();
+        await writeAt(repo, "examples/steps/impl.yaml", SECRETS_STEP);
+        const fac = await writeAt(repo, "fac.yaml", facWith(`{ secrets: ${value} }`));
+        await expectRefusal(repo, fac, /is not a list/);
+      }
+    });
+
+    it("refuses a non-mapping `with:`", async () => {
+      const repo = await makeRepo();
+      await writeAt(repo, "examples/steps/impl.yaml", SECRETS_STEP);
+      const fac = await writeAt(repo, "fac.yaml", facWith("x"));
+      const err = await loadFactory(fac, repo).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(FactoryLoadError);
+      expect((err as Error).message).toContain("implement");
+    });
+  });
+
   it("rejects node with inputs: but no uses:", async () => {
     const repo = await makeRepo();
     const fac = await writeAt(

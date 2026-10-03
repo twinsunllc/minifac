@@ -233,15 +233,35 @@ and merge the result is validated through `FactorySchema`, which strips
 Each entry under `nodes:` is a map key (the node id) to a node object.
 A node uses **either** the inline form (`executor` + `with`) **or** the
 step-reference form (`uses` + optional `inputs`). The two forms are
-mutually exclusive at dispatch: if `uses:` is present the loader resolves
-it and inlines the step's `executor` and `with`, discarding any
-`executor` or `with` keys on the node itself.
+mutually exclusive: the loader refuses a node that declares `uses:`
+together with `executor:`, and resolves `uses:` by inlining the step's
+`executor` and `with`.
+
+One exception: beside `uses:`, a node MAY declare a `with:` whose **only**
+key is `secrets`, a list. The loader copies that list, unchanged, into the
+inlined step's `with` as `with.secrets`. This lets a workflow file name the
+secrets a library or local step needs, so a reader of the workflow file
+alone (Scarif reads `with.secrets` from it) sees them. The loader refuses,
+with one sentence naming the node, a `with:` beside `uses:` that holds any
+other key, an empty `with: {}`, a `secrets` value that is not a list, and a
+node `with.secrets` when the step's own `with` already declares `secrets`:
+there is no override and no union. minifac does not check the entries'
+shape; the consumer that reads `with.secrets` does. See
+[[0046-Uses-Node-Secrets]].
+
+```yaml
+nodes:
+  implement:
+    uses: implement
+    with:
+      secrets: [STRIPE_KEY, { name: GITHUB_TOKEN, via: proxy }]
+```
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `executor` | string (min 1) | no | — | Which [[Executor]] runs this node. Omit when using `uses:`. The only implemented value is `"claude"`. |
-| `with` | map (string → unknown) | no | — | Executor-specific configuration. Shape is validated by the executor at dispatch time, not by the factory loader. See [[#`with:` fields (claude executor)\|with fields]] below. Omit when using `uses:`. |
-| `uses` | string (min 1) | no | — | Reference to a reusable [[Step]]. Mutually exclusive with `executor` + `with`. See [[Step#Reference syntax and lookup precedence]]. |
+| `with` | map (string → unknown) | no | — | Executor-specific configuration. Shape is validated by the executor at dispatch time, not by the factory loader. See [[#`with:` fields (claude executor)\|with fields]] below. Beside `uses:` it may hold only `secrets` (a list), merged into the inlined step's `with` and refused when the step already declares `secrets`. |
+| `uses` | string (min 1) | no | — | Reference to a reusable [[Step]]. Mutually exclusive with `executor`, and with every `with` key except `secrets`. See [[Step#Reference syntax and lookup precedence]]. |
 | `inputs` | map (string → unknown) | no | — | Input values supplied to the step declared in `uses:`. Keys must match the step's declared input names. Omit when using inline `executor` + `with`. |
 | `cwd` | string | no | — | Working directory for this node. Accepts `{{ run.cwd }}` and `{{ brief.* }}` template tokens. If omitted the runner's default cwd applies. |
 | `terminal` | boolean | no | `false` | When `true`, a successful exit from this node ends the run. Use on the last node in a forward-flow path. |

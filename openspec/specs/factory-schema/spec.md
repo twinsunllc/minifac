@@ -713,7 +713,7 @@ from the resolved factory; downstream consumers SHALL NOT see it.
 
 ### Requirement: Node `uses:` field as an alternative to inline executor
 
-A factory node MAY declare a `uses:` field whose value SHALL be a non-empty string conforming to the `step-schema` capability's reference syntax (one of `minifac:<name>`, `<scope>/<name>[@<version>]`, or bare `<name>[@<version>]`). When a node declares `uses:`, it SHALL NOT also declare `executor:` or `with:` — the two patterns are mutually exclusive on a single node, and the loader SHALL reject a node that declares both.
+A factory node MAY declare a `uses:` field whose value SHALL be a non-empty string conforming to the `step-schema` capability's reference syntax (one of `minifac:<name>`, `<scope>/<name>[@<version>]`, or bare `<name>[@<version>]`). When a node declares `uses:`, it SHALL NOT also declare `executor:` — the two patterns are mutually exclusive on a single node, and the loader SHALL reject a node that declares both. A node that declares `uses:` MAY also declare a `with:` whose only key is `secrets`, whose value SHALL be a list. The loader SHALL copy that list, unchanged and in order, into the inlined step's `with` as `with.secrets`. Beside `uses:`, the loader SHALL reject, with a `FactoryLoadError` whose message is one sentence naming the node id: a `with:` holding any key other than `secrets` (alone or beside `secrets`); an empty `with: {}`; a `with:` that is not a mapping; and a `with.secrets` that is not a list. When the node declares `with.secrets` and the step's own `with` already declares `secrets`, the loader SHALL reject the node with a one-sentence `FactoryLoadError` naming the node id and the step, whether or not the two lists are equal; it SHALL NOT override or union them. The loader SHALL NOT validate the list's entries; their shape belongs to the consumer that reads `with.secrets`, as it does for an inline node.
 
 A node with `uses:` MAY declare an `inputs:` field whose value SHALL be a flat object mapping input names (strings) to input values. The input values supply concrete values for the step's declared inputs; they are validated against the step's input schema at load time (see "Step input validation against the step's declared schema" requirement).
 
@@ -736,10 +736,30 @@ The factory schema SHALL remain strict on extras at the node level. The accepted
 - **WHEN** the loader reads a node that declares both `uses: minifac:foo` and `executor: claude`
 - **THEN** validation fails with an error naming the node id and explaining the mutual-exclusion rule
 
-#### Scenario: Node with both `uses:` and `with:` is rejected
+#### Scenario: Node with `uses:` and a `with:` key other than `secrets` is rejected
 
-- **WHEN** the loader reads a node that declares both `uses: minifac:foo` and `with: { permission_mode: "bypass_permissions" }`
-- **THEN** validation fails with an error naming the node id and explaining the mutual-exclusion rule
+- **WHEN** the loader reads a node that declares `uses: minifac:foo` and `with: { permission_mode: "bypass_permissions" }`, or `with: { prompt: "y" }`, or `with: { secrets: [A], model: "z" }`
+- **THEN** validation fails with a one-sentence `FactoryLoadError` naming the node id, the offending key, and the mutual-exclusion rule
+
+#### Scenario: Node with `uses:` and `with: { secrets }` loads with the list merged (local step)
+
+- **WHEN** the loader reads a node that declares `uses: <local step>` and `with: { secrets: [A, { name: B, via: proxy }] }`, and the step's `with` declares no `secrets`
+- **THEN** the resolved node's `with.secrets` deep-equals `[A, { name: B, via: proxy }]`, the step's other `with` keys are unchanged, and the resolved node has no `uses:` / `inputs:` fields
+
+#### Scenario: Node with `uses:` and `with: { secrets }` loads with the list merged (library step)
+
+- **WHEN** the loader reads, in a project that pins a library, a node that declares `uses: <library step>` and `with: { secrets: [...] }`
+- **THEN** the resolved node's `with.secrets` deep-equals the declared list and the library step's other `with` keys are unchanged
+
+#### Scenario: Node `with.secrets` refused when the step already declares `secrets`
+
+- **WHEN** the loader reads a node that declares `uses: minifac:foo` and `with: { secrets: [A] }`, and step `foo`'s own `with` declares `secrets` (equal to `[A]` or not)
+- **THEN** validation fails with a one-sentence `FactoryLoadError` naming the node id and the step; nothing is overridden or unioned
+
+#### Scenario: Malformed `with:` beside `uses:` is rejected
+
+- **WHEN** the loader reads a node that declares `uses: minifac:foo` and `with: {}`, or `with: { secrets: "A" }`, or a `with:` that is not a mapping
+- **THEN** validation fails with an error naming the node id
 
 #### Scenario: Node with `inputs:` but no `uses:` is rejected
 

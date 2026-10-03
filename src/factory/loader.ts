@@ -87,6 +87,9 @@ export async function loadFactory(
 /**
  * Validate the `uses:` / `executor:` / `with:` / `inputs:` interplay on
  * every node. Runs after schema parse, before step inlining.
+ *
+ * Beside `uses:`, `with:` may hold exactly one key, `secrets` (an array);
+ * `inlineStepIntoNode` merges it into the inlined step's `with` (ADR 0046).
  */
 function validateNodeShape(factory: Factory, sourcePath: string): void {
   for (const [nodeId, node] of Object.entries(factory.nodes)) {
@@ -102,12 +105,7 @@ function validateNodeShape(factory: Factory, sourcePath: string): void {
         sourcePath,
       );
     }
-    if (hasUses && hasWith) {
-      throw new FactoryLoadError(
-        `Node "${nodeId}" declares both \`uses:\` and \`with:\`; the two are mutually exclusive`,
-        sourcePath,
-      );
-    }
+    if (hasUses && hasWith) validateUsesWith(nodeId, n.with, sourcePath);
     if (hasInputs && !hasUses) {
       throw new FactoryLoadError(
         `Node "${nodeId}" declares \`inputs:\` without \`uses:\`; \`inputs:\` is only valid alongside \`uses:\``,
@@ -124,6 +122,41 @@ function validateNodeShape(factory: Factory, sourcePath: string): void {
       // covers empty-string and non-string-after-schema (defensive)
       throw new FactoryLoadError(`Node "${nodeId}" has invalid \`uses:\` value`, sourcePath);
     }
+  }
+}
+
+/**
+ * A `with:` beside `uses:` may hold only `secrets`, and `secrets` must be an
+ * array. The entries' own shape (a name or `{ name, via }`) is left to the
+ * consumer that reads it, as it is for an inline node's `with.secrets`.
+ */
+function validateUsesWith(nodeId: string, withValue: unknown, sourcePath: string): void {
+  // The schema already refuses a non-mapping `with:`; this keeps the rule whole here.
+  if (withValue === null || typeof withValue !== "object" || Array.isArray(withValue)) {
+    throw new FactoryLoadError(
+      `Node "${nodeId}" declares \`uses:\` with a \`with:\` that is not a mapping; beside \`uses:\`, \`with:\` may hold only \`secrets\``,
+      sourcePath,
+    );
+  }
+  const keys = Object.keys(withValue);
+  const others = keys.filter((k) => k !== "secrets");
+  if (others.length > 0) {
+    throw new FactoryLoadError(
+      `Node "${nodeId}" declares both \`uses:\` and \`with:\` keys other than \`secrets\` (${others.join(", ")}); the two are mutually exclusive, and beside \`uses:\`, \`with:\` may hold only \`secrets\``,
+      sourcePath,
+    );
+  }
+  if (keys.length === 0) {
+    throw new FactoryLoadError(
+      `Node "${nodeId}" declares \`uses:\` with an empty \`with:\`; beside \`uses:\`, \`with:\` may hold only \`secrets\``,
+      sourcePath,
+    );
+  }
+  if (!Array.isArray((withValue as { secrets?: unknown }).secrets)) {
+    throw new FactoryLoadError(
+      `Node "${nodeId}" declares \`with.secrets\` beside \`uses:\` that is not a list`,
+      sourcePath,
+    );
   }
 }
 

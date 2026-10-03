@@ -357,4 +357,62 @@ with: { prompt: hi }
     expect(out.max_iterations).toBe(5);
     expect(out.cwd).toBe("{{ run.cwd }}");
   });
+
+  describe("node `with.secrets` (ADR 0046)", () => {
+    const STEP = `name: s
+version: "1"
+executor: claude
+with:
+  prompt: "do it"
+  permission_mode: "bypass_permissions"
+`;
+
+    it("merges the node's declared secrets into the inlined `with`, unchanged and in order", async () => {
+      const repo = await makeRepo();
+      await writeStep(repo, "s", STEP);
+      const secrets = ["A_TOKEN", { name: "B_TOKEN", via: "proxy" }];
+      const out = await inlineStepIntoNode({
+        factoryPath: FACTORY,
+        nodeId: "implement",
+        node: { uses: "minifac:s", with: { secrets } } as never,
+        callerCwd: repo,
+      });
+      expect(out.with).toEqual({
+        prompt: "do it",
+        permission_mode: "bypass_permissions",
+        secrets: ["A_TOKEN", { name: "B_TOKEN", via: "proxy" }],
+      });
+      expect((out as { uses?: unknown }).uses).toBeUndefined();
+    });
+
+    it("refuses when the step's own `with` already declares secrets, even an equal list", async () => {
+      const repo = await makeRepo();
+      await writeStep(repo, "s2", `${STEP}  secrets: [A_TOKEN]\n`);
+      for (const secrets of [["A_TOKEN"], ["B_TOKEN"]]) {
+        const err = await inlineStepIntoNode({
+          factoryPath: FACTORY,
+          nodeId: "implement",
+          node: { uses: "minifac:s2", with: { secrets } } as never,
+          callerCwd: repo,
+        }).catch((e: unknown) => e);
+        expect(err).toBeInstanceOf(FactoryLoadError);
+        const message = (err as Error).message;
+        expect(message).toContain('Node "implement"');
+        expect(message).toContain("s2.yaml");
+        expect(message).toMatch(/refusing to override it$/);
+      }
+    });
+
+    it("leaves a step's own secrets alone when the node declares none", async () => {
+      const repo = await makeRepo();
+      await writeStep(repo, "s3", `${STEP}  secrets: [A_TOKEN]\n`);
+      const out = await inlineStepIntoNode({
+        factoryPath: FACTORY,
+        nodeId: "implement",
+        node: { uses: "minifac:s3" } as never,
+        callerCwd: repo,
+      });
+      expect(out.with?.secrets).toEqual(["A_TOKEN"]);
+    });
+  });
 });
