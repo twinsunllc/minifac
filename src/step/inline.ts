@@ -140,6 +140,21 @@ export async function inlineStepIntoNode(args: InlineArgs): Promise<InlinedNode>
     }
   }
 
+  // A `uses:` node may declare `with: { secrets }` (validated by the
+  // loader's node-shape check). It is copied as declared into the inlined
+  // `with`; a step that already declares `secrets` is refused rather than
+  // overridden or unioned (ADR 0046).
+  const nodeWith = node.with;
+  if (nodeWith !== undefined && Object.hasOwn(nodeWith, "secrets")) {
+    if (Object.hasOwn(step.with, "secrets")) {
+      throw new FactoryLoadError(
+        `Node "${nodeId}" declares \`with.secrets\` but step \`${stepPath}\` already declares \`secrets\`; refusing to override it`,
+        factoryPath,
+      );
+    }
+    inlinedWith.secrets = nodeWith.secrets;
+  }
+
   // Build the resolved node. Strip `uses:` and `inputs:`; keep
   // node-level fields the source declared.
   const out: FactoryNode = {

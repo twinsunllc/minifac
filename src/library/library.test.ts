@@ -297,6 +297,32 @@ edges: []
     expect(loaded.factory.nodes.r?.with?.prompt).toBe("library review K-2");
   });
 
+  it("merges a `uses:` node's `with: { secrets }` into the inlined library step (ADR 0046)", async () => {
+    const lib = await makeLibrary(root);
+    const consumer = await makeConsumer(root, lib.remote, "v0.1.0");
+    const file = await writeAt(
+      consumer,
+      "workflows/one.yaml",
+      `name: one
+brief: none
+nodes:
+  r:
+    uses: review
+    terminal: true
+    inputs: { jira_key: "K-3" }
+    with:
+      secrets: [PAY_KEY, { name: OTHER_TOKEN, via: env }]
+edges: []
+`,
+    );
+    const { factory } = await loadFactory(file, consumer);
+    expect(factory.nodes.r?.with).toEqual({
+      prompt: "library review K-3",
+      allowed_tools: ["Read"],
+      secrets: ["PAY_KEY", { name: "OTHER_TOKEN", via: "env" }],
+    });
+  });
+
   it("a factory `steps/<name>.yaml` replaces the library step wholly", async () => {
     const lib = await makeLibrary(root);
     const consumer = await makeConsumer(root, lib.remote, "v0.1.0");
