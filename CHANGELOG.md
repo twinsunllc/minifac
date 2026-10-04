@@ -208,6 +208,16 @@ conflict; a duplicate or oddly-ordered bullet is tidied when a release is cut.
   Before this, a page the operator visited could start one of their
   factories in a `cwd` of its choosing with a cross-origin `text/plain`
   POST.
+- **A test fails on an unpinned Bearer install in CI** (SCARIFW-2125).
+  `src/ci/bearer-install-pinned.test.ts` reads every workflow under
+  `.github/workflows` and fails on `bearer/bearer-action`, on a downloaded
+  script piped into a shell, on a fetch of Bearer's `install.sh`, and on a
+  release install whose `BEARER_VERSION` is not an exact x.y.z or whose
+  tarball is not checked with `sha256sum -c` against a 64-hex
+  `BEARER_SHA256` before extraction. It also pins `bearer.yml`'s scan to
+  `sast,secrets` at `critical,high` with no token and no persisted
+  checkout credentials. The workflow itself is unchanged: it has installed
+  the pinned release since SCARIFW-1550.
 
 ## [0.1.2] — 2026-06-18
 
