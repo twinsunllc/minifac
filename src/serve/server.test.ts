@@ -1,4 +1,5 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -35,6 +36,29 @@ function buildScripted(scripts: Record<string, NodeEvent[]>): () => ExecutorRegi
     reg.register(exec);
     return reg;
   };
+}
+
+// fetch() forbids setting Host and Origin, so the cross-site and
+// DNS-rebinding requests are sent with node:http, which does not.
+function rawRequest(
+  port: number,
+  opts: { method: string; path: string; headers?: Record<string, string>; body?: string },
+): Promise<{ status: number; body: string }> {
+  return new Promise((resolve, reject) => {
+    const req = httpRequest(
+      { host: "127.0.0.1", port, method: opts.method, path: opts.path, headers: opts.headers },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (c: Buffer) => chunks.push(c));
+        res.on("end", () =>
+          resolve({ status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString("utf8") }),
+        );
+        res.on("error", reject);
+      },
+    );
+    req.on("error", reject);
+    req.end(opts.body);
+  });
 }
 
 interface Harness {
@@ -151,6 +175,113 @@ describe("startDaemon http API", () => {
       body: JSON.stringify({ factoryId: "hello", cwd: "./relative" }),
     });
     expect(r.status).toBe(400);
+  });
+
+  it("POST /api/runs refuses a cross-origin Origin with 403 and starts no run", async () => {
+    await writeFile(path.join(dir, "hello.yaml"), HELLO_YAML);
+    h = await start({ dir, web: webDir });
+    const r = await rawRequest(h.handle.port, {
+      method: "POST",
+      path: "/api/runs",
+      headers: { "Content-Type": "application/json", Origin: "https://evil.example" },
+      body: JSON.stringify({ factoryId: "hello", cwd: dir }),
+    });
+    expect(r.status).toBe(403);
+    expect(JSON.parse(r.body)).toEqual({ error: "forbidden_origin" });
+    const list = (await (await fetch(`${h.base}/api/runs`)).json()) as { runs: unknown[] };
+    expect(list.runs).toEqual([]);
+  });
+
+  it("POST /api/runs accepts the daemon's own loopback Origin", async () => {
+    await writeFile(path.join(dir, "hello.yaml"), HELLO_YAML);
+    h = await start({ dir, web: webDir });
+    const r = await rawRequest(h.handle.port, {
+      method: "POST",
+      path: "/api/runs",
+      headers: {
+        "Content-Type": "application/json",
+        Host: `localhost:${h.handle.port}`,
+        Origin: `http://localhost:${h.handle.port}`,
+      },
+      body: JSON.stringify({ factoryId: "hello" }),
+    });
+    expect(r.status).toBe(201);
+  });
+
+  it("POST /api/runs refuses a loopback Origin at another port with 403", async () => {
+    await writeFile(path.join(dir, "hello.yaml"), HELLO_YAML);
+    h = await start({ dir, web: webDir });
+    const r = await rawRequest(h.handle.port, {
+      method: "POST",
+      path: "/api/runs",
+      headers: {
+        "Content-Type": "application/json",
+        Origin: `http://127.0.0.1:${h.handle.port + 1}`,
+      },
+      body: JSON.stringify({ factoryId: "hello" }),
+    });
+    expect(r.status).toBe(403);
+  });
+
+  it("refuses a non-loopback Host (DNS rebinding) with 403 on every route", async () => {
+    await writeFile(path.join(dir, "hello.yaml"), HELLO_YAML);
+    h = await start({ dir, web: webDir });
+    const host = `rebind.evil.example:${h.handle.port}`;
+    for (const p of ["/api/factories", "/api/runs", "/"]) {
+      const r = await rawRequest(h.handle.port, {
+        method: "GET",
+        path: p,
+        headers: { Host: host },
+      });
+      expect(r.status, p).toBe(403);
+      expect(JSON.parse(r.body), p).toEqual({ error: "forbidden_host" });
+    }
+  });
+
+  it("refuses a loopback Host at the wrong port with 403", async () => {
+    h = await start({ dir, web: webDir });
+    const r = await rawRequest(h.handle.port, {
+      method: "GET",
+      path: "/api/factories",
+      headers: { Host: `127.0.0.1:${h.handle.port + 1}` },
+    });
+    expect(r.status).toBe(403);
+  });
+
+  it("accepts every loopback Host name at the bound port", async () => {
+    h = await start({ dir, web: webDir });
+    for (const name of ["127.0.0.1", "localhost", "[::1]"]) {
+      const r = await rawRequest(h.handle.port, {
+        method: "GET",
+        path: "/api/factories",
+        headers: { Host: `${name}:${h.handle.port}` },
+      });
+      expect(r.status, name).toBe(200);
+    }
+  });
+
+  it("POST /api/runs refuses a text/plain body with 415 and starts no run", async () => {
+    await writeFile(path.join(dir, "hello.yaml"), HELLO_YAML);
+    h = await start({ dir, web: webDir });
+    const r = await fetch(`${h.base}/api/runs`, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain" },
+      body: JSON.stringify({ factoryId: "hello", cwd: dir }),
+    });
+    expect(r.status).toBe(415);
+    const list = (await (await fetch(`${h.base}/api/runs`)).json()) as { runs: unknown[] };
+    expect(list.runs).toEqual([]);
+  });
+
+  it("POST /api/runs accepts application/json with a charset parameter", async () => {
+    await writeFile(path.join(dir, "hello.yaml"), HELLO_YAML);
+    h = await start({ dir, web: webDir });
+    const r = await fetch(`${h.base}/api/runs`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json; charset=utf-8" },
+      body: JSON.stringify({ factoryId: "hello" }),
+    });
+    expect(r.status).toBe(201);
   });
 
   it("PUT on known path returns 405", async () => {

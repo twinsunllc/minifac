@@ -1,0 +1,63 @@
+name: bearer
+
+# Bearer SAST + secrets scan as a PR gate — see
+# docs/decisions/0047-Bearer-SAST-PR-Gate.md. A critical or high
+# finding fails the job unless bearer.ignore (repo root) waives its
+# fingerprint with a written reason.
+#
+# The Bearer CLI is a pinned release binary checked against a sha256
+# hard-coded below, not bearer/bearer-action: that action pipes
+# install.sh from Bearer/bearer's main branch into sh, installs the
+# latest CLI unless told otherwise, and hands the binary GITHUB_TOKEN.
+# Here nothing is fetched from a mutable ref, a tampered or swapped
+# tarball fails the checksum step, and the scan runs with no token in
+# its environment. To bump: change BEARER_VERSION and take
+# BEARER_SHA256 from that release's checksums.txt (the
+# bearer_<version>_linux_amd64.tar.gz line).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bearer-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BEARER_VERSION: "2.1.1"
+  BEARER_SHA256: "6b79d315577fea8305dfe08577bea6ad53852a929cd24de9211d39750a194bbb"
+
+jobs:
+  bearer:
+    name: Bearer (sast + secrets, critical/high)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Bearer CLI (pinned release, sha256-verified)
+        run: |
+          set -euo pipefail
+          tarball="bearer_${BEARER_VERSION}_linux_amd64.tar.gz"
+          dest="$RUNNER_TEMP/bearer"
+          mkdir -p "$dest"
+          curl -fsSL --retry 3 -o "$dest/$tarball" \
+            "https://github.com/Bearer/bearer/releases/download/v${BEARER_VERSION}/${tarball}"
+          echo "${BEARER_SHA256}  $dest/$tarball" | sha256sum -c -
+          tar -xzf "$dest/$tarball" -C "$dest" bearer
+          "$dest/bearer" version
+
+      - name: Bearer SAST and secrets scan
+        run: |
+          "$RUNNER_TEMP/bearer/bearer" scan . \
+            --scanner sast,secrets \
+            --severity critical,high \
+            --disable-version-check \
+            --hide-progress-bar

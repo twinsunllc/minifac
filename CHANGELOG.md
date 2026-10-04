@@ -13,6 +13,17 @@ conflict; a duplicate or oddly-ordered bullet is tidied when a release is cut.
 
 ### Added
 
+- **Bearer SAST + secrets scan gates every PR** (SCARIFW-1550,
+  [ADR 0047](docs/decisions/0047-Bearer-SAST-PR-Gate.md)). A new
+  `.github/workflows/bearer.yml` runs Bearer at `critical,high` on pull
+  requests and pushes to `main`; an unwaived finding fails the job. The CLI
+  is a pinned release (2.1.1) checked against a hard-coded sha256 and runs
+  with no token in its environment; no third-party action is added. The
+  four findings Bearer reported on main are waived in a new `bearer.ignore`,
+  each with its reason: the runner MCP server's CWE-319 is a false positive
+  (it listens on a Unix domain socket in a 0700 directory, never TCP, now
+  pinned by a test in `src/runner/mcp-server.test.ts`), two CWE-22s are
+  false positives, and `resolveCwd`'s CWE-22 is accepted by design.
 - **A `uses:` node may carry `with: { secrets }`** (SCARIFW-2072,
   [ADR 0046](docs/decisions/0046-Uses-Node-Secrets.md)). Beside `uses:`, a
   node may declare a `with:` whose only key is `secrets`, a list; the loader
@@ -186,6 +197,17 @@ conflict; a duplicate or oddly-ordered bullet is tidied when a release is cut.
   run begin.
 - Pinned `fast-uri` to 3.1.7 to clear four high advisories
   (GHSA-5jgf-p345-68v8 and related) within the dependency cooldown (#32).
+
+### Security
+
+- **`minifac serve` refuses requests from foreign web pages**
+  (SCARIFW-1550). A request whose `Host` is not `127.0.0.1`, `localhost`
+  or `[::1]` at the bound port gets `403` (DNS rebinding), as does any
+  non-`GET`/`HEAD` request whose `Origin` is not the daemon's own;
+  `POST /api/runs` without `Content-Type: application/json` gets `415`.
+  Before this, a page the operator visited could start one of their
+  factories in a `cwd` of its choosing with a cross-origin `text/plain`
+  POST.
 
 ## [0.1.2] — 2026-06-18
 
