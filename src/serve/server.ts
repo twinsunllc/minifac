@@ -76,9 +76,11 @@ export async function startDaemon(options: StartDaemonOptions): Promise<DaemonHa
   const webRoot = options.webRoot ?? defaultWebRoot();
 
   const router = buildApiRouter();
+  // Filled in once listen() has bound, before any request can arrive.
+  const bound = { port: 0 };
 
   const server = createServer((req, res) => {
-    handleRequest(req, res, { router, watcher, runs, webRoot }).catch((err) => {
+    handleRequest(req, res, { router, watcher, runs, webRoot, bound }).catch((err) => {
       if (!res.headersSent) {
         res.statusCode = 500;
         res.setHeader("Content-Type", "application/json");
@@ -103,6 +105,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<DaemonHa
 
   const addr = server.address();
   const boundPort = typeof addr === "object" && addr !== null ? addr.port : options.port;
+  bound.port = boundPort;
 
   return {
     host: options.host,
@@ -148,6 +151,54 @@ interface RequestDeps {
   watcher: FactoryWatcher;
   runs: RunRegistry;
   webRoot: string;
+  bound: { port: number };
+}
+
+// Host names a browser may put in the Host / Origin of a request to the
+// loopback daemon. Anything else is a DNS-rebinding name (or a misrouted
+// request) and is refused.
+const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "localhost", "[::1]"]);
+
+function isLoopbackAuthority(authority: string, port: number): boolean {
+  let u: URL;
+  try {
+    u = new URL(`http://${authority}`);
+  } catch {
+    return false;
+  }
+  if (u.username || u.password || u.pathname !== "/" || u.search || u.hash) return false;
+  if (!LOOPBACK_HOSTNAMES.has(u.hostname)) return false;
+  // URL drops the default port 80, so an empty port means 80.
+  return (u.port === "" ? 80 : Number(u.port)) === port;
+}
+
+function isSameLoopbackOrigin(origin: string, port: number): boolean {
+  if (!origin.startsWith("http://")) return false;
+  return isLoopbackAuthority(origin.slice("http://".length), port);
+}
+
+/**
+ * Refuse a request that did not come from the operator's own viewer or
+ * client on this host: a Host that is not a loopback name at the bound
+ * port (DNS rebinding) and, on any non-GET/HEAD method, an Origin other
+ * than the daemon's own (cross-site request forgery from a web page).
+ * Returns true when the request was refused and answered.
+ */
+function refuseForeignRequest(req: IncomingMessage, res: ServerResponse, port: number): boolean {
+  const host = req.headers.host;
+  if (host === undefined || !isLoopbackAuthority(host, port)) {
+    sendJson(res, 403, { error: "forbidden_host" });
+    return true;
+  }
+  const method = req.method ?? "";
+  if (method !== "GET" && method !== "HEAD") {
+    const origin = req.headers.origin;
+    if (origin !== undefined && !isSameLoopbackOrigin(origin, port)) {
+      sendJson(res, 403, { error: "forbidden_origin" });
+      return true;
+    }
+  }
+  return false;
 }
 
 async function handleRequest(
@@ -155,7 +206,8 @@ async function handleRequest(
   res: ServerResponse,
   deps: RequestDeps,
 ): Promise<void> {
-  const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "127.0.0.1"}`);
+  if (refuseForeignRequest(req, res, deps.bound.port)) return;
+  const url = new URL(req.url ?? "/", "http://127.0.0.1");
   const pathname = url.pathname;
 
   // Static viewer for non-/api paths.
@@ -301,6 +353,17 @@ async function handlePostRun(
   res: ServerResponse,
   deps: RequestDeps,
 ): Promise<void> {
+  // A browser sends a cross-origin text/plain POST without a preflight;
+  // requiring JSON forces one, which this daemon never grants (it sends no
+  // Access-Control-Allow-* header).
+  const mediaType = (req.headers["content-type"] ?? "").split(";")[0]?.trim().toLowerCase();
+  if (mediaType !== "application/json") {
+    sendJson(res, 415, {
+      error: "unsupported_media_type",
+      message: "Content-Type must be application/json",
+    });
+    return;
+  }
   let body: unknown;
   try {
     body = await readJsonBody(req);

@@ -163,9 +163,12 @@ describe("startRunnerMcpServer — lifecycle", () => {
         client.once("connect", resolve);
         client.once("error", reject);
       });
-      expect(client.remoteAddress).toBeUndefined();
-      expect(client.remotePort).toBeUndefined();
-      client.destroy();
+      try {
+        expect(client.remoteAddress).toBeUndefined();
+        expect(client.remotePort).toBeUndefined();
+      } finally {
+        client.destroy();
+      }
     },
   );
 
