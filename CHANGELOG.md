@@ -13,6 +13,16 @@ conflict; a duplicate or oddly-ordered bullet is tidied when a release is cut.
 
 ### Added
 
+- **Bearer SAST + secrets scan gates every PR** (SCARIFW-1550,
+  [ADR 0047](docs/decisions/0047-Bearer-SAST-PR-Gate.md)). A new
+  `.github/workflows/bearer.yml` runs `bearer/bearer-action` (SHA-pinned,
+  allowlisted in `action-security.yml`) at `critical,high` on pull requests
+  and pushes to `main`; an unwaived finding fails the job. The four findings
+  Bearer reported on main are waived in a new `bearer.ignore`, each with its
+  reason: the runner MCP server's CWE-319 is a false positive (it listens on
+  a Unix domain socket in a 0700 directory, never TCP, now pinned by a test
+  in `src/runner/mcp-server.test.ts`), two CWE-22s are false positives, and
+  `resolveCwd`'s CWE-22 is accepted by design. No runtime code changed.
 - **A `uses:` node may carry `with: { secrets }`** (SCARIFW-2072,
   [ADR 0046](docs/decisions/0046-Uses-Node-Secrets.md)). Beside `uses:`, a
   node may declare a `with:` whose only key is `secrets`, a list; the loader

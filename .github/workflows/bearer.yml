@@ -1,0 +1,38 @@
+name: bearer
+
+# Bearer SAST + secrets scan as a PR gate — see
+# docs/decisions/0047-Bearer-SAST-PR-Gate.md. A critical or high
+# finding fails the job unless bearer.ignore (repo root) waives its
+# fingerprint with a written reason.
+#
+# bearer/bearer-action is not a first-party action; it is a hand-vetted
+# exception under 0024 rule 2 (Bearer's own action, the scanner this
+# gate exists to run), SHA-pinned to the commit scarif-worker's
+# security.yml already uses, and allowlisted in action-security.yml.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bearer-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bearer:
+    name: Bearer (sast + secrets, critical/high)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Bearer SAST and secrets scan
+        uses: bearer/bearer-action@828eeb928ce2f4a7ca5ed57fb8b59508cb8c79bc  # v2
+        with:
+          scanner: "sast,secrets"
+          severity: "critical,high"

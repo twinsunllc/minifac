@@ -28,8 +28,14 @@ jobs:
       # publisher — so it is allowlisted as a hand-vetted exception per
       # 0024 rule 2. Allowlisting bypasses publisher verification but
       # still enforces the SHA pin (the checker is pinned above).
+      # `bearer` (bearer/bearer-action, used by bearer.yml) is a second
+      # hand-vetted exception under 0024 rule 2, recorded in
+      # 0047-Bearer-SAST-PR-Gate.md; it is pinned to the same SHA
+      # scarif-worker already runs.
       - name: Audit GitHub Actions
         uses: twinsunllc/github-actions-security-checker@0ad4f2eca85a1c0a633674e88a1c30e574c22927  # v1.4.3
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          allowlist: twinsunllc
+          allowlist: |
+            twinsunllc
+            bearer

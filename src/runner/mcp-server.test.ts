@@ -145,6 +145,30 @@ describe("startRunnerMcpServer — lifecycle", () => {
     expect(s.isSocket()).toBe(true);
   });
 
+  // Evidence for the CWE-319 waiver in bearer.ignore (SCARIFW-1550, ADR 0047):
+  // the server is a Unix domain socket in an owner-only directory, never a
+  // TCP listener, so there is no network transport for TLS to protect.
+  it.skipIf(process.platform === "win32")(
+    "listens on a Unix domain socket inside an owner-only (0700) directory, not a TCP port",
+    async () => {
+      const sp = h.server.socketPath;
+      expect(path.isAbsolute(sp)).toBe(true);
+      expect((await stat(sp)).isSocket()).toBe(true);
+      const dir = await stat(path.dirname(sp));
+      expect(dir.isDirectory()).toBe(true);
+      expect(dir.mode & 0o777).toBe(0o700);
+      // A client reaches the server through the filesystem path alone.
+      const client = net.createConnection(sp);
+      await new Promise<void>((resolve, reject) => {
+        client.once("connect", resolve);
+        client.once("error", reject);
+      });
+      expect(client.remoteAddress).toBeUndefined();
+      expect(client.remotePort).toBeUndefined();
+      client.destroy();
+    },
+  );
+
   it("removes the socket file and its directory on close()", async () => {
     const sp = h.server.socketPath;
     await h.server.close();

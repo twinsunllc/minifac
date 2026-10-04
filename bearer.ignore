@@ -1,0 +1,26 @@
+{
+  "42824d125039ea1ec58b1b9949a45176_0": {
+    "author": "scarif-agent",
+    "comment": "src/runner/run.ts resolveCwd: path.resolve(sourceDir, effective). Accepted by design, not a false positive. `effective` is the node's `cwd` string after {{ brief.* }}, {{ run.* }} and {{ inputs.* }} substitution, and the factory-schema spec (openspec/specs/factory-schema/spec.md, 'Reserved brief template tokens') accepts any cwd string, including an absolute one such as \"/explicit/path\"; an absolute value is returned before this line, so containing the relative branch in sourceDir would block nothing and break specified behaviour. Every source is the operator's own: the factory YAML they chose, the brief they passed to `minifac run`, the run cwd (CLI, or `minifac serve`'s loopback-only POST /api/runs, which refuses a non-absolute cwd), and output values written by nodes of the same run, which already execute commands with the operator's privileges. A node cwd only sets a child process's working directory; it grants no access the operator lacks. Revisit if factories, briefs or node inputs ever come from an untrusted remote source (SCARIFW-1550, ADR 0047).",
+    "false_positive": false,
+    "ignored_at": "2026-10-04T12:00:00Z"
+  },
+  "42824d125039ea1ec58b1b9949a45176_1": {
+    "author": "scarif-agent",
+    "comment": "False positive: src/runner/run.ts buildMissingList: path.join(outputsDir, filename) only builds the `expected_path` string of a MissingOutput diagnostic, which src/runner/nudge.ts prints in the nudge text; nothing reads, writes or stats that path. `filename` is the factory author's `outputs.<key>.filename`, which OutputFileSchema (src/factory/schema.ts) refuses at load time if it contains '/' or '\\\\' (SCARIFW-1550, ADR 0047).",
+    "false_positive": true,
+    "ignored_at": "2026-10-04T12:00:00Z"
+  },
+  "93d9a629ae3fb54688dd4a03586d9dd3_0": {
+    "author": "scarif-agent",
+    "comment": "False positive: src/runner/mcp-server.ts net.createServer is not an HTTP/Express server and never opens a TCP port. It is bound with server.listen(socketPath) to a Unix domain socket at <mkdtemp dir>/mcp.sock; mkdtemp creates the directory owner-only (0700), so only the operator's own user can connect, and no byte crosses a network for TLS to protect. Pinned by the test 'listens on a Unix domain socket inside an owner-only (0700) directory, not a TCP port' in src/runner/mcp-server.test.ts, which fails if the directory is opened up or the server is moved to a TCP port (SCARIFW-1550, ADR 0047).",
+    "false_positive": true,
+    "ignored_at": "2026-10-04T12:00:00Z"
+  },
+  "96434ceddea6bf710fae6ca11ebbd1e2_0": {
+    "author": "scarif-agent",
+    "comment": "False positive: src/serve/factories.ts FactoryWatcher.rescan: path.resolve(this.dir, name). `name` is an entry returned by readdir(this.dir), a single directory-entry name that cannot contain a path separator, and it is kept only if it matches YAML_RE (/\\.(ya?ml)$/i), so neither '.' nor '..' passes. `this.dir` is the factories directory the operator passes to `minifac serve`. No request input reaches this path (SCARIFW-1550, ADR 0047).",
+    "false_positive": true,
+    "ignored_at": "2026-10-04T12:00:00Z"
+  }
+}
