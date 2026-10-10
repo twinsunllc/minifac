@@ -80,14 +80,42 @@ export interface RunOptions {
    * `{{ run.split_integration }}` renders it, and prompts get a
    * `## Split integration (run.split_integration)` block. See ADR 0044. */
   splitIntegration?: SplitIntegrationState | null;
+  /** Consulted at each node boundary before a dispatch, once the dispatch is
+   * admitted by `max_iterations`: before the run's first dispatch and
+   * between nodes, never after a terminal node or an unrecovered failure,
+   * and not while more than one dispatch is pending (a fan-out boundary does
+   * not park). `"park"` ends the run without dispatching that node, with
+   * `status: "parked"` and a `parked` payload; anything else continues. A
+   * hook that throws, rejects or outlives `nodeBoundaryTimeoutMs` counts as
+   * continue, and the failure is emitted as a `stderr` event. See
+   * `docs/decisions/0048-Park-At-Node-Boundary.md`. */
+  onNodeBoundary?: (boundary: NodeBoundary) => NodeBoundaryDecision | Promise<NodeBoundaryDecision>;
+  /** How long `onNodeBoundary` may take before it counts as continue.
+   * Defaults to `DEFAULT_NODE_BOUNDARY_TIMEOUT_MS`. */
+  nodeBoundaryTimeoutMs?: number;
 }
+
+/** The dispatch an `onNodeBoundary` hook is asked about. */
+export interface NodeBoundary {
+  nodeId: string;
+  /** The iteration the dispatch will have if the run continues. */
+  iteration: number;
+  /** True when no node has been dispatched yet in this run (for a resumed
+   * run: since it resumed). */
+  first: boolean;
+}
+
+export type NodeBoundaryDecision = "continue" | "park";
+
+export const DEFAULT_NODE_BOUNDARY_TIMEOUT_MS = 10_000;
 
 interface QueueItem {
   nodeId: string;
-  /** True for the single dispatch a resumed run is seeded with. That dispatch
-   * is exempt from the node's `max_iterations` (a human answered; the ask is
-   * not a cycle) and carries the injected human-answer block. Every dispatch
-   * after it — including later iterations of the same node — is ordinary. */
+  /** True for the single dispatch an ANSWER-resumed run is seeded with. That
+   * dispatch is exempt from the node's `max_iterations` (a human answered;
+   * the ask is not a cycle) and carries the injected human-answer block.
+   * Every dispatch after it — including later iterations of the same node —
+   * is ordinary, and so is a pause resume's seed (ADR 0048). */
   resumeSeed?: boolean;
 }
 
@@ -106,12 +134,16 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
   // run scope always exists for that token; the other `run.*` fields keep
   // their pass-through-when-absent convention (see `substitute.ts`).
   runScope.feedback = resume?.feedback ?? "";
+  // A pause resume (ADR 0048) is not an answer: the run continues with the
+  // run scope it was parked with, so `run.resumed_at` is the carried value,
+  // not the seed's id.
+  const pauseResume = resume?.reason === "pause";
   // Same always-resolves convention for the three tokens ADR 0043 adds.
   // `run.feedback` stays set for the WHOLE resumed run (ADR 0042), so a node
   // re-dispatched downstream of a re-plan seed still sees the answer;
   // `run.resumed_at` is how it tells "I was answered" (resumed_at is its own
   // id) from "an upstream node was re-planned" (resumed_at names that node).
-  runScope.resumed_at = resume?.at ?? "";
+  runScope.resumed_at = pauseResume ? (resume?.resumedAt ?? "") : (resume?.at ?? "");
   runScope.follow_up = options.followUp !== undefined ? "true" : "false";
   runScope.prior_asks = JSON.stringify(options.followUp?.priorAsks ?? []);
   // ADR 0044. Null when absent, so the tokens render `null` / empty.
@@ -262,10 +294,14 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
     }
 
     const iterations = new Map<string, number>();
+    // Keyed `<from>-><to>:<when>`: the format `ParkedRun.edgeTraversals` and
+    // `ResumeState.edgeTraversals` carry (ADR 0048).
+    const edgeKey = (from: string, to: string, when: string): string => `${from}->${to}:${when}`;
     const edgeTraversals = new Map<string, number>();
     for (const id of Object.keys(factory.nodes)) iterations.set(id, 0);
 
     let budgetHit = false;
+    let dispatchedAny = false;
 
     // Resumed run (ADR 0042): the queue is seeded with the named node alone
     // and the parked run's state is rehydrated, so the resumed node's
@@ -310,9 +346,20 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
           const seen = iterations.get(id) ?? 0;
           if (spent > seen) iterations.set(id, Math.trunc(spent));
         }
-        queue.push({ nodeId: resume.at, resumeSeed: true });
+        // Edge budgets carry over (ADR 0048): a park must not hand a bounded
+        // revise loop a fresh budget. Same rehydration rules as iterations.
+        const declaredEdges = new Set(factory.edges.map((e) => edgeKey(e.from, e.to, e.when)));
+        for (const [key, used] of Object.entries(resume.edgeTraversals ?? {})) {
+          if (!declaredEdges.has(key)) continue;
+          if (!Number.isFinite(used) || used < 0) continue;
+          edgeTraversals.set(key, Math.trunc(used));
+        }
+        queue.push({ nodeId: resume.at, resumeSeed: !pauseResume });
         const answered = resume.feedback !== undefined && resume.feedback.length > 0;
-        const line = `resuming at node "${resume.at}" (iteration ${(iterations.get(resume.at) ?? 0) + 1}); the seed dispatch traverses no edge and is exempt from this node's max_iterations${answered ? "; a human answer is injected into its prompt" : ""}`;
+        const nextIteration = (iterations.get(resume.at) ?? 0) + 1;
+        const line = pauseResume
+          ? `resuming a parked run at node "${resume.at}" (iteration ${nextIteration}); the seed dispatch traverses no edge and is checked against this node's max_iterations like any dispatch`
+          : `resuming at node "${resume.at}" (iteration ${nextIteration}); the seed dispatch traverses no edge and is exempt from this node's max_iterations${answered ? "; a human answer is injected into its prompt" : ""}`;
         const entry: EmittedEvent = {
           nodeId: resume.at,
           iteration: (iterations.get(resume.at) ?? 0) + 1,
@@ -355,8 +402,6 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
       if (runCwd !== undefined && runCwd.length > 0) return runCwd;
       return sourceDir;
     };
-
-    const edgeKey = (from: string, to: string, when: string): string => `${from}|${to}|${when}`;
 
     while (queue.length > 0 && result === null) {
       if (options.abortSignal?.aborted) {
@@ -414,6 +459,69 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
       }
 
       const iteration = usedIterations + 1;
+
+      // Node boundary (ADR 0048): the dispatch is admitted; ask the caller
+      // whether to park here instead. Only with exactly one dispatch
+      // pending — a fan-out boundary cannot be resumed from one seed.
+      if (options.onNodeBoundary && queue.length === 0) {
+        const outcome = await consultNodeBoundary(
+          options.onNodeBoundary,
+          { nodeId, iteration, first: !dispatchedAny },
+          options.nodeBoundaryTimeoutMs ?? DEFAULT_NODE_BOUNDARY_TIMEOUT_MS,
+        );
+        if (outcome.error !== undefined) {
+          const entry: EmittedEvent = {
+            nodeId: "__boundary__",
+            iteration: 0,
+            emittedAt: Date.now() - runStart,
+            event: {
+              kind: "stderr",
+              line: `node boundary hook failed before "${nodeId}" (iteration ${iteration}): ${outcome.error}; continuing (fail open)`,
+            },
+          };
+          onEvent?.(entry);
+          await appendStoreEvent(null, 0, "stderr", entry.event, entry.emittedAt);
+        } else if (outcome.decision === "park") {
+          const entry: EmittedEvent = {
+            nodeId,
+            iteration,
+            emittedAt: Date.now() - runStart,
+            event: {
+              kind: "runner-action",
+              line: `parked before node "${nodeId}" (iteration ${iteration}); it was not dispatched`,
+            },
+          };
+          onEvent?.(entry);
+          await appendStoreEvent(nodeId, iteration, "runner-action", entry.event, entry.emittedAt);
+          result = {
+            status: "parked",
+            reason: "parked",
+            proximateNodeId: nodeId,
+            log,
+            durationMs: Date.now() - runStart,
+            parked: {
+              nodeId,
+              iteration,
+              pending: [{ nodeId, iteration }],
+              edgeTraversals: Object.fromEntries(edgeTraversals),
+            },
+          };
+          break;
+        }
+        // The hook may have taken a while; honour an abort that landed
+        // meanwhile exactly as the queue-head check does.
+        if (options.abortSignal?.aborted) {
+          result = {
+            status: "failed",
+            reason: "user_quit",
+            log,
+            durationMs: Date.now() - runStart,
+          };
+          break;
+        }
+      }
+
+      dispatchedAny = true;
       iterations.set(nodeId, iteration);
 
       // Per-node-per-iteration outputs directory. Created mkdirp before
@@ -1198,6 +1306,30 @@ export function parseSessionIdFromStdout(line: string): string | null {
   if (o.type !== "system" || o.subtype !== "init") return null;
   if (typeof o.session_id !== "string" || o.session_id.length === 0) return null;
   return o.session_id;
+}
+
+/**
+ * Call the boundary hook, failing open: a synchronous throw, a rejection or
+ * a hook still pending after `timeoutMs` yields `error` and the caller
+ * continues. Any resolved value other than `"park"` is continue.
+ */
+async function consultNodeBoundary(
+  hook: (boundary: NodeBoundary) => NodeBoundaryDecision | Promise<NodeBoundaryDecision>,
+  boundary: NodeBoundary,
+  timeoutMs: number,
+): Promise<{ decision: NodeBoundaryDecision; error?: undefined } | { error: string }> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`timed out after ${timeoutMs} ms`)), timeoutMs);
+    });
+    const decision = await Promise.race([Promise.resolve().then(() => hook(boundary)), timeout]);
+    return { decision: decision === "park" ? "park" : "continue" };
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : String(err) };
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
 }
 
 /** No-event iterable for dispatches the runner fails before spawn. */

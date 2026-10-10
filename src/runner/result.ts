@@ -1,4 +1,9 @@
-export type RunStatus = "succeeded" | "failed";
+/**
+ * `parked` is neither: the run stopped at a node boundary because the
+ * caller's `onNodeBoundary` hook asked it to, and it can be resumed at the
+ * undispatched node (ADR 0048).
+ */
+export type RunStatus = "succeeded" | "failed" | "parked";
 
 /**
  * Why a run terminated.
@@ -15,6 +20,10 @@ export type RunStatus = "succeeded" | "failed";
  * - `resume_unknown_node` — a run was asked to resume at a node the factory
  *   does not declare. Nothing is dispatched: seeding a run at a node nobody
  *   named would run an arbitrary node against a human's answer.
+ * - `user_quit` — the caller's `abortSignal` fired.
+ * - `parked` — the caller's `onNodeBoundary` hook returned `"park"` for the
+ *   next dispatch, so the run ended without dispatching it. Always paired
+ *   with `status: "parked"` and a `parked` payload (ADR 0048).
  */
 export type RunReason =
   | "terminal_node_succeeded"
@@ -23,7 +32,8 @@ export type RunReason =
   | "graph_drained"
   | "unknown_executor"
   | "resume_unknown_node"
-  | "user_quit";
+  | "user_quit"
+  | "parked";
 
 export interface ExecutionLogEntry {
   nodeId: string;
@@ -33,6 +43,24 @@ export interface ExecutionLogEntry {
   endedAt: number;
 }
 
+/**
+ * Where a parked run stopped (ADR 0048): everything a caller needs to resume
+ * it at the undispatched node with `ResumeState { reason: "pause" }`.
+ */
+export interface ParkedRun {
+  /** The node that was about to be dispatched and was not. */
+  nodeId: string;
+  /** The iteration that dispatch would have had. It was not spent. */
+  iteration: number;
+  /** Every dispatch pending at the boundary, including `nodeId`'s. A run
+   * parks only with exactly one pending, so this holds that one entry. */
+  pending: Array<{ nodeId: string; iteration: number }>;
+  /** Edge traversal counts at the boundary, keyed `<from>-><to>:<when>`.
+   * Hand them back as `ResumeState.edgeTraversals` so the resumed run's
+   * `max_traversals` budgets start where this run's stopped. */
+  edgeTraversals: Record<string, number>;
+}
+
 export interface RunResult {
   status: RunStatus;
   reason: RunReason;
@@ -40,4 +68,6 @@ export interface RunResult {
   proximateNodeId?: string;
   log: ExecutionLogEntry[];
   durationMs: number;
+  /** Present exactly when `status` is `parked`. */
+  parked?: ParkedRun;
 }

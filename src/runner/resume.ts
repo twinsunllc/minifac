@@ -38,8 +38,23 @@ export interface ResumeState {
   /** The human's answer. Delivered twice: as `{{ run.feedback }}` for the
    * whole resumed run, and as a delimited block appended to the seeded
    * dispatch's prompt (ADR 0007's runner-injects precedent), so it reaches
-   * the node whether or not the step binds the token. */
+   * the node whether or not the step binds the token. On a pause resume it
+   * is only the carried-over `{{ run.feedback }}`: no block is appended. */
   feedback?: string;
+  /** Why the run is resumed. Absent or `"answer"`: a human answered an ask,
+   * and the seed gets today's privileges (ADR 0042: `max_iterations`
+   * exemption, human-answer block, `run.resumed_at` = `at`). `"pause"`: the
+   * run was parked at a node boundary (ADR 0048) and is simply continuing,
+   * so the seed gets none of them. */
+  reason?: "answer" | "pause";
+  /** `{{ run.resumed_at }}` as the parked run had it. Read on a pause
+   * resume only; an answer resume always renders `at`. */
+  resumedAt?: string;
+  /** Edge traversal counts already spent, keyed `<from>-><to>:<when>`
+   * (`ParkedRun.edgeTraversals`). The resumed run's counters start from
+   * them; absent, they start empty as before. Keys naming no declared edge
+   * and negative or non-finite counts are ignored. */
+  edgeTraversals?: Record<string, number>;
 }
 
 /**

@@ -7,7 +7,7 @@ import { runFactory } from "../runner/run.js";
 import type { ListRunsFilter, RunStore, StoredEvent, StoredRun } from "../storage/run-store.js";
 import type { SseWriter } from "./sse.js";
 
-export type RunStatus = "pending" | "running" | "succeeded" | "failed";
+export type RunStatus = "pending" | "running" | "succeeded" | "failed" | "parked";
 
 /**
  * An event in the per-run log. Either a runner-emitted entry or a synthetic
@@ -103,7 +103,7 @@ export class RunRegistry {
         }
       } else if (r.endedAt !== null) {
         record.result = {
-          status: r.status === "succeeded" ? "succeeded" : "failed",
+          status: r.status,
           reason: (r.reason as RunResult["reason"]) ?? "node_failed",
           log: [],
           durationMs: r.endedAt - r.startedAt,
@@ -185,7 +185,7 @@ export class RunRegistry {
     record.events = events.map((e, i) => storedEventToEntry(e, i, stored));
     if (stored.status !== "running" && stored.endedAt !== null && !record.result) {
       record.result = {
-        status: stored.status === "succeeded" ? "succeeded" : "failed",
+        status: stored.status,
         reason: (stored.reason as RunResult["reason"]) ?? "node_failed",
         log: [],
         durationMs: stored.endedAt - stored.startedAt,
@@ -264,7 +264,7 @@ export class RunRegistry {
 
     // If the run already ended, do not attach a live subscriber — the
     // `run_end` synthetic marker is already in the buffer.
-    if (run.status === "succeeded" || run.status === "failed") {
+    if (run.status === "succeeded" || run.status === "failed" || run.status === "parked") {
       return { unsubscribe() {} };
     }
 
@@ -320,8 +320,8 @@ export class RunRegistry {
   private recordResult(runId: string, result: RunResult): void {
     const run = this.runs.get(runId);
     if (!run) return;
-    if (run.status === "succeeded" || run.status === "failed") return;
-    run.status = result.status === "succeeded" ? "succeeded" : "failed";
+    if (run.status === "succeeded" || run.status === "failed" || run.status === "parked") return;
+    run.status = result.status;
     run.result = result;
     run.endedAt = Date.now();
     const idx = run.events.length;
@@ -350,7 +350,7 @@ function applyCwdOverride(factory: LoadedFactory, cwd: string | undefined): Load
 function storedEventToEntry(e: StoredEvent, index: number, stored: StoredRun): RunEventEntry {
   if (e.kind === "run_end") {
     const result: RunResult = {
-      status: stored.status === "succeeded" ? "succeeded" : "failed",
+      status: stored.status === "running" ? "failed" : stored.status,
       reason: (stored.reason as RunResult["reason"]) ?? "node_failed",
       log: [],
       durationMs: (stored.endedAt ?? stored.startedAt) - stored.startedAt,

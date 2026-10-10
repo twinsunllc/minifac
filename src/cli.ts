@@ -549,7 +549,12 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
           // Notify the renderer of terminal status so the spinner stops and
           // the hotkey bar updates. Then await user dismissal.
           if (renderer) {
-            renderer.terminate(result.status, result.reason);
+            // The CLI supplies no `onNodeBoundary`, so it never sees `parked`;
+            // were it to, the TUI shows it as a non-success.
+            renderer.terminate(
+              result.status === "succeeded" ? "succeeded" : "failed",
+              result.reason,
+            );
             await renderer.waitForExit().catch(() => undefined);
           }
 
