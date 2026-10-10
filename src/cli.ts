@@ -664,7 +664,7 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
     .command("briefs")
     .description("List briefs across doneness (filesystem) and activity (runs.db) axes.")
     .option("--state <s>", "Filter by doneness (active | done | missing)")
-    .option("--activity <s>", "Filter by activity (none | running | succeeded | failed)")
+    .option("--activity <s>", "Filter by activity (none | running | succeeded | failed | parked)")
     .option("--ready", "Shortcut: active, deps satisfied, no in-flight or recently-succeeded run")
     .option("--inputs <d>", "Override the inputs directory (default <cwd>/inputs)")
     .option("--json", "Emit a JSON array instead of a table")

@@ -29,6 +29,10 @@
       skip is not consulted; abort semantics unchanged
 - [x] 2.5 `run.resume.test.ts`: an answer resume given `edgeTraversals`
       starts from them
+- [x] 2.6 `run.park.test.ts`: a park before an answer, quota or
+      failed-run resume's seed reports `resumeSeed: true`, and a pause
+      resume given it runs the seed (with the answer block when there is
+      an answer) to the terminal node; without it the resume is refused
 
 ## 3. Docs
 

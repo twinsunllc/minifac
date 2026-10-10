@@ -515,6 +515,12 @@ describe("startDaemon http API", () => {
     expect(body.error).toBe("invalid_status");
   });
 
+  it("GET /api/runs?status=parked is accepted (ADR 0048)", async () => {
+    h = await start({ dir, web: webDir });
+    const r = await fetch(`${h.base}/api/runs?status=parked`);
+    expect(r.status).toBe(200);
+  });
+
   it("GET /api/runs?limit=-1 returns 400", async () => {
     h = await start({ dir, web: webDir });
     const r = await fetch(`${h.base}/api/runs?limit=-1`);

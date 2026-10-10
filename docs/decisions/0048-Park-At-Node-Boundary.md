@@ -48,7 +48,9 @@ it at the queue head:
   exactly the counts the resume should start from.
 - Before the first dispatch too (`first: true`), and never after a
   terminal node or an unrecovered failure, since there is no next
-  dispatch.
+  dispatch. That includes the seed of an answer, quota or failed-run
+  resume, which is admitted only by 0042's exemption; §4 says how a park
+  there keeps it.
 - Only when exactly one dispatch is pending. A fan-out boundary is not
   consulted and does not park; the run parks at the next single-pending
   boundary or runs to its end (spec D1). One pending dispatch means one
@@ -59,7 +61,8 @@ it at the queue head:
 ### 2. `parked` is its own status
 
 A park returns `status: "parked"`, `reason: "parked"`, `proximateNodeId`
-and `parked: { nodeId, iteration, pending, edgeTraversals }`, and the run
+and `parked: { nodeId, iteration, pending, edgeTraversals, resumeSeed }`,
+and the run
 row is finalized `parked`. `iteration` was not spent. `pending` holds the
 one entry, keeping the shape spec D2 names for a later multi-seed
 resume. Brief mark-done does not run.
@@ -89,6 +92,24 @@ timed-out hook's promise is abandoned, not cancelled.
   (empty when absent), not the seed's id. A gate comparing its id to it
   sees what it saw before the park (spec D3).
 
+One exception keeps a park from changing a run's outcome. The seed of an
+answer, quota or failed-run resume holds 0042's privileges, and §1
+consults the hook before it too. A park there dispatched nothing, so the
+privileges were never used. `parked.resumeSeed` is `true` for exactly that
+park. The caller hands it back as `ResumeState.resumeSeed` on the pause
+resume, and that seed, and only that seed, gets the privileges again: the
+`max_iterations` exemption and, when `feedback` (the parked run's, which is
+the answer) is non-empty, the human-answer block. A second park before the
+same seed reports `resumeSeed: true` again. Every other park reports
+`false`, and the field is ignored on an answer resume. Without this, a
+spent node's answer resume that was paused before its seed would be
+refused on the unpause and end `budget_exhausted`.
+
+The alternative was not to consult the hook for a resume's seed at all.
+That is simpler, but a pause landing just as an answered or quota-requeued
+job is claimed would then wait out the whole seed node, which can be most
+of a two-hour node cap, against spec scenario (e).
+
 ### 5. Edge counts travel with the park
 
 `parked.edgeTraversals` carries the run's counts, keyed
@@ -116,7 +137,10 @@ keeps for answered asks.
   pruned by default.
 - The resume contract a caller must keep: hand back `iterations` and
   `priorResults` that do NOT count the parked dispatch (the store does
-  this already, per §1), so the seed is numbered `parked.iteration`.
+  this already, per §1), so the seed is numbered `parked.iteration`; and
+  hand back `parked.edgeTraversals` and `parked.resumeSeed` as the
+  matching `ResumeState` fields. A caller that drops `resumeSeed` gets a
+  pause resume that refuses a spent answer seed.
 
 ## Rejected alternatives
 

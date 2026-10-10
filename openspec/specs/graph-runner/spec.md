@@ -230,7 +230,8 @@ When a run ends, the runner SHALL return a structured result containing:
 overall status (`succeeded` | `failed` | `parked`), the reason for termination, the
 sequence of nodes that executed (with per-node status and counts), and
 the total run duration. A `parked` result SHALL also carry a `parked`
-payload (`nodeId`, `iteration`, `pending`, `edgeTraversals`); no other
+payload (`nodeId`, `iteration`, `pending`, `edgeTraversals`,
+`resumeSeed`); no other
 result carries one.
 
 #### Scenario: Failed run result names the failed node
@@ -2266,6 +2267,7 @@ The runner SHALL accept an optional `RunOptions.resume` of shape:
   reason?: "answer" | "pause";           // absent = "answer"
   resumedAt?: string;                    // carried run.resumed_at (pause only)
   edgeTraversals?: Record<string, number>; // keyed "<from>-><to>:<when>"
+  resumeSeed?: boolean;                  // pause only: ParkedRun.resumeSeed
 }
 ```
 
@@ -2299,7 +2301,12 @@ without this requirement. When `resume` is present:
    checked normally against the rehydrated counters. On a PAUSE resume
    (`reason: "pause"`) the seed SHALL get no exemption: it is checked
    against `max_iterations` like any dispatch, and a seed the budget
-   refuses is skipped.
+   refuses is skipped. The one exception is a pause resume with
+   `resumeSeed: true`, which a caller passes when the run was parked
+   before an answer, quota or failed-run resume's seed was dispatched
+   (`ParkedRun.resumeSeed`): its seed SHALL be exempt as an answer
+   resume's seed is, one dispatch wide. `resumeSeed` SHALL be ignored on
+   an answer resume.
 7. The runner SHALL start its edge-traversal counters from
    `edgeTraversals` when it is supplied, and EMPTY otherwise. A key that
    names no declared edge (`<from>-><to>:<when>`), and a negative or
@@ -2312,7 +2319,7 @@ without this requirement. When `resume` is present:
    node, its iteration, and the fact that the seed traverses no edge;
    on an answer resume it also states that the seed is exempt from the
    node's `max_iterations`, and on a pause resume that it is checked
-   against it.
+   against it, or, with `resumeSeed: true`, that it is exempt.
 9. When a store is supplied and it implements the optional
    `reopenRun`, the runner SHALL call `reopenRun(runId)` INSTEAD of
    `createRun`, so the resumed dispatches append to the run row that
@@ -2374,6 +2381,18 @@ without this requirement. When `resume` is present:
   `budget_exhausted`; the same resume without `reason` dispatches the
   seed as iteration 2
 
+#### Scenario: A park before an answer resume's seed keeps its privileges
+
+- **WHEN** an answer resume (`feedback: "approved"`) of a node declaring
+  `max_iterations: 1` with `iterations: { <node>: 1 }` is parked by the
+  boundary hook before its seed, and is then resumed with
+  `reason: "pause"`, the same `feedback` and `resumeSeed: true` from the
+  park
+- **THEN** the park reports `resumeSeed: true`; the pause resume
+  dispatches the seed as iteration 2 with the human-answer block and the
+  run reaches its terminal node; without `resumeSeed` the pause resume
+  terminates `budget_exhausted`
+
 ### Requirement: Resume feedback delivery
 
 When `RunOptions.resume.feedback` is a non-empty string and the resume
@@ -2399,7 +2418,11 @@ dispatched unchanged; there is nowhere to append to.
 
 On a PAUSE resume (`reason: "pause"`) `feedback` is the parked run's own
 `{{ run.feedback }}`, carried over, not a new answer. The runner SHALL
-render it through the token only and SHALL append NO human-answer block.
+render it through the token only and SHALL append NO human-answer block,
+unless the pause resume carries `resumeSeed: true`: the run was parked
+before an answer resume's seed was dispatched, so `feedback` is that
+answer, and the runner SHALL append the block to the seed as the answer
+resume would have.
 
 #### Scenario: Both channels reach a node that binds the token
 
@@ -2653,7 +2676,12 @@ without this requirement. When one is supplied:
    run with `status: "parked"`, `reason: "parked"`, `proximateNodeId` set
    to the node, and `parked: { nodeId, iteration, pending: [{ nodeId,
    iteration }], edgeTraversals }`. `edgeTraversals` holds the run's edge
-   counts keyed `<from>-><to>:<when>`. The store row SHALL be finalized
+   counts keyed `<from>-><to>:<when>`. The payload SHALL also carry
+   `resumeSeed`: `true` when the parked dispatch was the seed of a resume
+   that exempts its seed from `max_iterations` (an answer, quota or
+   failed-run resume, or a pause resume with `resumeSeed: true`), so
+   that a pause resume can grant that seed's privileges again, and
+   `false` otherwise. The store row SHALL be finalized
    `parked`. Brief mark-done SHALL NOT run.
 5. Any other return value is continue.
 6. A hook that throws, rejects, or has not settled after

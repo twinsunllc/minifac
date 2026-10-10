@@ -115,7 +115,8 @@ interface QueueItem {
    * dispatch is exempt from the node's `max_iterations` (a human answered;
    * the ask is not a cycle) and carries the injected human-answer block.
    * Every dispatch after it — including later iterations of the same node —
-   * is ordinary, and so is a pause resume's seed (ADR 0048). */
+   * is ordinary, and so is a pause resume's seed (ADR 0048) unless the run
+   * was parked before an answer resume's seed (`ResumeState.resumeSeed`). */
   resumeSeed?: boolean;
 }
 
@@ -138,6 +139,9 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
   // run scope it was parked with, so `run.resumed_at` is the carried value,
   // not the seed's id.
   const pauseResume = resume?.reason === "pause";
+  // A park before an answer resume's seed dispatched nothing, so that seed's
+  // privileges were never used: the pause resume hands them back (ADR 0048 §4).
+  const seedPrivileged = !pauseResume || resume?.resumeSeed === true;
   // Same always-resolves convention for the three tokens ADR 0043 adds.
   // `run.feedback` stays set for the WHOLE resumed run (ADR 0042), so a node
   // re-dispatched downstream of a re-plan seed still sees the answer;
@@ -354,12 +358,15 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
           if (!Number.isFinite(used) || used < 0) continue;
           edgeTraversals.set(key, Math.trunc(used));
         }
-        queue.push({ nodeId: resume.at, resumeSeed: !pauseResume });
+        queue.push({ nodeId: resume.at, resumeSeed: seedPrivileged });
         const answered = resume.feedback !== undefined && resume.feedback.length > 0;
         const nextIteration = (iterations.get(resume.at) ?? 0) + 1;
-        const line = pauseResume
-          ? `resuming a parked run at node "${resume.at}" (iteration ${nextIteration}); the seed dispatch traverses no edge and is checked against this node's max_iterations like any dispatch`
-          : `resuming at node "${resume.at}" (iteration ${nextIteration}); the seed dispatch traverses no edge and is exempt from this node's max_iterations${answered ? "; a human answer is injected into its prompt" : ""}`;
+        const exempt = `is exempt from this node's max_iterations${answered ? "; a human answer is injected into its prompt" : ""}`;
+        const line = !pauseResume
+          ? `resuming at node "${resume.at}" (iteration ${nextIteration}); the seed dispatch traverses no edge and ${exempt}`
+          : seedPrivileged
+            ? `resuming a parked run at node "${resume.at}" (iteration ${nextIteration}); it was parked before a resume's seed, so the seed dispatch traverses no edge and ${exempt}`
+            : `resuming a parked run at node "${resume.at}" (iteration ${nextIteration}); the seed dispatch traverses no edge and is checked against this node's max_iterations like any dispatch`;
         const entry: EmittedEvent = {
           nodeId: resume.at,
           iteration: (iterations.get(resume.at) ?? 0) + 1,
@@ -504,6 +511,7 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
               iteration,
               pending: [{ nodeId, iteration }],
               edgeTraversals: Object.fromEntries(edgeTraversals),
+              resumeSeed: isResumeSeed,
             },
           };
           break;

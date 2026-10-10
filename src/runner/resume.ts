@@ -55,6 +55,12 @@ export interface ResumeState {
    * them; absent, they start empty as before. Keys naming no declared edge
    * and negative or non-finite counts are ignored. */
   edgeTraversals?: Record<string, number>;
+  /** Read on a pause resume only: `ParkedRun.resumeSeed` from the park. When
+   * true, the run was parked before an answer resume's seed was dispatched,
+   * so this seed gets that seed's privileges back, once: the
+   * `max_iterations` exemption and, when `feedback` is non-empty, the
+   * human-answer block. Every later dispatch is ordinary (ADR 0048 §4). */
+  resumeSeed?: boolean;
 }
 
 /**

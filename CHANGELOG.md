@@ -28,8 +28,14 @@ conflict; a duplicate or oddly-ordered bullet is tidied when a release is cut.
   `ResumeState` gains `reason: "pause"`, `resumedAt` and `edgeTraversals`. A
   pause resume takes no `max_iterations` exemption, appends no human-answer
   block, renders `run.resumed_at` from `resumedAt`, and starts its edge
-  budgets from the parked counts. Edge-traversal keys are now
-  `<from>-><to>:<when>`. `RunStatus` gains `parked`.
+  budgets from the parked counts. A park before an answer, quota or
+  failed-run resume's seed reports `parked.resumeSeed: true`; handed back
+  as `ResumeState.resumeSeed`, it gives that one seed its exemption and,
+  with an answer, its human-answer block again, so the pause does not
+  change the run's outcome. Edge-traversal keys are now
+  `<from>-><to>:<when>`. `RunStatus` gains `parked`; `GET
+  /api/runs?status=parked` and `minifac briefs --activity parked` accept
+  it.
 - **Bearer SAST + secrets scan gates every PR** (SCARIFW-1550,
   [ADR 0047](docs/decisions/0047-Bearer-SAST-PR-Gate.md)). A new
   `.github/workflows/bearer.yml` runs Bearer at `critical,high` on pull

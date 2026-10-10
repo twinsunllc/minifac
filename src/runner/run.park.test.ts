@@ -14,7 +14,12 @@ import type { LoadedFactory } from "../factory/loader.js";
 import type { Factory } from "../factory/schema.js";
 import { SqliteRunStore } from "../storage/sqlite.js";
 import type { RunResult } from "./result.js";
-import { HUMAN_ANSWER_HEADING, type ResumeState, resumeStateFromStore } from "./resume.js";
+import {
+  HUMAN_ANSWER_HEADING,
+  type ResumeState,
+  humanAnswerBlock,
+  resumeStateFromStore,
+} from "./resume.js";
 import { type NodeBoundary, type NodeBoundaryDecision, runFactory } from "./run.js";
 
 // The between-node boundary hook and the pause resume (ADR 0048). These run
@@ -136,6 +141,7 @@ describe("runFactory onNodeBoundary (ADR 0048)", () => {
       iteration: 1,
       pending: [{ nodeId: "B", iteration: 1 }],
       edgeTraversals: { "A->B:on_success": 1 },
+      resumeSeed: false,
     });
 
     const row = await store.getRun("run-park");
@@ -373,6 +379,7 @@ describe("runFactory onNodeBoundary (ADR 0048)", () => {
         iteration: 2,
         pending: [{ nodeId: "implement", iteration: 2 }],
         edgeTraversals: { "implement->review:on_success": 1, "review->implement:on_failure": 1 },
+        resumeSeed: false,
       });
       const state = await resumeStateFromStore({ store, runId, at: "implement" });
       return { parked, state };
@@ -499,6 +506,144 @@ describe("runFactory onNodeBoundary (ADR 0048)", () => {
   });
 
   // TS-11 / AC-3
+  // A park before an answer (or quota / failed-run) resume's seed must not
+  // change the run's outcome: the seed's ADR 0042 privileges travel with the
+  // park as `resumeSeed` and the pause resume hands them back, once.
+  describe("a park at a resume's seed keeps that seed's privileges", () => {
+    const gated: Factory = {
+      name: "gated",
+      nodes: {
+        gate: {
+          executor: "fake",
+          start: true,
+          max_iterations: 1,
+          with: { prompt: "gate resumed_at=[{{ run.resumed_at }}]" },
+        },
+        done: { executor: "fake", terminal: true, with: { prompt: "done" } },
+      },
+      edges: [{ from: "gate", to: "done", when: "on_success" }],
+    };
+
+    /** gate#1 runs and fails (the escalation), so its one iteration is spent
+     * in the store; then a resume of it (an answer when `feedback` is set,
+     * a quota or failed-run resume when not) parks at its first boundary. */
+    async function parkAtSeed(runId: string, feedback?: string) {
+      const escalated = new RecordingExecutor({ gate: [failed] });
+      await runFactory(wrap(gated), { registry: registryWith(escalated), store, runId });
+      const answerState = await resumeStateFromStore({ store, runId, at: "gate" });
+      expect(answerState.iterations).toEqual({ gate: 1 });
+
+      const exec = new RecordingExecutor();
+      const { calls, hook } = recordingHook(() => "park");
+      const parked = await runFactory(wrap(gated), {
+        registry: registryWith(exec),
+        store,
+        runId,
+        resume: { ...answerState, ...(feedback !== undefined ? { feedback } : {}) },
+        onNodeBoundary: hook,
+      });
+      expect(calls).toEqual([{ nodeId: "gate", iteration: 2, first: true }]);
+      expect(exec.dispatches).toEqual([]);
+      expect(parked.status).toBe("parked");
+      expect(parked.parked).toEqual({
+        nodeId: "gate",
+        iteration: 2,
+        pending: [{ nodeId: "gate", iteration: 2 }],
+        edgeTraversals: {},
+        resumeSeed: true,
+      });
+      const pauseState = await resumeStateFromStore({ store, runId, at: "gate" });
+      const resume: ResumeState = {
+        ...pauseState,
+        reason: "pause",
+        resumedAt: "gate",
+        edgeTraversals: parked.parked?.edgeTraversals ?? {},
+        ...(feedback !== undefined ? { feedback } : {}),
+      };
+      return { parked, resume };
+    }
+
+    it("an answer resume parked before its seed: the pause resume runs it with the answer block", async () => {
+      const { parked, resume } = await parkAtSeed("run-answer-seed", "approved");
+      const exec = new RecordingExecutor();
+      const resumed = await runFactory(wrap(gated), {
+        registry: registryWith(exec),
+        store,
+        runId: "run-answer-seed",
+        resume: { ...resume, resumeSeed: parked.parked?.resumeSeed },
+      });
+      expect(exec.order()).toEqual(["gate#2", "done#1"]);
+      expect(exec.dispatches[0]?.prompt).toBe(
+        `gate resumed_at=[gate]\n\n${humanAnswerBlock("approved")}`,
+      );
+      // The block is the seed's alone; the next dispatch is ordinary.
+      expect(exec.dispatches[1]?.prompt).toBe("done");
+      expect(resumed.status).toBe("succeeded");
+      expect(resumed.reason).toBe("terminal_node_succeeded");
+      expect((await store.getRun("run-answer-seed"))?.status).toBe("succeeded");
+    });
+
+    it("a quota or failed-run resume parked before its seed: the pause resume runs it, with no block", async () => {
+      const { parked, resume } = await parkAtSeed("run-quota-seed");
+      const exec = new RecordingExecutor();
+      const resumed = await runFactory(wrap(gated), {
+        registry: registryWith(exec),
+        store,
+        runId: "run-quota-seed",
+        resume: { ...resume, resumeSeed: parked.parked?.resumeSeed },
+      });
+      expect(exec.order()).toEqual(["gate#2", "done#1"]);
+      expect(exec.dispatches[0]?.prompt).toBe("gate resumed_at=[gate]");
+      expect(resumed.reason).toBe("terminal_node_succeeded");
+    });
+
+    it("without resumeSeed the pause resume refuses the spent seed (control)", async () => {
+      const { resume } = await parkAtSeed("run-seed-control", "approved");
+      const exec = new RecordingExecutor();
+      const resumed = await runFactory(wrap(gated), {
+        registry: registryWith(exec),
+        store,
+        runId: "run-seed-control",
+        resume,
+      });
+      expect(exec.dispatches).toEqual([]);
+      expect(resumed.reason).toBe("budget_exhausted");
+    });
+
+    it("a second park before the same seed carries the privileges again", async () => {
+      const { parked, resume } = await parkAtSeed("run-seed-twice", "approved");
+      const again = await runFactory(wrap(gated), {
+        registry: registryWith(new RecordingExecutor()),
+        store,
+        runId: "run-seed-twice",
+        resume: { ...resume, resumeSeed: parked.parked?.resumeSeed },
+        onNodeBoundary: () => "park",
+      });
+      expect(again.parked).toMatchObject({ nodeId: "gate", iteration: 2, resumeSeed: true });
+    });
+
+    it("a park after the seed ran, and resumeSeed on an answer resume, change nothing", async () => {
+      // The seed ran, so a park at the next boundary holds no privileges.
+      const escalated = new RecordingExecutor({ gate: [failed] });
+      await runFactory(wrap(gated), {
+        registry: registryWith(escalated),
+        store,
+        runId: "run-seed-later",
+      });
+      const state = await resumeStateFromStore({ store, runId: "run-seed-later", at: "gate" });
+      const exec = new RecordingExecutor();
+      const parked = await runFactory(wrap(gated), {
+        registry: registryWith(exec),
+        store,
+        runId: "run-seed-later",
+        resume: { ...state, feedback: "approved" },
+        onNodeBoundary: (b) => (b.nodeId === "done" ? "park" : "continue"),
+      });
+      expect(exec.order()).toEqual(["gate#2"]);
+      expect(parked.parked).toMatchObject({ nodeId: "done", iteration: 1, resumeSeed: false });
+    });
+  });
+
   describe("abort is unchanged and separate from park", () => {
     it("an abort before the loop is user_quit with no node, and the hook is not called", async () => {
       const controller = new AbortController();

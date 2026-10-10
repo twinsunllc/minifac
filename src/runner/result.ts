@@ -59,6 +59,13 @@ export interface ParkedRun {
    * Hand them back as `ResumeState.edgeTraversals` so the resumed run's
    * `max_traversals` budgets start where this run's stopped. */
   edgeTraversals: Record<string, number>;
+  /** True when the parked dispatch was the seed of an answer (or quota or
+   * failed-run) resume, so it held ADR 0042's privileges: the
+   * `max_iterations` exemption and the human-answer block. Nothing was
+   * dispatched, so the privileges were not used. Hand it back as
+   * `ResumeState.resumeSeed` on the pause resume and that one dispatch gets
+   * them again. */
+  resumeSeed: boolean;
 }
 
 export interface RunResult {
