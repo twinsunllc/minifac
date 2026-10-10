@@ -291,10 +291,15 @@ async function handleListRuns(res: ServerResponse, deps: RequestDeps, url: URL):
   if (change) filter.change = change;
   const statusParam = url.searchParams.get("status");
   if (statusParam) {
-    if (statusParam !== "running" && statusParam !== "succeeded" && statusParam !== "failed") {
+    if (
+      statusParam !== "running" &&
+      statusParam !== "succeeded" &&
+      statusParam !== "failed" &&
+      statusParam !== "parked"
+    ) {
       sendJson(res, 400, {
         error: "invalid_status",
-        message: "status must be one of: running, succeeded, failed",
+        message: "status must be one of: running, succeeded, failed, parked",
       });
       return;
     }

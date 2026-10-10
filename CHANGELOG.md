@@ -11,8 +11,31 @@ conflict; a duplicate or oddly-ordered bullet is tidied when a release is cut.
 
 ## [Unreleased]
 
+## [0.1.3] — 2026-10-10
+
 ### Added
 
+- **A between-node hook can park a run, and a pause resume continues it**
+  (SCARIFW-2222, [ADR 0048](docs/decisions/0048-Park-At-Node-Boundary.md)).
+  `RunOptions.onNodeBoundary({ nodeId, iteration, first })` is consulted
+  once the next dispatch is admitted by `max_iterations`, before it starts
+  and before the run's first dispatch, and only while exactly one dispatch
+  is pending. Returning `"park"` ends the run without dispatching that node:
+  `status` and `reason` are `parked`, and `RunResult.parked` carries
+  `{ nodeId, iteration, pending, edgeTraversals }`; the run row is finalized
+  `parked`. A hook that throws, rejects or exceeds `nodeBoundaryTimeoutMs`
+  (default 10 s) counts as continue and is reported as a `stderr` event.
+  `ResumeState` gains `reason: "pause"`, `resumedAt` and `edgeTraversals`. A
+  pause resume takes no `max_iterations` exemption, appends no human-answer
+  block, renders `run.resumed_at` from `resumedAt`, and starts its edge
+  budgets from the parked counts. A park before an answer, quota or
+  failed-run resume's seed reports `parked.resumeSeed: true`; handed back
+  as `ResumeState.resumeSeed`, it gives that one seed its exemption and,
+  with an answer, its human-answer block again, so the pause does not
+  change the run's outcome. Edge-traversal keys are now
+  `<from>-><to>:<when>`. `RunStatus` gains `parked`; `GET
+  /api/runs?status=parked` and `minifac briefs --activity parked` accept
+  it.
 - **Bearer SAST + secrets scan gates every PR** (SCARIFW-1550,
   [ADR 0047](docs/decisions/0047-Bearer-SAST-PR-Gate.md)). A new
   `.github/workflows/bearer.yml` runs Bearer at `critical,high` on pull
@@ -285,5 +308,7 @@ Initial public release.
   (`scripts/check-dep-freshness.mjs`)
 - npm publish gated through OIDC trusted publisher with provenance
 
-[Unreleased]: https://github.com/twinsunllc/minifac/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/twinsunllc/minifac/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/twinsunllc/minifac/compare/v0.1.2...v0.1.3
+[0.1.2]: https://github.com/twinsunllc/minifac/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/twinsunllc/minifac/releases/tag/v0.1.1

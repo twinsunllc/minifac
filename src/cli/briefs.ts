@@ -31,7 +31,7 @@ interface BriefRow {
 }
 
 const STATE_VALUES: Doneness[] = ["active", "done", "missing"];
-const ACTIVITY_VALUES: Activity[] = ["none", "running", "succeeded", "failed"];
+const ACTIVITY_VALUES: Activity[] = ["none", "running", "succeeded", "failed", "parked"];
 
 async function listMdFiles(dir: string): Promise<string[]> {
   try {

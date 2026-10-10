@@ -29,6 +29,10 @@ Scarif's post-plan pause (SCARIFW-1469) needs two more things.
 
 ## Decision
 
+> **Amended by [`0048`](0048-Park-At-Node-Boundary.md):** on a pause
+> resume (`reason: "pause"`) `run.resumed_at` renders the carried
+> `ResumeState.resumedAt` (empty when absent), not the seed's id.
+
 - `{{ run.feedback }}` keeps its whole-run meaning.
 - `{{ run.resumed_at }}` renders the seed node's id on a resumed run, and
   the empty string otherwise. A gate whose own id equals `resumed_at` was

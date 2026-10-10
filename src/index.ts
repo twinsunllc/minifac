@@ -11,7 +11,13 @@ export type {
   NodeResult,
   EmittedEvent,
 } from "./executor/types.js";
-export { runFactory, type RunOptions } from "./runner/run.js";
+export {
+  DEFAULT_NODE_BOUNDARY_TIMEOUT_MS,
+  runFactory,
+  type NodeBoundary,
+  type NodeBoundaryDecision,
+  type RunOptions,
+} from "./runner/run.js";
 export {
   HUMAN_ANSWER_HEADING,
   SPLIT_CHILD_HEADING,
@@ -36,6 +42,7 @@ export type {
   RunResult,
   RunStatus,
   RunReason,
+  ParkedRun,
   ExecutionLogEntry,
 } from "./runner/result.js";
 export { runCli } from "./cli.js";

@@ -1,6 +1,6 @@
 import type { RunStore } from "../storage/run-store.js";
 
-export type Activity = "none" | "running" | "succeeded" | "failed";
+export type Activity = "none" | "running" | "succeeded" | "failed" | "parked";
 
 export interface ComputeBriefActivityOpts {
   runStore: RunStore;

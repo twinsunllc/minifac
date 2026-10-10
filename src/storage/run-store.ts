@@ -19,7 +19,7 @@ export type {
 
 export type RunId = string;
 
-export type RunStatus = "running" | "succeeded" | "failed";
+export type RunStatus = "running" | "succeeded" | "failed" | "parked";
 
 export type StoredEventKind =
   | "stdout"
@@ -62,7 +62,7 @@ export interface StoredEvent {
 }
 
 export interface FinalizeRunInput {
-  status: "succeeded" | "failed";
+  status: "succeeded" | "failed" | "parked";
   reason?: string | null;
   proximateNodeId?: string | null;
   endedAt: number;

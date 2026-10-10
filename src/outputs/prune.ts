@@ -84,7 +84,7 @@ export async function pruneOutputs(input: OutputsPruneInput): Promise<OutputsPru
       continue;
     }
     // Look up run status. Skip running runs entirely.
-    let status: "running" | "succeeded" | "failed" | null = null;
+    let status: "running" | "succeeded" | "failed" | "parked" | null = null;
     let merged = false;
     if (input.store) {
       try {

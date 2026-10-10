@@ -54,6 +54,10 @@ Three sub-decisions are not obvious and are recorded here.
 
 ### 1. The seed dispatch is budget-exempt and traverses no edge
 
+> **Amended by [`0048`](0048-Park-At-Node-Boundary.md):** the exemption
+> applies to an ANSWER resume only. A pause resume (`reason: "pause"`)
+> checks its seed against `max_iterations` like any dispatch.
+
 A run parks BECAUSE a node escalated, and a node whose iteration
 budget is spent is one of the commonest reasons to escalate. A seed
 that honoured `max_iterations` would refuse the answer the human just
@@ -73,6 +77,11 @@ resumed segment, which is the point — a node that failed again after
 the answer still gets to route.
 
 ### 2. Edge counters start fresh; per-node counts carry over
+
+> **Amended by [`0048`](0048-Park-At-Node-Boundary.md):** a resume that
+> supplies `ResumeState.edgeTraversals` starts its counters from them. A
+> park reports them, so they travel with the run rather than living in
+> `runs.db`. Without them, the counters start fresh as below.
 
 This asymmetry is not a principle, it is what is available. Per-node
 iteration counts are recoverable from `node_executions`. Edge

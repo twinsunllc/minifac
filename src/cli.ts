@@ -549,7 +549,12 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
           // Notify the renderer of terminal status so the spinner stops and
           // the hotkey bar updates. Then await user dismissal.
           if (renderer) {
-            renderer.terminate(result.status, result.reason);
+            // The CLI supplies no `onNodeBoundary`, so it never sees `parked`;
+            // were it to, the TUI shows it as a non-success.
+            renderer.terminate(
+              result.status === "succeeded" ? "succeeded" : "failed",
+              result.reason,
+            );
             await renderer.waitForExit().catch(() => undefined);
           }
 
@@ -659,7 +664,7 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
     .command("briefs")
     .description("List briefs across doneness (filesystem) and activity (runs.db) axes.")
     .option("--state <s>", "Filter by doneness (active | done | missing)")
-    .option("--activity <s>", "Filter by activity (none | running | succeeded | failed)")
+    .option("--activity <s>", "Filter by activity (none | running | succeeded | failed | parked)")
     .option("--ready", "Shortcut: active, deps satisfied, no in-flight or recently-succeeded run")
     .option("--inputs <d>", "Override the inputs directory (default <cwd>/inputs)")
     .option("--json", "Emit a JSON array instead of a table")

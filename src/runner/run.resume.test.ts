@@ -210,6 +210,34 @@ describe("runFactory with resume", () => {
     expect(result.status).toBe("succeeded");
   });
 
+  it("starts the edge counters from supplied edgeTraversals on an answer resume too (ADR 0048)", async () => {
+    const factory: Factory = {
+      name: "f",
+      nodes: {
+        evaluate: { executor: "fake" },
+        rescue: { executor: "fake", terminal: true },
+      },
+      edges: [{ from: "evaluate", to: "rescue", when: "on_failure", max_traversals: 1 }],
+    };
+    const exec = new RecordingExecutor({ evaluate: [failed], rescue: [succeeded] });
+    const registry = new ExecutorRegistry();
+    registry.register(exec);
+
+    const result = await runFactory(wrap(factory), {
+      registry,
+      resume: {
+        at: "evaluate",
+        priorResults: [],
+        feedback: "go",
+        edgeTraversals: { "evaluate->rescue:on_failure": 1 },
+      },
+    });
+
+    // The one traversal the edge allows was already spent before the park.
+    expect(exec.order()).toEqual(["evaluate"]);
+    expect(result.reason).toBe("budget_exhausted");
+  });
+
   // TS-3 / AC-3
   it("delivers the answer as {{ run.feedback }} and as an injected block on the seed only", async () => {
     const factory: Factory = {
