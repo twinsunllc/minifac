@@ -239,10 +239,12 @@ function mergeLayers(layers: ParsedLayer[]): unknown {
     // No edges declared → inherit from acc unchanged.
   }
 
-  // `uses_services:` comes from the entry file (the last layer) only and is
-  // never inherited from a base (see `UsesServicesSchema`).
+  // `uses_services:` and `needs:` come from the entry file (the last layer)
+  // only and are never inherited from a base (see `UsesServicesSchema` and
+  // `NeedsSchema`).
   const entry = layers[layers.length - 1]?.layer;
   if (entry?.uses_services !== undefined) acc.uses_services = entry.uses_services;
+  if (entry?.needs !== undefined) acc.needs = entry.needs;
 
   // Ensure required fields default usefully when never declared anywhere.
   if (acc.nodes === undefined) acc.nodes = {};

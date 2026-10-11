@@ -121,6 +121,34 @@ export const UsesServicesSchema = z
     }
   });
 
+// A workflow's `needs:` names the capability tokens its jobs require of the
+// worker session that runs them (SCARIFW-2229, scarif-spec
+// `workflow-declared-needs`). Scarif reads it when a job is ordered and merges
+// it into the job's routing needs; it owns the token vocabulary, so minifac
+// checks the shape only. minifac carries the list on the resolved factory and
+// does nothing else with it. Like `uses_services:`, it is NOT inherited
+// through `extends:` (see `mergeLayers`).
+export const NeedsSchema = z
+  .array(
+    z
+      .string()
+      .refine((token) => token.trim().length > 0, "capability token must be a non-empty string"),
+    { invalid_type_error: "needs must be a list of capability tokens" },
+  )
+  .superRefine((tokens, ctx) => {
+    const seen = new Set<string>();
+    for (const [i, token] of tokens.entries()) {
+      if (seen.has(token)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `duplicate capability token "${token}"; entries must be unique`,
+          path: [i],
+        });
+      }
+      seen.add(token);
+    }
+  });
+
 // Raw schema accepted on disk: the merged-from-disk shape, which may carry
 // `extends:` at the top level. Edges and most nodes/top-level fields may be
 // omitted in a derived layer (then inherited from the base). The loader runs
@@ -136,6 +164,7 @@ export const FactoryLayerSchema = z
     edges: z.array(EdgeSchema).optional(),
     extends: z.string().min(1).optional(),
     uses_services: UsesServicesSchema.optional(),
+    needs: NeedsSchema.optional(),
   })
   .strict();
 
@@ -150,6 +179,7 @@ export const FactorySchema = z
     nodes: z.record(NodeSchema),
     edges: z.array(EdgeSchema),
     uses_services: UsesServicesSchema.optional(),
+    needs: NeedsSchema.optional(),
   })
   .strict();
 

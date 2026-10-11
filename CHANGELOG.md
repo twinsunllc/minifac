@@ -11,6 +11,16 @@ conflict; a duplicate or oddly-ordered bullet is tidied when a release is cut.
 
 ## [Unreleased]
 
+### Added
+
+- **A workflow may declare top-level `needs:`** (SCARIFW-2229,
+  [ADR 0049](docs/decisions/0049-Workflow-Needs.md)). A list of unique,
+  non-empty capability tokens such as `[linux, android]`; a scalar, a map,
+  an empty or non-string entry and a duplicate are load errors naming the
+  file and the key. minifac carries it on the resolved factory and ignores
+  it; Scarif merges it into a job's routing needs. It is taken from the
+  loaded file only and is not inherited through `extends:`.
+
 ## [0.1.3] — 2026-10-10
 
 ### Added
