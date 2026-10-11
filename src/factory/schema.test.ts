@@ -185,6 +185,49 @@ describe("NodeSchema — `start` field", () => {
   });
 });
 
+describe("`needs:` on FactorySchema and FactoryLayerSchema", () => {
+  const resolved = {
+    name: "w",
+    nodes: { a: { executor: "tool", terminal: true, with: { command: "true" } } },
+    edges: [],
+  };
+  const schemas = [
+    ["FactorySchema", FactorySchema],
+    ["FactoryLayerSchema", FactoryLayerSchema],
+  ] as const;
+
+  function firstIssuePath(schema: (typeof schemas)[number][1], value: unknown): string {
+    const result = schema.safeParse({ ...resolved, needs: value });
+    if (result.success) throw new Error("expected the parse to fail");
+    return result.error.issues[0]?.path.join(".") ?? "";
+  }
+
+  it.each(schemas)("%s accepts a list of capability tokens", (_name, schema) => {
+    expect(schema.parse({ ...resolved, needs: ["linux", "android"] }).needs).toEqual([
+      "linux",
+      "android",
+    ]);
+  });
+
+  it.each(schemas)("%s parses without the key and leaves it absent", (_name, schema) => {
+    expect("needs" in schema.parse(resolved)).toBe(false);
+  });
+
+  it.each(schemas)("%s refuses a scalar, a map, an empty or non-string entry", (_name, schema) => {
+    expect(firstIssuePath(schema, "linux")).toBe("needs");
+    expect(firstIssuePath(schema, { linux: true })).toBe("needs");
+    expect(firstIssuePath(schema, [""])).toBe("needs.0");
+    expect(firstIssuePath(schema, ["linux", 3])).toBe("needs.1");
+  });
+
+  it.each(schemas)("%s refuses a duplicate entry, naming it", (_name, schema) => {
+    const result = schema.safeParse({ ...resolved, needs: ["linux", "linux"] });
+    const issue = result.success ? undefined : result.error.issues[0];
+    expect(issue?.path).toEqual(["needs", 1]);
+    expect(issue?.message).toMatch(/duplicate capability token "linux"/);
+  });
+});
+
 describe("`uses_services:` on FactorySchema and FactoryLayerSchema", () => {
   const resolved = {
     name: "w",
