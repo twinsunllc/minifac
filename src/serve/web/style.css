@@ -189,6 +189,11 @@ main {
   stroke-linecap: round;
 }
 
+.edge-path.on-value {
+  stroke: #7aa2f7;
+  stroke-dasharray: 6 2;
+}
+
 .event-tail {
   background: #131722;
   border: 1px solid #2a2f3a;

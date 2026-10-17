@@ -30,6 +30,13 @@ canonical templates like `minifac:sdd`) or in
   edges when it declares any and its `on_failure` edges otherwise; a
   failure never takes `on_error`. `on_error` edges count against
   `max_traversals` like any edge. See [[0052-On-Error-Edges]].
+- **Value edges** route on a node's result rather than its outcome:
+  `when: { output: result.decision, equals: revise }` or
+  `when: { output: result.decision, in: [revise, rework] }`. On a success
+  or a judged failure, the value edges that match replace the outcome's
+  `on_success`/`on_failure` edges; with none matching, the node follows
+  those edges as usual. An error never takes a value edge. See
+  [[#Routing on a value]] and [[0055-Value-Edges-And-Node-Routing]].
 - **Start nodes** are nodes with no inbound edge from another node —
   of any kind — plus any node declaring `start: true`. A node reached
   only by `on_failure` edges (an escalation, wait, or re-poll node) is
@@ -393,8 +400,50 @@ at dispatch time. The factory loader treats `with:` as an opaque map.
 |---|---|---|---|---|
 | `from` | string (min 1) | yes | — | Source node id. Must match a key in `nodes:`. |
 | `to` | string (min 1) | yes | — | Destination node id. Must match a key in `nodes:`. |
-| `when` | `"on_success"` \| `"on_failure"` \| `"on_error"` | no | `"on_success"` | Condition for traversing this edge. `"on_failure"` edges form recovery paths for a judged failure (e.g. verify → apply retry loop). `"on_error"` edges take a node whose executor could not produce a judgment; a node with none sends its errors along its `"on_failure"` edges instead. When every `"on_error"` edge is budget-exhausted the run ends `budget_exhausted` rather than falling back. See [[0052-On-Error-Edges]]. |
+| `when` | `"on_success"` \| `"on_failure"` \| `"on_error"` \| `{ output, equals }` \| `{ output, in }` | no | `"on_success"` | Condition for traversing this edge. `"on_failure"` edges form recovery paths for a judged failure (e.g. verify → apply retry loop). `"on_error"` edges take a node whose executor could not produce a judgment; a node with none sends its errors along its `"on_failure"` edges instead. When every `"on_error"` edge is budget-exhausted the run ends `budget_exhausted` rather than falling back. See [[0052-On-Error-Edges]]. A mapping is a value condition on one of the `from` node's `type: value` outputs; see [[#Routing on a value]] and [[0055-Value-Edges-And-Node-Routing]]. |
 | `max_traversals` | positive integer | no | — | Maximum times this edge may be traversed in a single run. Absent means unlimited. Use to bound [[Cycle]]s. |
+
+### Routing on a value
+
+A value edge tests one of the `from` node's `type: value` outputs. Here is a
+three-way verdict:
+
+```yaml
+nodes:
+  evaluate:
+    uses: myfac:evaluate        # writes result.json: { "decision": ... }
+  # implement, verify, escalate ...
+edges:
+  - { from: evaluate, to: verify,    when: { output: result.decision, equals: approve } }
+  - { from: evaluate, to: implement, when: { output: result.decision, equals: revise }, max_traversals: 3 }
+  - { from: evaluate, to: escalate,  when: { output: result.decision, equals: escalate } }
+  - { from: evaluate, to: escalate,  when: on_error }
+```
+
+- `output` is an output key, then dotted property names. Arrays are not
+  indexed. `equals` takes one JSON scalar and `in` a non-empty list of
+  them; a condition has exactly one of the two. Comparison is strict.
+- **At load**, the key must be a declared `type: value` output of `from`.
+  Step-declared outputs count. When the output has a `schema:`, a path the
+  schema rules out (a `false` schema, a non-object `type`, or
+  `additionalProperties: false` without the property) and a value outside
+  a leaf `enum`/`const` are load errors. Two value edges from one node
+  that test the same path with a value in common are a load error naming
+  both.
+- **At run time**, an error never takes a value edge. On a success or a
+  judged failure, every matching value edge is taken in place of the
+  outcome's literal edges. Edges on different paths that both match are
+  all taken. If none matches, because the value is absent, failed its
+  schema or holds another value, the node follows its `on_success` or
+  `on_failure` edges, and a `value_edges:` line goes to stderr.
+- **Budgets.** A value edge counts against `max_traversals` under the key
+  `evaluate->implement:output:result.decision="revise"`, and that count
+  survives a park and resume. A matched edge that is exhausted does not
+  fall back to the outcome's edges: a failed node then ends the run
+  `budget_exhausted`. Cycles closed by value edges need budgets like any
+  other ([[Cycle]]).
+- The schema's `required` is not demanded. An absent decision just
+  matches nothing.
 
 Source: `src/factory/schema.ts`, `src/executor/claude.ts`
 

@@ -11,6 +11,29 @@ conflict; a duplicate or oddly-ordered bullet is tidied when a release is cut.
 
 ## [Unreleased]
 
+### Added
+
+- **Value-conditioned edges** (SCARIFW-2251, twinsunllc/minifac#37,
+  [ADR 0055](docs/decisions/0055-Value-Edges-And-Node-Routing.md)). An
+  edge's `when` may be `{ output: <key>[.<prop>...], equals: <scalar> }` or
+  `{ output: ..., in: [<scalar>, ...] }`, testing one of the `from` node's
+  `type: value` outputs, so a three-way verdict (evaluate → implement |
+  verify | escalate) can be written. On a success or a judged failure,
+  every matching value edge is taken in place of the outcome's
+  `on_success`/`on_failure` edges. With none matching, the node follows
+  those edges and a `value_edges:` line goes to stderr. An error never
+  takes a value edge. Loading fails when the key is not a declared value
+  output of `from`, when its `schema:` rules the path or value out, or when
+  two value edges from one node overlap on the same path. Value edges count
+  for cycle budgets, and their `max_traversals` count is keyed
+  `<from>-><to>:output:<path>=<JSON>` (carried through park/resume). A
+  matched edge that is exhausted does not fall back. The serve viewer draws
+  value edges in their own style with the condition as a tooltip.
+  `FactoryEdge["when"]` widens to include the `ValueCondition` object; graphs
+  using only outcome literals load and route as before. The ADR also
+  designs node-chosen routing (`routes:`/`next:`, twinsunllc/minifac#54),
+  which is built in SCARIFW-2252.
+
 ## [0.3.0] — 2026-10-17
 
 ### Added

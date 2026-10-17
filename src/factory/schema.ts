@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { checkOutputSchema } from "./output-schema.js";
+import { ValueConditionSchema } from "./value-edges.js";
 
 const PositiveInt = z.number().int().positive();
 
@@ -102,12 +103,34 @@ export const NodeSchema = z
   })
   .strict();
 
+const OUTCOME_WHENS = ["on_success", "on_failure", "on_error"] as const;
+
+// An edge's `when`: an outcome literal (ADR 0052) or a value condition on one
+// of the `from` node's value outputs (ADR 0055). Only the first issue reaches
+// the load error, so a failed union reports the value-condition issue for a
+// mapping and the supported literals for anything else.
+const EdgeWhenSchema = z.union([z.enum(OUTCOME_WHENS), ValueConditionSchema], {
+  errorMap: (issue, ctx) => {
+    if (issue.code !== z.ZodIssueCode.invalid_union) return { message: ctx.defaultError };
+    if (typeof ctx.data === "object" && ctx.data !== null && !Array.isArray(ctx.data)) {
+      const inner = issue.unionErrors[1]?.issues[0];
+      if (inner) {
+        const at = inner.path.length > 0 ? ` at ${inner.path.join(".")}` : "";
+        return { message: `invalid value condition${at}: ${inner.message}` };
+      }
+    }
+    return {
+      message: `when must be one of ${OUTCOME_WHENS.map((w) => `"${w}"`).join(", ")}, or a value condition { output, equals | in }`,
+    };
+  },
+});
+
 export const EdgeSchema = z
   .object({
     from: z.string().min(1),
     to: z.string().min(1),
     max_traversals: PositiveInt.optional(),
-    when: z.enum(["on_success", "on_failure", "on_error"]).default("on_success"),
+    when: EdgeWhenSchema.default("on_success"),
   })
   .strict();
 
@@ -211,6 +234,7 @@ export type Factory = Omit<_FactoryInferred, "nodes"> & {
   nodes: Record<string, FactoryNode>;
 };
 export type FactoryEdge = z.infer<typeof EdgeSchema>;
+export type EdgeWhen = FactoryEdge["when"];
 export type OutputDef = z.infer<typeof OutputDefSchema>;
 export type OutputValueDef = z.infer<typeof OutputValueSchema>;
 export type OutputFileDef = z.infer<typeof OutputFileSchema>;

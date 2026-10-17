@@ -51,7 +51,8 @@ export interface ResumeState {
    * resume only; an answer resume always renders `at`. */
   resumedAt?: string;
   /** Edge traversal counts already spent, keyed `<from>-><to>:<when>`
-   * (`ParkedRun.edgeTraversals`). The resumed run's counters start from
+   * (`ParkedRun.edgeTraversals`; a value edge's `<when>` is its
+   * `output:...` form, ADR 0055). The resumed run's counters start from
    * them; absent, they start empty as before. Keys naming no declared edge
    * and negative or non-finite counts are ignored. */
   edgeTraversals?: Record<string, number>;
