@@ -3,7 +3,12 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Factory } from "../factory/schema.js";
-import { CommandExecutor, type CommandRecord, validateCommandWith } from "./command.js";
+import {
+  CommandExecutor,
+  type CommandRecord,
+  killAllCommandGroups,
+  validateCommandWith,
+} from "./command.js";
 import type { NodeEvent, RunContext } from "./types.js";
 
 const FACTORY: Factory = { name: "t", brief: "none", nodes: {}, edges: [] };
@@ -328,6 +333,126 @@ describe("CommandExecutor", () => {
     });
   });
 
+  describe("abort signal", () => {
+    // Abort once the command has printed `up`, from outside the event loop
+    // the executor is draining, as a run's cancel would.
+    async function runAborting(
+      run: string,
+      executor = new CommandExecutor({ killGraceMs: 200 }),
+      extra: Record<string, unknown>[] = [],
+    ) {
+      const ac = new AbortController();
+      const started = Date.now();
+      const ex = executor;
+      const ctx: RunContext = {
+        factory: FACTORY,
+        priorResults: [],
+        nodeId: "n",
+        iteration: 1,
+        cwd: dir,
+        outputsDir,
+        abortSignal: ac.signal,
+      };
+      const events: NodeEvent[] = [];
+      const node = {
+        id: "n",
+        executor: "command",
+        with: { continue_on_red: true, commands: [{ id: "c", run }, ...extra] },
+      };
+      for await (const e of ex.run(node, ctx)) {
+        events.push(e);
+        if (e.kind === "stdout" && e.line === "up") setTimeout(() => ac.abort(), 0);
+      }
+      const last = events.at(-1);
+      const result = JSON.parse(await readFile(path.join(outputsDir, "result.json"), "utf8"));
+      return { elapsed: Date.now() - started, last, result };
+    }
+
+    it("kills a silent running command and its grandchild, and ends the node promptly", async () => {
+      const pidFile = path.join(dir, "pid");
+      const out = await runAborting(
+        `sleep 30 & echo $! > ${pidFile}; echo up; wait`,
+        new CommandExecutor({ killGraceMs: 20_000 }),
+      );
+      // SIGTERM ends the shell at once; neither the 600 s timeout nor the
+      // 20 s grace is waited out.
+      expect(out.elapsed).toBeLessThan(3000);
+      expect(out.last).toMatchObject({
+        kind: "status",
+        status: "failed",
+        meta: { reason: "command_failed", sentinel: "c: aborted" },
+      });
+      expect(out.result.commands[0]).toMatchObject({ id: "c", met: false, signal: "SIGTERM" });
+      const pid = Number((await readFile(pidFile, "utf8")).trim());
+      expect(alive(pid)).toBe(false);
+    });
+
+    it("SIGKILLs an aborted group that ignores SIGTERM after the grace", async () => {
+      const pidFile = path.join(dir, "pid");
+      const out = await runAborting(`trap '' TERM; sleep 30 & echo $! > ${pidFile}; echo up; wait`);
+      expect(out.elapsed).toBeLessThan(3000);
+      expect(out.result.commands[0]).toMatchObject({ met: false, signal: "SIGKILL" });
+      const pid = Number((await readFile(pidFile, "utf8")).trim());
+      expect(alive(pid)).toBe(false);
+    });
+
+    it("starts no further command after an abort, even under continue_on_red", async () => {
+      const marker = path.join(dir, "second-ran");
+      const out = await runAborting("echo up; sleep 30", undefined, [
+        { id: "second", run: `touch ${marker}` },
+      ]);
+      expect(out.result.commands.map((c: CommandRecord) => c.id)).toEqual(["c"]);
+      expect(await readFile(marker).catch(() => null)).toBeNull();
+    });
+
+    it("spawns nothing when the signal is already aborted", async () => {
+      const marker = path.join(dir, "ran");
+      const ac = new AbortController();
+      ac.abort();
+      const out = await runNode(
+        { commands: [{ id: "c", run: `touch ${marker}` }] },
+        { ctx: { abortSignal: ac.signal } },
+      );
+      expect(out.status).toBe("failed");
+      expect(out.meta.sentinel).toBe("aborted");
+      expect(out.result.commands).toEqual([]);
+      expect(await readFile(marker).catch(() => null)).toBeNull();
+    });
+  });
+
+  describe("killAllCommandGroups", () => {
+    it("SIGKILLs every live command group, grandchildren included", async () => {
+      const pidFile = path.join(dir, "pid");
+      const ex = new CommandExecutor({ killGraceMs: 200 });
+      const ctx: RunContext = {
+        factory: FACTORY,
+        priorResults: [],
+        nodeId: "n",
+        iteration: 1,
+        cwd: dir,
+        outputsDir,
+      };
+      const node = {
+        id: "n",
+        executor: "command",
+        with: { commands: [{ id: "c", run: `sleep 30 & echo $! > ${pidFile}; echo up; wait` }] },
+      };
+      const started = Date.now();
+      const events: NodeEvent[] = [];
+      for await (const e of ex.run(node, ctx)) {
+        events.push(e);
+        if (e.kind === "stdout" && e.line === "up") killAllCommandGroups();
+      }
+      expect(Date.now() - started).toBeLessThan(3000);
+      const pid = Number((await readFile(pidFile, "utf8")).trim());
+      expect(alive(pid)).toBe(false);
+      expect(events.at(-1)).toMatchObject({
+        status: "failed",
+        meta: { sentinel: "c: killed by SIGKILL" },
+      });
+    });
+  });
+
   describe("result_from / result_file", () => {
     it("merges a result_from command's JSON keys beside commands", async () => {
       const out = await runNode({
@@ -432,6 +557,23 @@ describe("CommandExecutor", () => {
         reason: "command_failed",
         sentinel: "escalate: plan lists 40 files",
       });
+    });
+
+    it("of two REASON lines in one command, the last is the failure reason", async () => {
+      const out = await runNode({
+        commands: [{ id: "a", run: "echo 'REASON: a'; echo 'REASON: b'; exit 1" }],
+      });
+      expect(out.status).toBe("failed");
+      expect(out.meta.sentinel).toBe("b");
+    });
+
+    it("a result_parse failure outranks a REASON line", async () => {
+      const out = await runNode({
+        result_from: "gate",
+        commands: [{ id: "gate", run: "echo 'not json'; echo 'REASON: escalate: x'; exit 1" }],
+      });
+      expect(out.status).toBe("failed");
+      expect(String(out.meta.sentinel)).toMatch(/^result_parse: gate: /);
     });
 
     it("a REASON line does not fail a node whose commands all met expect", async () => {

@@ -1,10 +1,13 @@
 // runFactory-level tests for `executor: command`: real loader, real runner,
 // real `/bin/sh` children. No executor doubles.
 
+import { spawn } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Writable } from "node:stream";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runCli } from "../cli.js";
 import { loadFactory } from "../factory/loader.js";
@@ -46,7 +49,11 @@ function registry(): ExecutorRegistry {
   return reg;
 }
 
-async function run(facYaml: string, runId: string) {
+async function run(
+  facYaml: string,
+  runId: string,
+  opts: { abortSignal?: AbortSignal; onEvent?: (e: EmittedEvent) => void } = {},
+) {
   const fac = await writeAt("fac.yaml", facYaml);
   const loaded = await loadFactory(fac, repo);
   const events: EmittedEvent[] = [];
@@ -54,9 +61,39 @@ async function run(facYaml: string, runId: string) {
     registry: registry(),
     runId,
     runCwd: repo,
-    onEvent: (e) => events.push(e),
+    ...(opts.abortSignal !== undefined ? { abortSignal: opts.abortSignal } : {}),
+    onEvent: (e) => {
+      events.push(e);
+      opts.onEvent?.(e);
+    },
   });
   return { result, events, outputs: path.join(home, "outputs", runId) };
+}
+
+/** Whether `pid` is a live process. A zombie (exited, not yet reaped by
+ * whoever inherited it) counts as gone. */
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code !== "ESRCH";
+  }
+  try {
+    // Linux: the state field follows the parenthesised command name.
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    return stat.slice(stat.lastIndexOf(")") + 2, stat.lastIndexOf(")") + 3) !== "Z";
+  } catch {
+    return true;
+  }
+}
+
+async function waitFor(pred: () => boolean, ms = 3000): Promise<boolean> {
+  const until = Date.now() + ms;
+  while (Date.now() < until) {
+    if (pred()) return true;
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  return pred();
 }
 
 const NASTY = `a'b"c $(touch pwned) \`touch pwned2\` \${HOME}\nline2 ; touch pwned3`;
@@ -205,6 +242,120 @@ edges:
     const copy = JSON.parse(await readFile(path.join(outputs, "b", "1", "copy.json"), "utf8"));
     expect(copy.commands[0]).toMatchObject({ id: "one", exit_code: 0, stdout_tail: "hi\n" });
   });
+});
+
+describe("cancellation reaches a running command", () => {
+  it("an aborted runFactory kills the silent command's group and returns promptly", async () => {
+    const ac = new AbortController();
+    const started = Date.now();
+    const { result } = await run(
+      `name: f
+nodes:
+  slow:
+    executor: command
+    with:
+      commands:
+        - id: wait
+          run: "sleep 30 & echo $! > {{ run.outputs_dir }}/gc.pid; echo up; wait"
+  after:
+    executor: command
+    terminal: true
+    with:
+      commands:
+        - { id: never, run: "touch {{ run.outputs_dir }}/after-ran" }
+edges:
+  - { from: slow, to: after, when: on_failure }
+`,
+      "abort",
+      {
+        abortSignal: ac.signal,
+        onEvent: (e) => {
+          if (e.event.kind === "stdout" && e.event.line === "up") setTimeout(() => ac.abort(), 0);
+        },
+      },
+    );
+    const elapsed = Date.now() - started;
+    expect(result.status).toBe("failed");
+    expect(result.reason).toBe("user_quit");
+    expect(elapsed).toBeLessThan(2000);
+    const outputs = path.join(home, "outputs", "abort");
+    const gc = Number((await readFile(path.join(outputs, "slow", "1", "gc.pid"), "utf8")).trim());
+    expect(() => process.kill(gc, 0)).toThrow(expect.objectContaining({ code: "ESRCH" }));
+    expect(existsSync(path.join(outputs, "after"))).toBe(false);
+  });
+});
+
+// The built CLI as a real child process, signalled the way a terminal or a
+// supervisor would. Needs `npm run build` first (CI builds before testing).
+describe("a signal to the minifac process reaches a running command", () => {
+  const distCli = path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "..",
+    "..",
+    "dist",
+    "cli.js",
+  );
+
+  it.each(["SIGTERM", "SIGINT", "SIGHUP"] as const)(
+    "%s: minifac ends by the signal, and the shell and its grandchild are gone",
+    async (sig) => {
+      if (!existsSync(distCli)) {
+        console.warn(`skipping: ${distCli} not present; run \`npm run build\` first.`);
+        return;
+      }
+      await writeAt(
+        "examples/gate.yaml",
+        `name: gate
+brief: none
+nodes:
+  wait:
+    executor: command
+    terminal: true
+    with:
+      commands:
+        - id: wait
+          run: "echo $$ > ${repo}/sh.pid; sleep 120 & echo $! > ${repo}/gc.pid; echo up; wait"
+edges: []
+`,
+      );
+      const child = spawn(process.execPath, [distCli, "run", "--raw", "--in-place", "gate"], {
+        cwd: repo,
+        env: { ...process.env, MINIFAC_HOME: home },
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      let output = "";
+      const exited = new Promise<{ code: number | null; signal: string | null }>((resolve) =>
+        child.on("exit", (code, signal) => resolve({ code, signal })),
+      );
+      child.stderr.on("data", (c: Buffer) => {
+        output += c.toString();
+      });
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(
+          () => reject(new Error(`no "up" line; output:\n${output}`)),
+          15_000,
+        );
+        child.stdout.on("data", (c: Buffer) => {
+          output += c.toString();
+          if (/^\[wait\] up$/m.test(output)) {
+            clearTimeout(timer);
+            resolve();
+          }
+        });
+      });
+      const shPid = Number((await readFile(path.join(repo, "sh.pid"), "utf8")).trim());
+      const gcPid = Number((await readFile(path.join(repo, "gc.pid"), "utf8")).trim());
+      expect(alive(shPid)).toBe(true);
+      expect(alive(gcPid)).toBe(true);
+
+      child.kill(sig);
+      const { signal } = await exited;
+      // No other listener: the process ends by the signal, as it did before.
+      expect(signal).toBe(sig);
+      expect(await waitFor(() => !alive(shPid) && !alive(gcPid))).toBe(true);
+    },
+    20_000,
+  );
 });
 
 describe("CLI default registry", () => {

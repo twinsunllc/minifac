@@ -6,6 +6,7 @@ export { CheckMergeExecutor } from "./executor/check-merge.js";
 export {
   CommandExecutor,
   CommandWithSchema,
+  killAllCommandGroups,
   validateCommandWith,
   type CommandExecutorOptions,
   type CommandRecord,

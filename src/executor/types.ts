@@ -90,6 +90,11 @@ export interface RunContext {
    * of that command's `run` refers to (ADR 0050). Absent for every other
    * executor. */
   commandEnv?: Readonly<Record<string, Readonly<Record<string, string>>>>;
+  /** The run's cancellation signal (`RunOptions.abortSignal`), when it has
+   * one. The runner itself checks it only between events; an executor that
+   * can sit silent for a long time (the `command` executor) listens to it so
+   * a cancel reaches its running child. */
+  abortSignal?: AbortSignal;
 }
 
 export type ResolvedNode = FactoryNode & { id: string };

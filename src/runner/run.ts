@@ -740,6 +740,7 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
         mcpConfigPath,
         ...(resumeSessionId !== undefined ? { resumeSessionId } : {}),
         ...(commandEnv !== undefined ? { commandEnv } : {}),
+        ...(options.abortSignal !== undefined ? { abortSignal: options.abortSignal } : {}),
       };
 
       const startedAt = Date.now() - runStart;

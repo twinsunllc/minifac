@@ -4,8 +4,10 @@
 // and maps what they did to the node's terminal status, its failure reason
 // and a `result` value written to `<outputs_dir>/result.json`. Each command
 // is `/bin/sh -c <run>` in its own process group; the group is killed at the
-// command's timeout and again once the command exits, so nothing a command
-// started outlives the node.
+// command's timeout, when the run's abort signal fires, and again once the
+// command exits, so nothing a command started outlives the node. Live groups
+// are also killed when the minifac process exits or receives SIGINT, SIGTERM
+// or SIGHUP (see `killAllCommandGroups`).
 //
 // Shape, defaults and rationale: `docs/decisions/0050-Command-Executor.md`
 // and the `command-executor` capability spec.
@@ -212,6 +214,54 @@ function killGroup(pid: number | undefined, signal: NodeJS.Signals): void {
   }
 }
 
+/** Process groups of commands that have been spawned and not yet settled. */
+const liveGroups = new Set<number>();
+
+/**
+ * Send `signal` (default SIGKILL) to the process group of every command this
+ * module has spawned and not yet seen settle. Synchronous, so it is safe in a
+ * `process.on("exit")` handler.
+ *
+ * The executor calls it itself from `exit` and from SIGINT, SIGTERM and
+ * SIGHUP handlers it installs when it spawns its first command. An embedder
+ * that ends its process some other way (for example `process.abort()`, or
+ * handling a fatal signal itself before Node's `exit`) should call it first.
+ * Nothing can run on SIGKILL of minifac itself: groups survive that.
+ */
+export function killAllCommandGroups(signal: NodeJS.Signals = "SIGKILL"): void {
+  for (const pgid of liveGroups) killGroup(pgid, signal);
+}
+
+const FORWARDED_SIGNALS: readonly NodeJS.Signals[] = ["SIGINT", "SIGTERM", "SIGHUP"];
+let processHooksInstalled = false;
+
+/**
+ * Install, once per process, the hooks that keep a command's group from
+ * outliving minifac. A child in its own group does not get the signals a
+ * terminal or a supervisor sends to minifac's group, so they are forwarded.
+ *
+ * The signal listener is prepended, so it runs before any listener the host
+ * process has, while those are all still registered. When it is the only
+ * listener, it removes itself and re-raises the signal, so the process ends
+ * the way it would have with no listener at all. Otherwise it leaves the
+ * host's own handling (a graceful shutdown, say) to proceed.
+ */
+function installProcessHooks(): void {
+  if (processHooksInstalled) return;
+  processHooksInstalled = true;
+  process.on("exit", () => killAllCommandGroups("SIGKILL"));
+  for (const sig of FORWARDED_SIGNALS) {
+    const onSignal = (): void => {
+      killAllCommandGroups("SIGKILL");
+      if (process.listenerCount(sig) === 1) {
+        process.removeListener(sig, onSignal);
+        process.kill(process.pid, sig);
+      }
+    };
+    process.prependListener(sig, onSignal);
+  }
+}
+
 async function isExecutableFile(p: string): Promise<boolean> {
   try {
     await access(p, fsConstants.X_OK);
@@ -250,6 +300,8 @@ interface SpawnOutcome {
   /** Full stdout, only when captured for `result_from`; `null` if it overflowed. */
   stdout: string | null;
   lastReason: string | null;
+  /** The run's abort signal fired while the command was live. */
+  aborted: boolean;
 }
 
 interface RunningCommand {
@@ -262,7 +314,12 @@ function startCommand(
   cmd: CommandEntry,
   cwd: string,
   env: NodeJS.ProcessEnv,
-  opts: { killGraceMs: number; tailBytes: number; captureStdout: boolean },
+  opts: {
+    killGraceMs: number;
+    tailBytes: number;
+    captureStdout: boolean;
+    abortSignal: AbortSignal | undefined;
+  },
 ): RunningCommand {
   const channel = new EventChannel();
   const stdoutTail = new TailBuffer(opts.tailBytes);
@@ -272,7 +329,9 @@ function startCommand(
   let overflowed = false;
   let lastReason: string | null = null;
   let timedOut = false;
+  let aborted = false;
 
+  installProcessHooks();
   const child: ChildProcess = nodeSpawn("/bin/sh", ["-c", cmd.run], {
     cwd,
     env,
@@ -280,6 +339,7 @@ function startCommand(
     stdio: ["ignore", "pipe", "pipe"],
   });
   const pid = child.pid;
+  if (pid !== undefined) liveGroups.add(pid);
 
   const lineSplitter = (kind: "stdout" | "stderr") => {
     const decoder = new StringDecoder("utf8");
@@ -335,14 +395,28 @@ function startCommand(
     let exitSignal: string | null = null;
     let spawnError: string | null = null;
 
+    // SIGTERM the group, then SIGKILL it after the grace. The shell's exit
+    // (handled below) SIGKILLs the group in any case.
+    const terminate = () => {
+      if (graceTimer) return;
+      killGroup(pid, "SIGTERM");
+      graceTimer = setTimeout(() => killGroup(pid, "SIGKILL"), opts.killGraceMs);
+    };
+
     const timeoutTimer = setTimeout(
       () => {
         timedOut = true;
-        killGroup(pid, "SIGTERM");
-        graceTimer = setTimeout(() => killGroup(pid, "SIGKILL"), opts.killGraceMs);
+        terminate();
       },
       (cmd.timeout_seconds ?? DEFAULT_TIMEOUT_SECONDS) * 1000,
     );
+
+    const onAbort = () => {
+      aborted = true;
+      clearTimeout(timeoutTimer);
+      terminate();
+    };
+    opts.abortSignal?.addEventListener("abort", onAbort, { once: true });
 
     const finish = () => {
       if (settled) return;
@@ -350,6 +424,8 @@ function startCommand(
       clearTimeout(timeoutTimer);
       if (graceTimer) clearTimeout(graceTimer);
       if (closeTimer) clearTimeout(closeTimer);
+      opts.abortSignal?.removeEventListener("abort", onAbort);
+      if (pid !== undefined) liveGroups.delete(pid);
       outLines.end();
       errLines.end();
       if (spawnError !== null) channel.push({ kind: "stderr", line: spawnError });
@@ -363,6 +439,7 @@ function startCommand(
         stderrTail: spawnError !== null ? spawnError : stderrTail.text(),
         stdout: opts.captureStdout && !overflowed ? Buffer.concat(captured).toString("utf8") : null,
         lastReason,
+        aborted,
       });
     };
 
@@ -388,6 +465,8 @@ function startCommand(
       }, opts.killGraceMs);
     });
     child.on("close", () => finish());
+    // An abort that fired before the listener above was attached.
+    if (opts.abortSignal?.aborted) onAbort();
   });
 
   return { pid, events: channel.drain(), outcome };
@@ -398,9 +477,15 @@ function expectedExits(cmd: CommandEntry): number[] {
   return Array.isArray(exit) ? exit : [exit];
 }
 
-function redReason(cmd: CommandEntry, rec: CommandRecord, spawnError: string | null): string {
+function redReason(
+  cmd: CommandEntry,
+  rec: CommandRecord,
+  spawnError: string | null,
+  aborted: boolean,
+): string {
   if (rec.host_missing) return `${cmd.id}: host_missing ${cmd.tool ?? ""}`.trimEnd();
   if (spawnError !== null) return `${cmd.id}: ${spawnError}`;
+  if (aborted) return `${cmd.id}: aborted`;
   if (rec.timed_out) {
     return `${cmd.id}: timed out after ${cmd.timeout_seconds ?? DEFAULT_TIMEOUT_SECONDS}s`;
   }
@@ -475,9 +560,15 @@ export class CommandExecutor implements NodeExecutor {
     let lastReason: string | null = null;
     let resultFromStdout: string | null | undefined;
     let running: RunningCommand | null = null;
+    let aborted = false;
 
     try {
       for (const cmd of spec.commands) {
+        // A cancelled run starts nothing more.
+        if (ctx.abortSignal?.aborted) {
+          aborted = true;
+          break;
+        }
         const cwd = path.resolve(ctx.cwd, cmd.cwd ?? ".");
         const env: NodeJS.ProcessEnv = {
           ...process.env,
@@ -487,6 +578,7 @@ export class CommandExecutor implements NodeExecutor {
         const started = Date.now();
         let rec: CommandRecord;
         let spawnError: string | null = null;
+        let cmdAborted = false;
 
         if (cmd.tool !== undefined && (await resolveTool(cmd.tool, cwd, env.PATH)) === null) {
           rec = {
@@ -509,16 +601,19 @@ export class CommandExecutor implements NodeExecutor {
             killGraceMs: this.killGraceMs,
             tailBytes: this.tailBytes,
             captureStdout: spec.result_from === cmd.id,
+            abortSignal: ctx.abortSignal,
           });
           for await (const event of running.events) yield event;
           const out = await running.outcome;
           running = null;
           spawnError = out.spawnError;
+          cmdAborted = out.aborted;
           if (out.lastReason !== null) lastReason = out.lastReason;
           if (spec.result_from === cmd.id) resultFromStdout = out.stdout;
           const met =
             out.spawnError === null &&
             !out.timedOut &&
+            !out.aborted &&
             out.exitCode !== null &&
             expectedExits(cmd).includes(out.exitCode);
           rec = {
@@ -535,16 +630,22 @@ export class CommandExecutor implements NodeExecutor {
         }
 
         records.push(rec);
+        if (cmdAborted) {
+          aborted = true;
+          if (firstRed === null) firstRed = redReason(cmd, rec, spawnError, true);
+          break;
+        }
         if (!rec.met) {
-          if (firstRed === null) firstRed = redReason(cmd, rec, spawnError);
+          if (firstRed === null) firstRed = redReason(cmd, rec, spawnError, false);
           if (spec.continue_on_red !== true) break;
         }
       }
     } finally {
-      // Reached early only when the consumer stopped iterating (an aborted
-      // run): leave nothing of the current command behind.
+      // Reached early only when the consumer stopped iterating: leave nothing
+      // of the current command behind.
       if (running !== null) killGroup(running.pid, "SIGKILL");
     }
+    if (aborted && firstRed === null) firstRed = "aborted";
 
     // Emitted keys. A `result_from` command that never ran (an earlier red
     // stopped the node) emits nothing; a `result_file` that is absent while
