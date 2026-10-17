@@ -13,6 +13,22 @@ conflict; a duplicate or oddly-ordered bullet is tidied when a release is cut.
 
 ### Added
 
+- **A `command` executor runs a node's declared commands without a model**
+  (SCARIFW-2245, [ADR 0050](docs/decisions/0050-Command-Executor.md)).
+  `executor: command` takes `with.commands` (`id`, `run`, and optional
+  `cwd`, `timeout_seconds` (default 600), `expect.exit` (default 0, or a
+  list) and `tool`), plus `continue_on_red`, `result_from` and
+  `result_file`. Each command runs as `/bin/sh -c` in its own process
+  group, killed at its timeout (SIGTERM, then SIGKILL after 5 s) and after
+  it exits. A `tool` that does not resolve is red with `host_missing` and
+  is never run or skipped. `<outputs_dir>/result.json` carries one entry
+  per command with its exit code, duration and 8192-byte stdout/stderr
+  tails, merged with the keys a `result_from` command or `result_file`
+  emits. The last `REASON:` line becomes the node's failure reason.
+  Template tokens reach `run` as environment variables, never spliced into
+  the shell. The `with:` is validated at load time, naming the file and
+  the key. Registered by default and exported as `CommandExecutor`.
+
 - **A workflow may declare top-level `needs:`** (SCARIFW-2229,
   [ADR 0049](docs/decisions/0049-Workflow-Needs.md)). A list of unique,
   non-empty capability tokens such as `[linux, android]`; a scalar, a map,

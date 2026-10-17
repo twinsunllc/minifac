@@ -17,10 +17,11 @@ in the [[Runs-DB]].
   single user message on stdin containing prior run history + the
   node's prompt. Parses stdout for the [[Sentinel]] to determine the
   node's status. See [[0003-Claude-Streaming-Default]].
-
-Future:
-- **`shell`** — runs a shell command, exit code drives status. Deferred
-  to phase 4; drop-in for verify nodes once API cost matters.
+- **`check-merge`** — a read-only probe of whether the worktree's HEAD
+  merges cleanly into a base branch. See the `check-merge-step` spec.
+- **`command`** — runs declared shell commands in order, with no model,
+  and maps their exit codes to the node's status, reason and `result`.
+  See [[#`command` executor]] and [[0050-Command-Executor]].
 
 ## `with:` schema (claude executor)
 
@@ -35,6 +36,55 @@ Future:
 
 YAML keys are snake_case; the claude CLI maps to camelCase
 internally (`bypass_permissions` → `bypassPermissions`).
+
+## `command` executor
+
+Runs `with.commands` in order, each as `/bin/sh -c <run>` in its own
+process group, and writes `<outputs_dir>/result.json`. The node succeeds
+iff every command met its `expect`. Full rules: [[0050-Command-Executor]].
+
+| Field | Purpose |
+|---|---|
+| `commands` | Required, non-empty list, run in order |
+| `commands[].id` | Required, unique; names the command in the result and in a generated reason |
+| `commands[].run` | Required shell string; template tokens reach it as env vars, so do not quote them |
+| `commands[].cwd` | Optional; relative to the node's cwd; template-rendered |
+| `commands[].timeout_seconds` | Optional, default 600. SIGTERM to the group, SIGKILL 5 s later |
+| `commands[].expect` | Optional `{ exit: N }` or `{ exit: [N, …] }`; default `{ exit: 0 }` |
+| `commands[].tool` | Optional binary that must resolve (on `PATH`, or as a path from `cwd`); otherwise the command is red with `host_missing` and never runs |
+| `continue_on_red` | Optional, default `false`: stop at the first red command |
+| `result_from` | Optional command id whose stdout (less `REASON:` lines) is a JSON object merged into the result |
+| `result_file` | Optional path under `run.outputs_dir` holding a JSON object merged into the result; not with `result_from` |
+
+`result.json` holds the merged keys plus `commands`, one entry per command
+reached: `id`, `exit_code`, `signal`, `duration_ms`, `host_missing`,
+`timed_out`, `met`, and `stdout_tail` / `stderr_tail` (each at most 8192
+bytes). Declare `outputs: { result: { type: value } }` to index it.
+
+On failure the node's reason is the last `REASON: …` line a command printed
+on stdout, or else one naming the first red command
+(`test: exit 2, expected [0]`). A result that fails to parse outranks both.
+
+A gate shaped like scarif-factory's `plan_gate`:
+
+```yaml
+plan_gate:
+  executor: command
+  with:
+    result_from: gate
+    commands:
+      - id: gate
+        tool: python3
+        run: python3 bin/plan_gate.py {{ priorResults.plan.outputs.result }}
+        timeout_seconds: 60
+  outputs:
+    result: { type: value, required: true }
+```
+
+The script prints `{"clears_when": …, "resume_on_revise": true}` and
+`REASON: escalate: …`, then exits 1 to escalate. The keys land in the
+result, and an `on_failure` edge sees the reason as
+`{{ priorResults.plan_gate.reason }}`.
 
 ## Session resume
 
@@ -93,3 +143,4 @@ new file plus registration; the runner is unchanged. Formal abstraction
 - [[Permission-Mode]] (in [[0003-Claude-Streaming-Default]])
 - [[0003-Claude-Streaming-Default]]
 - [[0007-Sentinel-Runner-Injects]]
+- [[0050-Command-Executor]]

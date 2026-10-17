@@ -138,7 +138,7 @@ A step file is a single YAML document validated by `StepSchema`.
 | `description` | string | no | — | Human-readable prose describing what the step does. |
 | `inputs` | map of input-name → [[#Input definition fields\|input def]] | no | — | Typed input schema. Input names must match `[a-zA-Z_][a-zA-Z0-9_]*`. If absent the step takes no inputs. |
 | `executor` | string (min 1) | yes | — | Which [[Executor]] runs this step. The only implemented value is `"claude"`. |
-| `with` | map (string → unknown) | yes | — | Executor-specific configuration. Accepts `{{ inputs.* }}` template tokens that are resolved at dispatch time. See [[Factory#`with:` fields (claude executor)]] for the full field list when `executor: claude`. |
+| `with` | map (string → unknown) | yes | — | Executor-specific configuration. Accepts `{{ inputs.* }}` template tokens that are resolved at dispatch time. See [[Factory#`with:` fields (claude executor)]] for the full field list when `executor: claude`, and [[Executor#`command` executor]] when `executor: command` (validated when the step loads). |
 
 ### Input definition fields
 

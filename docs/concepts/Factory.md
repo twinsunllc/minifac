@@ -261,7 +261,7 @@ nodes:
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `executor` | string (min 1) | no | — | Which [[Executor]] runs this node. Omit when using `uses:`. The only implemented value is `"claude"`. |
-| `with` | map (string → unknown) | no | — | Executor-specific configuration. Shape is validated by the executor at dispatch time, not by the factory loader. See [[#`with:` fields (claude executor)\|with fields]] below. Beside `uses:` it may hold only `secrets` (a list), merged into the inlined step's `with` and refused when the step already declares `secrets`. |
+| `with` | map (string → unknown) | no | — | Executor-specific configuration. Shape is validated by the executor at dispatch time, not by the factory loader, except for `executor: command`, whose `with:` the loader also validates ([[0050-Command-Executor]]). See [[#`with:` fields (claude executor)\|with fields]] below. Beside `uses:` it may hold only `secrets` (a list), merged into the inlined step's `with` and refused when the step already declares `secrets`. |
 | `uses` | string (min 1) | no | — | Reference to a reusable [[Step]]. Mutually exclusive with `executor`, and with every `with` key except `secrets`. See [[Step#Reference syntax and lookup precedence]]. |
 | `inputs` | map (string → unknown) | no | — | Input values supplied to the step declared in `uses:`. Keys must match the step's declared input names. Omit when using inline `executor` + `with`. |
 | `cwd` | string | no | — | Working directory for this node. Accepts `{{ run.cwd }}` and `{{ brief.* }}` template tokens. If omitted the runner's default cwd applies. |
