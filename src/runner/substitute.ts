@@ -50,8 +50,9 @@ export interface Substitutions {
    * `{{ priorResults.<id>.status|reason }}` tokens. */
   priorResults?: ReadonlyMap<string, NodeResult>;
   /** Per-dispatch node scope (ADR 0050). `iteration` is the dispatch's
-   * 1-based iteration: the number its outputs dir, store row and
-   * `[node:<id>#<n>]` log tag carry. Absent → `{{ node.* }}` verbatim. */
+   * 1-based iteration: the number its outputs dir, store row and events
+   * carry (Scarif's worker logs it as `[node:<id>#<n>]`). Absent →
+   * `{{ node.* }}` verbatim. */
   node?: { iteration?: number };
   /** The edge that queued this dispatch (ADR 0050). `traversals` counts that
    * edge's traversals including the one that queued it, `0` when no edge

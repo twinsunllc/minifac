@@ -102,7 +102,7 @@ describe("node.iteration / edge.* tokens (ADR 0050)", () => {
       "iter=2 trav=1 max=2",
       "iter=3 trav=2 max=2",
     ]);
-    // `node.iteration` is the dispatch's own iteration, the `[node:<id>#<n>]` number.
+    // `node.iteration` is the dispatch's own iteration (RunContext.iteration).
     expect(exec.dispatches.filter((d) => d.nodeId === "work").map((d) => d.iteration)).toEqual([
       1, 2, 3,
     ]);

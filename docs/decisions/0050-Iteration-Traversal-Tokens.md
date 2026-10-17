@@ -23,7 +23,8 @@ already holds both numbers when it dispatches.
   `brief.*`, `run.*` and `inputs.*`, on the same fields (`with.prompt`,
   `with.base`, `cwd`):
   - `{{ node.iteration }}` — the dispatch's 1-based iteration, the number
-    its outputs directory, store row and `[node:<id>#<n>]` tag carry.
+    its outputs directory, store row and events carry (Scarif's worker
+    tags its log lines `[node:<id>#<n>]` with it).
   - `{{ edge.traversals }}` — the traversal count of the edge that queued
     this dispatch, counting the traversal that queued it.
   - `{{ edge.max_traversals }}` — that edge's budget.

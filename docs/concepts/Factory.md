@@ -122,7 +122,8 @@ Recognized namespaces:
   string. Inline nodes have no inputs map, and `{{ inputs.* }}` tokens
   pass through verbatim.
 - `node.iteration` — this dispatch's 1-based iteration, the number its
-  outputs directory and its `[node:<id>#<n>]` log tag carry
+  outputs directory and its events carry (Scarif's worker tags its log
+  lines `[node:<id>#<n>]` with it)
   ([[0050-Iteration-Traversal-Tokens]]).
 - `edge.traversals` / `edge.max_traversals` — the edge that queued this
   dispatch: how many times it has been taken, counting this traversal,
