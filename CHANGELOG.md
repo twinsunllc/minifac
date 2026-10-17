@@ -11,6 +11,8 @@ conflict; a duplicate or oddly-ordered bullet is tidied when a release is cut.
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-10-17
+
 ### Added
 
 - **A `command` executor runs a node's declared commands without a model**
@@ -43,7 +45,6 @@ conflict; a duplicate or oddly-ordered bullet is tidied when a release is cut.
   fields pass through verbatim with no error. `ParkedRun.via` and
   `ResumeState.via` carry the entering edge across a pause; a resume
   rebuilt from runs.db has none and renders `0` / empty for `edge.*`.
-
 - **A workflow may declare top-level `needs:`** (SCARIFW-2229,
   [ADR 0049](docs/decisions/0049-Workflow-Needs.md)). A list of unique,
   non-empty capability tokens such as `[linux, android]`; a scalar, a map,
@@ -349,7 +350,8 @@ Initial public release.
   (`scripts/check-dep-freshness.mjs`)
 - npm publish gated through OIDC trusted publisher with provenance
 
-[Unreleased]: https://github.com/twinsunllc/minifac/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/twinsunllc/minifac/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/twinsunllc/minifac/compare/v0.1.3...v0.2.0
 [0.1.3]: https://github.com/twinsunllc/minifac/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/twinsunllc/minifac/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/twinsunllc/minifac/releases/tag/v0.1.1
