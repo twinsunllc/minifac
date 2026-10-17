@@ -100,6 +100,18 @@ export function graphEdges(factory: Factory): GraphEdge[] {
   return routes.length === 0 ? factory.edges : [...factory.edges, ...routes];
 }
 
+/**
+ * The ids of `terminal: true` nodes that declare a non-empty `routes:`, in
+ * declaration order. The runner ends the run on a terminal node's success
+ * before it reads `next`, so such a node's routes apply only on a judged
+ * failure; the loader warns about each (`terminal_routes`).
+ */
+export function terminalRoutingNodes(factory: Factory): string[] {
+  return Object.entries(factory.nodes)
+    .filter(([, node]) => node.terminal === true && normalizeRoutes(node).length > 0)
+    .map(([id]) => id);
+}
+
 /** A route's traversal key, `<from>-><to>:route`. */
 export function routeEdgeKey(from: string, to: string): string {
   return `${from}->${to}:${ROUTE_WHEN}`;

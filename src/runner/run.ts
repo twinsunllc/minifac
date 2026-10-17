@@ -56,6 +56,14 @@ export interface RunOptions {
   registry: ExecutorRegistry;
   /** Called for every event yielded by any node, in order. */
   onEvent?: (entry: EmittedEvent) => void;
+  /**
+   * Events that open the run's stored event log, written to `store` in order
+   * right after the run's row is created (or reopened), before any node runs.
+   * They are NOT passed to `onEvent`: the caller already holds them, as
+   * `minifac serve` does for a factory's load warnings (ADR 0053), and this
+   * is how a daemon restart replays them from the run store.
+   */
+  preludeEvents?: readonly EmittedEvent[];
   /** Optional brief in scope for this run. */
   brief?: Brief;
   /** Optional run-level cwd. */
@@ -319,6 +327,16 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
         reportStoreError(onEvent, runStart, err);
       }
     };
+
+    for (const entry of options.preludeEvents ?? []) {
+      await appendStoreEvent(
+        entry.nodeId,
+        entry.iteration,
+        entry.event.kind,
+        entry.event,
+        entry.emittedAt,
+      );
+    }
 
     if (mcpStartFailure) {
       await appendStoreEvent(

@@ -237,6 +237,59 @@ describe("RunRegistry", () => {
       await store2.close();
     });
 
+    it("persists a factory's load warnings, so a restarted daemon replays them first, once", async () => {
+      const { store, dbPath } = await freshStore();
+      const reg = new RunRegistry(buildScripted({}), store);
+      const loaded: LoadedFactory = {
+        ...makeLoaded(),
+        warnings: [
+          {
+            code: "uncovered_cycle",
+            sourcePath: "/tmp/fake.yaml",
+            nodes: ["a", "b"],
+            edge: { from: "b", to: "a", when: "on_failure" },
+            message: "uncapped loop a → b → a",
+          },
+        ],
+      };
+      const out = reg.start({ factoryId: "x" }, loaded);
+      if (!out.ok) throw new Error("start refused");
+      await waitForRunEnd(out.run.events);
+      // The live buffer holds the warning once: the prelude is not re-emitted.
+      const line = "warning: /tmp/fake.yaml: uncapped loop a → b → a";
+      const isWarning = (e: RunEventEntry): boolean =>
+        e.kind === "stderr" && e.event.kind === "stderr" && e.event.line === line;
+      expect(out.run.events.filter(isWarning)).toHaveLength(1);
+      await store.close();
+
+      // A new daemon on the same runs.db.
+      const store2 = SqliteRunStore.open(dbPath);
+      const reg2 = new RunRegistry(buildScripted({}), store2);
+      await reg2.hydrate();
+      const r = await reg2.getWithEvents(out.run.id);
+      expect(r?.events[0]).toMatchObject({
+        index: 0,
+        nodeId: "__runner__",
+        iteration: 0,
+        kind: "stderr",
+        event: { kind: "stderr", line },
+      });
+      expect(r?.events.filter(isWarning)).toHaveLength(1);
+      await store2.close();
+    });
+
+    it("stores no __runner__ event for a factory without load warnings", async () => {
+      const { store } = await freshStore();
+      const reg = new RunRegistry(buildScripted({}), store);
+      const out = reg.start({ factoryId: "x" }, { ...makeLoaded(), warnings: [] });
+      if (!out.ok) throw new Error("start refused");
+      await waitForRunEnd(out.run.events);
+      const stored = await store.getRunEvents(out.run.id);
+      expect(stored.length).toBeGreaterThan(0);
+      expect(stored.some((e) => e.nodeId === "__runner__")).toBe(false);
+      await store.close();
+    });
+
     it("getWithEvents reads a prior run's events from the store", async () => {
       const { store, dbPath } = await freshStore();
       await store.createRun({

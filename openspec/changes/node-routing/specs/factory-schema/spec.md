@@ -90,3 +90,33 @@ omits `routes:` drops them and the synthesized output with them.
 - **WHEN** no node declares `routes:`
 - **THEN** no output is synthesized and start nodes, cycle results and
   edge keys are what they were before routes existed
+
+### Requirement: A terminal routing node loads with a warning
+
+A `terminal: true` node's success ends the run before its `next` is read,
+so a terminal node that declares a non-empty `routes:` has routes that
+apply only on a judged failure. The loader SHALL load such a factory and
+return one load warning per such node, with `code` `terminal_routes`,
+`sourcePath`, `node` (the node's id) and a `message` naming the node and
+saying its routes are taken only on a judged failure. The warning SHALL
+reach every surface an `uncovered_cycle` warning does. `strictBudgets`
+SHALL NOT turn it into a load error: strict budgets refuse only
+`uncovered_cycle` warnings.
+
+#### Scenario: A terminal node that declares routes is warned about
+
+- **WHEN** `evaluate` declares `terminal: true` and `routes: [{ to:
+  implement, max_traversals: 2 }]`
+- **THEN** the factory loads with exactly one `terminal_routes` warning
+  naming `evaluate` and the factory file
+
+#### Scenario: Strict budgets still load it
+
+- **WHEN** the same factory is loaded with `strictBudgets: true`
+- **THEN** it loads, and its warnings are that one `terminal_routes`
+  warning
+
+#### Scenario: A non-terminal routing node is not warned about
+
+- **WHEN** `evaluate` declares `routes:` and is not terminal
+- **THEN** the factory loads with no `terminal_routes` warning

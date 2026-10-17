@@ -30,6 +30,9 @@
 
 - [x] 4.1 `src/serve/web/edge-style.js`, `app.js`, `style.css`: on-route
       style, marker, tooltip, layout
+- [x] 4.2 (SCARIFW-2259) `src/serve/web/layout.js`: `layered`,
+      `edgePath` and `edgeLanes` out of `app.js`; back-edges over the
+      accepted layout graph; parallel edges drawn in lanes
 
 ## 5. Tests
 
@@ -42,6 +45,12 @@
 - [x] 5.3 `src/runner/mcp-server.test.ts`: `report_next` over the socket
 - [x] 5.4 `src/serve/web-edge-style.test.ts`: on-route style, derived
       edges, tooltip
+- [x] 5.5 (SCARIFW-2259) `routes.test.ts`, `run.routes.test.ts`: the
+      `terminal_routes` warning, plain and strict; a terminal routing
+      node's success ends the run and its judged failure takes the route
+- [x] 5.6 (SCARIFW-2259) `src/serve/web-layout.test.ts`: a cycle closed
+      only by value edges or routes gets one back-edge; a route and an
+      outcome edge between one pair get their own lanes
 
 ## 6. Docs
 

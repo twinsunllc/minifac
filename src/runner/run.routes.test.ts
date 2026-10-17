@@ -157,6 +157,54 @@ describe("node-chosen routing (ADR 0055)", () => {
     await rm(dir, { recursive: true, force: true });
   });
 
+  describe("a terminal routing node (the terminal_routes load warning)", () => {
+    // evaluate is terminal: a success ends the run before `next` is read.
+    function terminalRouted(): Factory {
+      const factory = routed({
+        edges: [
+          { from: "implement", to: "checks_gate", when: "on_success" },
+          { from: "checks_gate", to: "evaluate", when: "on_success" },
+        ],
+      });
+      const { implement, checks_gate, evaluate } = factory.nodes;
+      if (!implement || !checks_gate || !evaluate) throw new Error("fixture");
+      factory.nodes = { implement, checks_gate, evaluate: { ...evaluate, terminal: true } };
+      return factory;
+    }
+
+    it("ends the run on a success, even with a next naming a route", async () => {
+      const exec = evaluating(() => ({ next: "implement", status: succeeded }));
+      const seen: EmittedEvent[] = [];
+      const result = await runFactory(wrap(terminalRouted()), {
+        registry: registryWith(exec),
+        onEvent: (e) => seen.push(e),
+      });
+      expect(exec.ids()).toEqual(["implement", "checks_gate", "evaluate"]);
+      expect(result).toMatchObject({
+        status: "succeeded",
+        reason: "terminal_node_succeeded",
+        proximateNodeId: "evaluate",
+      });
+      expect(routeLines(seen)).toEqual([]);
+    });
+
+    it("takes the route on a judged failure", async () => {
+      const exec = evaluating((i) =>
+        i === 1 ? { next: "implement", status: failed } : { next: null, status: succeeded },
+      );
+      const result = await runFactory(wrap(terminalRouted()), { registry: registryWith(exec) });
+      expect(exec.ids()).toEqual([
+        "implement",
+        "checks_gate",
+        "evaluate",
+        "implement",
+        "checks_gate",
+        "evaluate",
+      ]);
+      expect(result).toMatchObject({ status: "succeeded", proximateNodeId: "evaluate" });
+    });
+  });
+
   describe("precedence: next > value edges > outcome edges", () => {
     it("a next naming a route takes that route alone, skipping a matching value edge and on_success", async () => {
       const exec = evaluating((i) =>

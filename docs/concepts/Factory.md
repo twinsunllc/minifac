@@ -49,7 +49,10 @@ canonical templates like `minifac:sdd`) or in
   entry node has a back-edge into it, so it declares `start: true`.
   Self-loops don't count. Zero start nodes is a load error naming the
   cycle. See [[0040-Declared-Start-Nodes]].
-- **Terminal node** with `terminal: true` ends the run on success.
+- **Terminal node** with `terminal: true` ends the run on success. A
+  terminal node's outbound edges are followed only when it fails, and
+  its routes only on a judged failure; see "Node-chosen routing" below for the load warning on a
+  terminal node that declares `routes:`.
 - **[[Cycle]]s** are first-class but must be bounded — see
   [[0002-Cycles-First-Class]].
 
@@ -318,7 +321,7 @@ nodes:
 | `uses` | string (min 1) | no | — | Reference to a reusable [[Step]]. Mutually exclusive with `executor`, and with every `with` key except `secrets`. See [[Step#Reference syntax and lookup precedence]]. |
 | `inputs` | map (string → unknown) | no | — | Input values supplied to the step declared in `uses:`. Keys must match the step's declared input names. Omit when using inline `executor` + `with`. |
 | `cwd` | string | no | — | Working directory for this node. Accepts `{{ run.cwd }}` and `{{ brief.* }}` template tokens. If omitted the runner's default cwd applies. |
-| `terminal` | boolean | no | `false` | When `true`, a successful exit from this node ends the run. Use on the last node in a forward-flow path. |
+| `terminal` | boolean | no | `false` | When `true`, a successful exit from this node ends the run. Use on the last node in a forward-flow path. With `routes:`, the routes apply only on a judged failure, and the loader warns (`terminal_routes`). |
 | `start` | boolean | no | — | When `true`, the [[Runner]] dispatches this node when the run begins even though it has inbound edges. Only needed for the entry node of a cycle (e.g. `propose` when `verify → propose` is an `on_failure` edge); a node with no inbound edge from another node starts without it. `false` is the same as omitted. Survives step inlining. See [[0040-Declared-Start-Nodes]]. |
 | `max_iterations` | positive integer | no | — | Maximum times this node may be dispatched across the entire run (counting all edge traversals). Absent means unlimited, subject to `max_traversals` on inbound edges. |
 | `outputs` | map (string → [[#Output fields\|output]]) | no | — | Declared outputs the node produces (typed JSON values, files, or directories under the per-iteration outputs directory). Keys match the same identifier grammar as step input keys. See [[Outputs]] for the full contract. |
@@ -492,6 +495,12 @@ edges:
   a failed node then ends the run `budget_exhausted`, and a succeeded node
   queues nothing, so a run with nothing else queued also ends
   `budget_exhausted`.
+- **A terminal routing node.** A `terminal: true` node's success ends the
+  run before `next` is read, so its routes are taken only on a judged
+  failure. The loader allows it but warns: a `terminal_routes` load
+  warning naming the node (`LoadedFactory.warnings`), written and shown
+  wherever an `uncovered_cycle` warning is ([[Cycle]]). `strictBudgets`
+  does not refuse it.
 - **`extends:`.** A layer that redeclares a routing node replaces it whole,
   so it must restate `routes:` to keep them.
 

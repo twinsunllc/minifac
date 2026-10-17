@@ -215,14 +215,15 @@ export class RunRegistry {
 
     // Factory load warnings (ADR 0053) open the run's event log, so a
     // subscriber, and any later replay, sees them before the run's output.
-    for (const warning of factory.warnings ?? []) {
-      this.recordEvent(id, {
-        nodeId: "__runner__",
-        iteration: 0,
-        emittedAt: 0,
-        event: { kind: "stderr", line: formatFactoryLoadWarning(warning) },
-      });
-    }
+    // They go into the buffer now and to the run store as the runner's
+    // prelude, so a run re-read after a daemon restart opens with them too.
+    const warningEvents: EmittedEvent[] = (factory.warnings ?? []).map((warning) => ({
+      nodeId: "__runner__",
+      iteration: 0,
+      emittedAt: 0,
+      event: { kind: "stderr", line: formatFactoryLoadWarning(warning) },
+    }));
+    for (const entry of warningEvents) this.recordEvent(id, entry);
 
     const loaded = applyCwdOverride(factory, input.cwd);
     const registry = this.buildRegistry();
@@ -233,6 +234,7 @@ export class RunRegistry {
       runId: id,
       ...(input.cwd ? { runCwd: input.cwd } : {}),
       ...(this.store ? { store: this.store } : {}),
+      ...(warningEvents.length > 0 ? { preludeEvents: warningEvents } : {}),
       onEvent: (entry) => this.recordEvent(id, entry),
     })
       .then((result) => this.recordResult(id, result))
