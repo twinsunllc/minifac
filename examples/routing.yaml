@@ -1,0 +1,77 @@
+name: routing
+description: >
+  An evaluate node that chooses what runs next (ADR 0055). evaluate declares
+  `routes: [implement, checks_gate]`: a lint-only finding goes straight back
+  to checks_gate instead of round through implement and review.
+
+brief: optional
+
+# How evaluate routes, in order of precedence:
+#
+#   1. `next`. The loader gives evaluate a synthesized value output `next`
+#      whose schema is { enum: [implement, checks_gate, null] }. evaluate
+#      writes it to `next.json` in its outputs dir (or calls
+#      `mcp__minifac__report_next`). A route it names is taken alone, on a
+#      success or a judged failure.
+#   2. Value edges (none here).
+#   3. Outcome edges: `next: null`, or no `next` at all, follows on_success
+#      to verify or on_failure to implement.
+#
+# A `next` naming any other node fails evaluate with
+# `output_schema_mismatch: output "next" ...`, and it routes on_failure.
+# Each hop it chooses is recorded as a runner-action event carrying
+# `chosen_by: evaluate`.
+#
+# Routes are edges for cycle budgets, so the two loops through evaluate need
+# a budget: `max_iterations` on evaluate covers both. A route can carry its
+# own instead: `{ to: implement, max_traversals: 2 }`.
+
+nodes:
+  implement:
+    executor: claude
+    start: true
+    with:
+      prompt: |
+        Implement the change described in the brief:
+
+        {{ brief.body }}
+
+  checks_gate:
+    executor: claude
+    with:
+      prompt: |
+        Run the linters and the type checker. Fix what they report.
+
+  review:
+    executor: claude
+    with:
+      prompt: |
+        Review the diff for correctness. Report what you find.
+
+  evaluate:
+    executor: claude
+    max_iterations: 4
+    routes: [implement, checks_gate]
+    with:
+      prompt: |
+        Decide what happens next from the review:
+
+        {{ priorResults.review.reason }}
+
+        - Ready to ship: write `null` to next.json and succeed.
+        - Only lint or formatting problems: write "checks_gate" to next.json.
+        - Anything else that needs code changes: write "implement".
+
+  verify:
+    executor: claude
+    terminal: true
+    with:
+      prompt: |
+        Confirm the change is complete and the checks pass.
+
+edges:
+  - { from: implement, to: checks_gate }
+  - { from: checks_gate, to: review }
+  - { from: review, to: evaluate }
+  - { from: evaluate, to: verify, when: on_success }
+  - { from: evaluate, to: implement, when: on_failure }

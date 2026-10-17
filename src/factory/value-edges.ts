@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { FactoryLoadError } from "./loader-error.js";
+import type { GraphEdge } from "./routes.js";
 import type { Factory, FactoryEdge } from "./schema.js";
 
 /**
@@ -44,7 +45,7 @@ export const ValueConditionSchema = z
 export type ValueCondition = z.infer<typeof ValueConditionSchema>;
 type Scalar = string | number | boolean | null;
 
-export function isValueCondition(when: FactoryEdge["when"]): when is ValueCondition {
+export function isValueCondition(when: GraphEdge["when"]): when is ValueCondition {
   return typeof when === "object" && when !== null;
 }
 
@@ -55,11 +56,12 @@ function conditionValues(cond: ValueCondition): Scalar[] {
 
 /**
  * The `when` part of an edge's traversal key: the literal for an outcome
- * edge, `output:<path>=<JSON>` or `output:<path> in <JSON array>` for a value
- * edge. The runner keys `max_traversals` counts, park/resume
- * `edgeTraversals` and `via` as `<from>-><to>:<edgeWhenKey>`.
+ * edge, `route` for a route, `output:<path>=<JSON>` or
+ * `output:<path> in <JSON array>` for a value edge. The runner keys
+ * `max_traversals` counts, park/resume `edgeTraversals` and `via` as
+ * `<from>-><to>:<edgeWhenKey>`.
  */
-export function edgeWhenKey(edge: Pick<FactoryEdge, "when">): string {
+export function edgeWhenKey(edge: Pick<GraphEdge, "when">): string {
   const when = edge.when;
   if (!isValueCondition(when)) return when;
   return when.in !== undefined

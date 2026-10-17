@@ -37,6 +37,11 @@ canonical templates like `minifac:sdd`) or in
   `on_success`/`on_failure` edges; with none matching, the node follows
   those edges as usual. An error never takes a value edge. See
   [[#Routing on a value]] and [[0055-Value-Edges-And-Node-Routing]].
+- **Routes** let a node choose what runs next from a declared allow-list:
+  `routes: [implement, checks_gate]`. The node writes `next` (one of its
+  routes, or `null`). A route it names is taken alone, ahead of value
+  edges and outcome edges. Routes count as edges for start nodes and
+  cycle budgets. See [[#Node-chosen routing]].
 - **Start nodes** are nodes with no inbound edge from another node —
   of any kind — plus any node declaring `start: true`. A node reached
   only by `on_failure` edges (an escalation, wait, or re-poll node) is
@@ -318,6 +323,7 @@ nodes:
 | `max_iterations` | positive integer | no | — | Maximum times this node may be dispatched across the entire run (counting all edge traversals). Absent means unlimited, subject to `max_traversals` on inbound edges. |
 | `outputs` | map (string → [[#Output fields\|output]]) | no | — | Declared outputs the node produces (typed JSON values, files, or directories under the per-iteration outputs directory). Keys match the same identifier grammar as step input keys. See [[Outputs]] for the full contract. |
 | `resume` | string (min 1) | no | — | Names another node in this factory whose conversation this node continues instead of starting a fresh one. Pair it with a `with.model` override to build a **cascade**: an expensive explore/plan node, then a cheap continuation that already has the context. Validated at load time — see [[#Cross-node session resume\|below]]. Runtime behavior lives in the [[Runner]]. |
+| `routes` | list of node ids or `{ to, max_traversals }` | no | — | The nodes this node's result may name as the next to run. The loader synthesizes the node's `next` output from it, so the node may not declare its own `next`. Workflow only: a step file cannot declare it. Survives step inlining. See [[#Node-chosen routing]]. |
 | `output_nudge_budget` | non-negative integer | no | `1` | How many in-turn nudge retries the runner MAY use to recover a missing-required-output protocol mistake before recording the node as `failed`. Setting `0` opts the node out of nudging entirely; the missing-outputs override fires on the first validation pass. Per-node only; no factory-level default. The budget is per-node-iteration — a graph-level recovery edge that re-dispatches the same node gets a fresh budget. See [[Outputs#Nudge recovery]] and [[0028-Node-Outputs-Nudge]]. |
 
 ### Cross-node session resume
@@ -444,6 +450,50 @@ edges:
   other ([[Cycle]]).
 - The schema's `required` is not demanded. An absent decision just
   matches nothing.
+
+### Node-chosen routing
+
+A node can name its successor itself, from a list it declares
+([[0055-Value-Edges-And-Node-Routing]]). `examples/routing.yaml` is a
+complete factory:
+
+```yaml
+nodes:
+  evaluate:
+    executor: claude
+    max_iterations: 4
+    routes: [implement, checks_gate]     # or { to: implement, max_traversals: 2 }
+edges:
+  - { from: evaluate, to: verify, when: on_success }
+  - { from: evaluate, to: implement, when: on_failure }
+```
+
+- **The `next` output.** The loader gives a routing node a `type: value`
+  output `next`, never required, whose schema is
+  `{ enum: [implement, checks_gate, null] }`. The node writes `next.json`
+  or calls `mcp__minifac__report_next` (see [[Outputs]]). A routing node
+  that declares its own `next` output, or whose step does, is a load
+  error. A node without `routes:` may declare `next` freely.
+- **At load**, each entry must name a declared node, and its target must
+  have a path, along edges of any `when` or other routes, to a
+  `terminal: true` node. Either failure is a load error naming the node
+  and the entry. Duplicates and `routes: []` are refused. Routes count as
+  edges for start nodes and for cycle budgets: a cycle
+  closed by a route needs `max_traversals` on the route entry or
+  `max_iterations` on a node ([[Cycle]]). Routes are not added to the
+  factory's `edges`.
+- **At run time**, on a success or a judged failure, a `next` naming a
+  route takes that route alone. `null` or no `next` falls through to
+  value edges, then outcome edges. A `next` outside `routes` fails the
+  node with `output_schema_mismatch: output "next" ...`, and it routes
+  `on_failure`. An error ignores `next`. See [[Runner]].
+- **Budgets.** A route counts under the key `evaluate->implement:route`.
+  A chosen route that is exhausted does not fall back to the other edges:
+  a failed node then ends the run `budget_exhausted`, and a succeeded node
+  queues nothing, so a run with nothing else queued also ends
+  `budget_exhausted`.
+- **`extends:`.** A layer that redeclares a routing node replaces it whole,
+  so it must restate `routes:` to keep them.
 
 Source: `src/factory/schema.ts`, `src/executor/claude.ts`
 

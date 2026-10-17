@@ -176,6 +176,8 @@ export async function inlineStepIntoNode(args: InlineArgs): Promise<InlinedNode>
   // `start:` is graph topology (which nodes the run begins at), never a
   // property of the step body. Same independence basis.
   if (node.start !== undefined) out.start = node.start;
+  // `routes:` names sibling nodes, so it is topology too (ADR 0055).
+  if (node.routes !== undefined) out.routes = node.routes;
 
   // Attach the inputs map as a non-enumerable property so it doesn't
   // appear in serialized factory snapshots but is reachable at runtime.

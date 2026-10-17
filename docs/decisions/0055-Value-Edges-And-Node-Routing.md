@@ -277,6 +277,43 @@ the synthesized output and the precedence.
 - The serve viewer draws value edges in their own style, with the
   condition as a tooltip.
 
+## Amendment (SCARIFW-2252, 2026-10-17)
+
+SCARIFW-2252 built `routes:`/`next:` to the design above. Its acceptance
+criteria depart from this record in two places, and its first criterion
+says a departure amends the ADR in the same change. Everything else above
+stands.
+
+1. **Terminal reachability for route targets: a load error.** Question 2
+   answered "no new rule". SCARIFW-2252 requires that "a `routes` entry
+   that names no node, or that can't reach a terminal node, is a load
+   error". The loader now refuses a route whose target has no path, along
+   declared edges of any `when` and other routes, to a `terminal: true`
+   node. A terminal target passes. The rule applies to routes only:
+   declared edges, value edges included, are still held to the old rule.
+   Routes are therefore stricter than the value edges they otherwise
+   behave like. The reason is that a route is chosen at run time by a
+   node's output, and a target that can never finish the run is almost
+   certainly a mistake in the allow-list. Declared edges have no such
+   check because nothing asked for one, and adding it there would refuse
+   factories that load today.
+2. **A routed hop is written to the run record.** "Routes add nothing to
+   the runner a value edge cannot already do" no longer holds in one
+   respect. SCARIFW-2252 asks that "the run record shows each routed hop as
+   `chosen_by: <node id>`", so that log-reading tooling such as
+   scarif-factory's `compare-runs.py` can follow a run's path without
+   reading `next` outputs. Each route traversed now emits and persists a
+   `runner-action` event, attributed to the routing node's dispatch, whose
+   line is `route: node "<from>" chose "<to>" (chosen_by: <from>)` and
+   whose payload carries `chosen_by` and `to`. It uses the existing events
+   table, so there is still no runs.db schema change. A route that is
+   chosen but budget-exhausted is not traversed and emits no event.
+
+Two smaller points the design left open are settled here. `routes: []` is
+refused, because its synthesized `next` could only be `null`. A value edge
+may test the synthesized `next`; it is checked against the synthesized enum
+like any value edge, and it is redundant with the route.
+
 ## Related
 
 - [[0052-On-Error-Edges]], [[0053-Loop-Budgets-Per-Cycle]],

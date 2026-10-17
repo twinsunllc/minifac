@@ -27,7 +27,9 @@ export type NodeEvent =
   // (e.g. nudging a missing-output protocol mistake). The event rides the
   // executor's event stream so downstream consumers see one ordered
   // timeline; the runner is the source, not the executor.
-  | { kind: "runner-action"; line: string }
+  // A routed hop (ADR 0055) also carries `chosen_by` (the routing node) and
+  // `to` (the route it took), so tooling can read a run's path.
+  | { kind: "runner-action"; line: string; chosen_by?: string; to?: string }
   // Runner-originated event: a synthetic user-message string the runner
   // is about to write to the executor's stdin (e.g. a nudge message).
   // Exposed on the event stream so observers see the same payload the

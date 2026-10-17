@@ -13,7 +13,15 @@ import type {
 } from "../executor/types.js";
 import type { LoadedFactory } from "../factory/loader.js";
 import { describeViolation } from "../factory/output-schema.js";
-import type { FactoryEdge, NodeOutputIndex } from "../factory/schema.js";
+import {
+  type GraphEdge,
+  NEXT_OUTPUT,
+  ROUTE_WHEN,
+  graphEdges,
+  normalizeRoutes,
+  routeEdgeKey,
+} from "../factory/routes.js";
+import type { FactoryEdge, FactoryNode, NodeOutputIndex } from "../factory/schema.js";
 import { startNodeIds } from "../factory/start-nodes.js";
 import {
   conditionMatches,
@@ -325,8 +333,11 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
     const iterations = new Map<string, number>();
     // Keyed `<from>-><to>:<when>`: the format `ParkedRun.edgeTraversals` and
     // `ResumeState.edgeTraversals` carry (ADR 0048). A value edge's `<when>`
-    // is `output:<path>=<JSON>` or `output:<path> in <JSON array>` (ADR 0055).
-    const edgeKey = (edge: FactoryEdge): string => `${edge.from}->${edge.to}:${edgeWhenKey(edge)}`;
+    // is `output:<path>=<JSON>` or `output:<path> in <JSON array>`, and a
+    // route's is `route` (ADR 0055).
+    const edgeKey = (edge: GraphEdge): string => `${edge.from}->${edge.to}:${edgeWhenKey(edge)}`;
+    // Declared edges then routes, for resume's key and `via` lookups.
+    const allEdges = graphEdges(factory);
     const edgeTraversals = new Map<string, number>();
     for (const id of Object.keys(factory.nodes)) iterations.set(id, 0);
 
@@ -378,7 +389,7 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
         }
         // Edge budgets carry over (ADR 0048): a park must not hand a bounded
         // revise loop a fresh budget. Same rehydration rules as iterations.
-        const declaredEdges = new Set(factory.edges.map(edgeKey));
+        const declaredEdges = new Set(allEdges.map(edgeKey));
         for (const [key, used] of Object.entries(resume.edgeTraversals ?? {})) {
           if (!declaredEdges.has(key)) continue;
           if (!Number.isFinite(used) || used < 0) continue;
@@ -389,9 +400,7 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
         let seedVia: QueueVia | undefined;
         // Only a declared edge INTO the seed counts; anything else is ignored.
         if (resume.via !== undefined) {
-          const viaEdge = factory.edges.find(
-            (e) => edgeKey(e) === resume.via && e.to === resume.at,
-          );
+          const viaEdge = allEdges.find((e) => edgeKey(e) === resume.via && e.to === resume.at);
           if (viaEdge) {
             seedVia = { key: resume.via, traversals: edgeTraversals.get(resume.via) ?? 0 };
             if (viaEdge.max_traversals !== undefined) {
@@ -1351,9 +1360,19 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
       // none matching, the outcome's edges are taken. An error never takes a
       // value edge. A matched edge that is budget-exhausted does not fall
       // back below: the selection is made before budgets are read.
-      let selected = outbound.filter((e) => e.when === takeWhen);
+      let selected: GraphEdge[] = outbound.filter((e) => e.when === takeWhen);
       const valueEdges = outbound.filter((e) => isValueCondition(e.when));
-      if (finalOutcome !== "error" && valueEdges.length > 0) {
+      // ADR 0055: `next` > value edges > outcome edges. On a success or a
+      // judged failure, a `next` naming one of the node's routes takes that
+      // route alone; `null`, absent or unindexed (an off-list `next` failed
+      // its schema) falls through. An error ignores `next`.
+      const chosen =
+        finalOutcome !== "error" ? await readChosenRoute(node.routes, validatedIndex) : undefined;
+      if (chosen !== undefined) {
+        const edge: GraphEdge = { from: nodeId, to: chosen.to, when: ROUTE_WHEN };
+        if (chosen.max_traversals !== undefined) edge.max_traversals = chosen.max_traversals;
+        selected = [edge];
+      } else if (finalOutcome !== "error" && valueEdges.length > 0) {
         const matched = await matchValueEdges(valueEdges, validatedIndex);
         if (matched.length > 0) {
           selected = matched;
@@ -1397,6 +1416,22 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
         if (edge.max_traversals !== undefined) via.maxTraversals = edge.max_traversals;
         queue.push({ nodeId: edge.to, via });
         traversedAny = true;
+        if (edge.when === ROUTE_WHEN) {
+          // The run record of a routed hop (SCARIFW-2252, amending ADR 0055).
+          const entry: EmittedEvent = {
+            nodeId,
+            iteration,
+            emittedAt: Date.now() - runStart,
+            event: {
+              kind: "runner-action",
+              line: `route: node "${nodeId}" chose "${edge.to}" (chosen_by: ${nodeId})`,
+              chosen_by: nodeId,
+              to: edge.to,
+            },
+          };
+          onEvent?.(entry);
+          await appendStoreEvent(nodeId, iteration, "runner-action", entry.event, entry.emittedAt);
+        }
       }
 
       if (finalStatus === "failed" && !traversedAny) {
@@ -1518,6 +1553,28 @@ async function matchValueEdges(
     if (read && conditionMatches(when, read.value)) matched.push(edge);
   }
   return matched;
+}
+
+/**
+ * The route a routing node's indexed `next` output names (ADR 0055), or
+ * undefined when the node has no routes, `next` is not indexed (absent, or
+ * failed its schema), does not parse, is `null`, or names no route.
+ */
+async function readChosenRoute(
+  routes: FactoryNode["routes"],
+  index: NodeOutputIndex,
+): Promise<{ to: string; max_traversals?: number } | undefined> {
+  if (routes === undefined) return undefined;
+  const entry = index[NEXT_OUTPUT];
+  if (entry === undefined) return undefined;
+  let next: unknown;
+  try {
+    next = JSON.parse(await readFile(entry.path, "utf8"));
+  } catch {
+    return undefined;
+  }
+  if (typeof next !== "string") return undefined;
+  return normalizeRoutes({ routes }).find((r) => r.to === next);
 }
 
 /** One stderr line per schema violation, every mismatched output. */

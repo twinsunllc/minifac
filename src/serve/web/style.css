@@ -194,6 +194,11 @@ main {
   stroke-dasharray: 6 2;
 }
 
+.edge-path.on-route {
+  stroke: #bb9af7;
+  stroke-dasharray: 2 2 8 2;
+}
+
 .event-tail {
   background: #131722;
   border: 1px solid #2a2f3a;

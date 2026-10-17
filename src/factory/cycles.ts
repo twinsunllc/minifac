@@ -1,17 +1,18 @@
+import { type GraphEdge, graphEdges } from "./routes.js";
 import type { Factory } from "./schema.js";
 import { startNodeIds } from "./start-nodes.js";
 import { edgeWhenKey } from "./value-edges.js";
 
 /**
- * Tarjan's strongly connected components. Each returned component is a list of
- * node ids. A component is "cyclic" if it contains more than one node, OR it
+ * Tarjan's strongly connected components over {@link graphEdges} (declared
+ * edges and routes). Each returned component is a list of node ids. A component is "cyclic" if it contains more than one node, OR it
  * is a single node with a self-loop edge.
  */
 function tarjanSCCs(factory: Factory): string[][] {
   const nodeIds = Object.keys(factory.nodes);
   const adj = new Map<string, string[]>();
   for (const id of nodeIds) adj.set(id, []);
-  for (const edge of factory.edges) {
+  for (const edge of graphEdges(factory)) {
     adj.get(edge.from)?.push(edge.to);
   }
 
@@ -74,11 +75,12 @@ export interface EntryCycle {
  * is where `start: true` belongs.
  */
 export function findEntryCycles(factory: Factory): EntryCycle[] {
+  const edges = graphEdges(factory);
   const entries: EntryCycle[] = [];
   for (const scc of tarjanSCCs(factory)) {
     if (scc.length < 2) continue;
     const members = new Set(scc);
-    const entered = factory.edges.some((e) => members.has(e.to) && !members.has(e.from));
+    const entered = edges.some((e) => members.has(e.to) && !members.has(e.from));
     if (!entered) entries.push({ nodes: [...scc].reverse() });
   }
   return entries;
@@ -86,10 +88,11 @@ export function findEntryCycles(factory: Factory): EntryCycle[] {
 
 /**
  * Returns the cyclic SCCs whose budget coverage is missing. A cycle is
- * "covered" if any node in the SCC has `max_iterations`, OR any edge whose
- * both endpoints are in the SCC has `max_traversals`.
+ * "covered" if any node in the SCC has `max_iterations`, OR any edge (or
+ * route) whose both endpoints are in the SCC has `max_traversals`.
  */
 export function findUncoveredCycles(factory: Factory): UncoveredCycle[] {
+  const edges = graphEdges(factory);
   const sccs = tarjanSCCs(factory);
   const uncovered: UncoveredCycle[] = [];
 
@@ -98,7 +101,7 @@ export function findUncoveredCycles(factory: Factory): UncoveredCycle[] {
     const isCyclic =
       scc.length > 1 ||
       (scc.length === 1 &&
-        factory.edges.some((e) => {
+        edges.some((e) => {
           const head = scc[0];
           return head !== undefined && e.from === head && e.to === head;
         }));
@@ -108,7 +111,7 @@ export function findUncoveredCycles(factory: Factory): UncoveredCycle[] {
       const n = factory.nodes[id];
       return n?.max_iterations !== undefined;
     });
-    const edgeCovered = factory.edges.some(
+    const edgeCovered = edges.some(
       (e) => sccSet.has(e.from) && sccSet.has(e.to) && e.max_traversals !== undefined,
     );
 
@@ -131,7 +134,8 @@ export interface UnbudgetedCycle {
 /**
  * Returns elementary cycles that carry no budget, per ADR 0053. An
  * elementary cycle is covered when one of its edges has `max_traversals`
- * (of any `when`) or one of its nodes has `max_iterations`. Every cycle is
+ * (of any `when`, a route's included) or one of its nodes has
+ * `max_iterations`. Every cycle is
  * covered exactly when the residual graph — the factory without budgeted
  * edges and without `max_iterations` nodes — is acyclic, so no cycle
  * enumeration is needed.
@@ -154,10 +158,11 @@ export function findUnbudgetedCycles(factory: Factory): UnbudgetedCycle[] {
     factory.nodes[id]?.max_iterations === undefined &&
     !hardError.has(id);
 
-  // Edge indices into `factory.edges`, so parallel edges between the same
-  // pair (different `when`) stay distinct.
+  // Edge indices into `edges` (declared edges, then routes), so parallel
+  // edges between the same pair (different `when`) stay distinct.
+  const edges = graphEdges(factory);
   const live = new Set<number>();
-  factory.edges.forEach((e, i) => {
+  edges.forEach((e, i) => {
     if (e.max_traversals === undefined && residualNode(e.from) && residualNode(e.to)) live.add(i);
   });
 
@@ -167,10 +172,10 @@ export function findUnbudgetedCycles(factory: Factory): UnbudgetedCycle[] {
 
   const out: UnbudgetedCycle[] = [];
   for (;;) {
-    const found = firstBackEdge(factory, roots, live);
+    const found = firstBackEdge(edges, roots, live);
     if (found === undefined) return out;
     live.delete(found.edgeIndex);
-    const edge = factory.edges[found.edgeIndex];
+    const edge = edges[found.edgeIndex];
     if (edge === undefined) return out;
     out.push({
       nodes: found.nodes,
@@ -185,13 +190,13 @@ export function findUnbudgetedCycles(factory: Factory): UnbudgetedCycle[] {
  * closes, or undefined when the live graph is acyclic.
  */
 function firstBackEdge(
-  factory: Factory,
+  edges: GraphEdge[],
   roots: string[],
   live: Set<number>,
 ): { edgeIndex: number; nodes: string[] } | undefined {
   const outEdges = new Map<string, number[]>();
   for (const i of live) {
-    const e = factory.edges[i];
+    const e = edges[i];
     if (e === undefined) continue;
     const list = outEdges.get(e.from) ?? [];
     list.push(i);
@@ -207,7 +212,7 @@ function firstBackEdge(
     path.push(v);
     onPath.add(v);
     for (const i of outEdges.get(v) ?? []) {
-      const w = factory.edges[i]?.to;
+      const w = edges[i]?.to;
       if (w === undefined || done.has(w)) continue;
       if (onPath.has(w)) return { edgeIndex: i, nodes: path.slice(path.indexOf(w)) };
       const found = visit(w);

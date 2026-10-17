@@ -33,6 +33,27 @@ conflict; a duplicate or oddly-ordered bullet is tidied when a release is cut.
   using only outcome literals load and route as before. The ADR also
   designs node-chosen routing (`routes:`/`next:`, twinsunllc/minifac#54),
   which is built in SCARIFW-2252.
+- **Node-chosen routing** (SCARIFW-2252, twinsunllc/minifac#54,
+  [ADR 0055](docs/decisions/0055-Value-Edges-And-Node-Routing.md)). A node
+  may declare `routes: [<id> | { to: <id>, max_traversals: <n> }, ...]`, and
+  the loader gives it a synthesized value output `next` whose schema is
+  `{ enum: [<route ids>..., null] }`, written as `next.json` or through
+  `mcp__minifac__report_next`. On a success or a judged failure, a `next`
+  naming a route takes that route alone, ahead of value edges and outcome
+  edges. `null` or no `next` falls through to them. An error ignores
+  `next`. A `next` outside `routes` fails the node with
+  `output_schema_mismatch: output "next" ...` and it routes `on_failure`.
+  Loading fails when a route names an undeclared node, when its target
+  cannot reach a terminal node, or when a routing node declares its own
+  `next` output. `routes:` is refused on a step. Routes count as edges for
+  start nodes and cycle budgets. Their `max_traversals` count is keyed
+  `<from>-><to>:route` and carried through park/resume. A chosen route that
+  is exhausted does not fall back. Each routed hop is recorded as a
+  `runner-action` event carrying `chosen_by: <node id>` and `to`. The serve
+  viewer draws routes in their own style. `examples/routing.yaml` shows an
+  evaluate with `routes: [implement, checks_gate]`. A graph without
+  `routes:` loads and routes as before. ADR 0055 is amended for the
+  terminal-reachability rule and the `chosen_by` event.
 
 ## [0.3.0] — 2026-10-17
 
