@@ -451,7 +451,7 @@ describe("CommandExecutor", () => {
       }
       expect(Date.now() - started).toBeLessThan(3000);
       const pid = Number((await readFile(pidFile, "utf8")).trim());
-      expect(alive(pid)).toBe(false);
+      expect(await waitFor(() => !alive(pid))).toBe(true);
       expect(events.at(-1)).toMatchObject({
         status: "failed",
         meta: { sentinel: "c: killed by SIGKILL" },
