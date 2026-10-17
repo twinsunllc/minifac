@@ -11,6 +11,8 @@ conflict; a duplicate or oddly-ordered bullet is tidied when a release is cut.
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-10-17
+
 ### Added
 
 - **Step-declared outputs, and JSON Schema on `value` outputs**
@@ -43,10 +45,9 @@ conflict; a duplicate or oddly-ordered bullet is tidied when a release is cut.
   and runs.db `node_executions.outcome` (schema v6, via
   `RecordNodeEndInput.outcome`; an older build refuses a v6 database).
   `status`, `reason` and `RunReason` values are unchanged. The `claude`,
-  `command` and `check-merge` executors map their failure reasons; a
-  `claude` result with `is_error: true` and no sentinel is now `failed`
-  even on exit 0. A `RunResult.log` entry now records the
-  `missing_required_output` override as `failed`.
+  `command` and `check-merge` executors map their failure reasons. A
+  `RunResult.log` entry now records the `missing_required_output`
+  override as `failed`.
 - **Loop budgets per elementary cycle, warn-first** (SCARIFW-2248,
   [ADR 0053](docs/decisions/0053-Loop-Budgets-Per-Cycle.md)). Every cycle
   needs a `max_traversals` edge or a `max_iterations` node on it; a budget
@@ -61,6 +62,45 @@ conflict; a duplicate or oddly-ordered bullet is tidied when a release is cut.
   `minifac run`, including `--resume`, and `minifac autorun`) refuse it
   instead. A component with no budget anywhere is still a load error.
   Strict becomes the default at the next major version.
+- **`POST /api/runs` returns the factory's load warnings** (SCARIFW-2255).
+  The `201` body gains a `warnings` array (`FactoryLoadWarning[]`, empty
+  when there are none); its other fields are unchanged.
+
+### Changed
+
+- **A `claude` result with `is_error: true` and no sentinel now fails the
+  node, even on exit 0** (SCARIFW-2247,
+  [ADR 0052](docs/decisions/0052-On-Error-Edges.md)). The node ends
+  `failed` with outcome `error` (`meta.subtype` carries the result's
+  subtype when it has one), so it takes its `on_error` edges when it
+  declares any, and its `on_failure` edges otherwise. In 0.2.0 such a
+  result on exit 0 with no sentinel ended the node `succeeded`.
+- **A root output schema violation's pointer is RFC 6901's empty string**
+  (SCARIFW-2255, [ADR 0054](docs/decisions/0054-Step-Output-Schema.md)).
+  `OutputSchemaViolation.pointer`, and so `schema_errors` in the status
+  event's `meta`, is `""` for the root instead of `/` (which in RFC 6901
+  names the property `""`). The `output_schema_mismatch` reason and the
+  stderr lines render it as `(root)`. Nested pointers are unchanged.
+
+### Fixed
+
+- **Load warnings reach the user in every entry point** (SCARIFW-2255). In
+  `minifac autorun`'s TUI mode the `load-warning` event was suppressed with
+  the rest of the log; it now reaches the TUI, which lists each warning
+  once below the briefs. A run started through `minifac serve` dropped
+  `LoadedFactory.warnings`; its event stream now opens with a `__runner__`
+  `stderr` event, `warning: <file>: <message>`, per warning, replayed over
+  SSE like any other buffered event.
+- **The serve web graph draws `on_error` edges distinctly** (SCARIFW-2255).
+  They were drawn as `on_success` edges; they now have their own class
+  (`on-error`, a dotted stroke in their own colour) and arrowhead.
+- **Concurrent in-place runs no longer race on mark-done** (SCARIFW-2255).
+  Two runs ending together in one working tree (autorun with
+  `--max-concurrent` above 1 and `mode: in-place` briefs) each moved their
+  brief with `git mv` and `git commit`; the two calls contended for the
+  index lock, or one commit carried both moves and the other found nothing
+  to commit, leaving a brief in `inputs/`. `markBriefDone` now runs one
+  call at a time per working tree within a process.
 
 ## [0.2.0] — 2026-10-17
 
@@ -401,7 +441,8 @@ Initial public release.
   (`scripts/check-dep-freshness.mjs`)
 - npm publish gated through OIDC trusted publisher with provenance
 
-[Unreleased]: https://github.com/twinsunllc/minifac/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/twinsunllc/minifac/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/twinsunllc/minifac/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/twinsunllc/minifac/compare/v0.1.3...v0.2.0
 [0.1.3]: https://github.com/twinsunllc/minifac/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/twinsunllc/minifac/compare/v0.1.1...v0.1.2

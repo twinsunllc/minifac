@@ -42,7 +42,11 @@ nodes with. A node's `max_iterations` covers every cycle through that
 node. Until the next major version the loader enforces this in two
 steps: a loop with no budget anywhere is a load error, and an uncovered
 cycle inside an otherwise budgeted loop loads with a warning
-(`LoadedFactory.warnings`; a `warning:` line from `minifac run`). The
+(`LoadedFactory.warnings`). `minifac run` writes a `warning:` line to
+stderr; `minifac autorun` logs a `load-warning` event, and in its TUI
+lists the warning below the briefs; a run started through `minifac
+serve` returns it in the `POST /api/runs` body's `warnings` and opens its
+event stream with a `warning:` line. The
 `strictBudgets` loader option and the `--strict-budgets` flag make the
 warning an error now.
 
