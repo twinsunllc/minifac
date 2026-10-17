@@ -118,6 +118,18 @@ interface QueueItem {
    * is ordinary, and so is a pause resume's seed (ADR 0048) unless the run
    * was parked before an answer resume's seed (`ResumeState.resumeSeed`). */
   resumeSeed?: boolean;
+  /** The edge that queued this dispatch (ADR 0050), with its traversal count
+   * taken when it was traversed, so a second traversal of the same edge
+   * before this item dispatches does not change what this one renders.
+   * Absent for a start node, and for a resume seed with no `ResumeState.via`. */
+  via?: QueueVia;
+}
+
+interface QueueVia {
+  /** `<from>-><to>:<when>`, the `edgeTraversals` key. */
+  key: string;
+  traversals: number;
+  maxTraversals?: number;
 }
 
 export async function runFactory(loaded: LoadedFactory, options: RunOptions): Promise<RunResult> {
@@ -358,7 +370,26 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
           if (!Number.isFinite(used) || used < 0) continue;
           edgeTraversals.set(key, Math.trunc(used));
         }
-        queue.push({ nodeId: resume.at, resumeSeed: seedPrivileged });
+        // The entering edge of a parked dispatch (ADR 0050). The seed itself
+        // traverses no edge, so the count is the rehydrated one, unchanged.
+        let seedVia: QueueVia | undefined;
+        // Only a declared edge INTO the seed counts; anything else is ignored.
+        if (resume.via !== undefined) {
+          const viaEdge = factory.edges.find(
+            (e) => edgeKey(e.from, e.to, e.when) === resume.via && e.to === resume.at,
+          );
+          if (viaEdge) {
+            seedVia = { key: resume.via, traversals: edgeTraversals.get(resume.via) ?? 0 };
+            if (viaEdge.max_traversals !== undefined) {
+              seedVia.maxTraversals = viaEdge.max_traversals;
+            }
+          }
+        }
+        queue.push({
+          nodeId: resume.at,
+          resumeSeed: seedPrivileged,
+          ...(seedVia ? { via: seedVia } : {}),
+        });
         const answered = resume.feedback !== undefined && resume.feedback.length > 0;
         const nextIteration = (iterations.get(resume.at) ?? 0) + 1;
         const exempt = `is exempt from this node's max_iterations${answered ? "; a human answer is injected into its prompt" : ""}`;
@@ -394,10 +425,11 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
       nodeCwd: string | undefined,
       nodeInputs: Record<string, unknown> | undefined,
       outputsDir: string,
+      dispatchSubs: Pick<Substitutions, "node" | "edge">,
     ): string => {
       let effective = nodeCwd;
       if (typeof effective === "string" && effective.length > 0) {
-        const localSubs: Substitutions = { ...baseSubs };
+        const localSubs: Substitutions = { ...baseSubs, ...dispatchSubs };
         if (nodeInputs !== undefined) localSubs.inputs = nodeInputs;
         localSubs.run = { ...(baseSubs.run ?? {}), outputsDir };
         effective = substitute(effective, localSubs);
@@ -509,9 +541,10 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
             parked: {
               nodeId,
               iteration,
-              pending: [{ nodeId, iteration }],
+              pending: [{ nodeId, iteration, ...(next.via ? { via: next.via.key } : {}) }],
               edgeTraversals: Object.fromEntries(edgeTraversals),
               resumeSeed: isResumeSeed,
+              ...(next.via ? { via: next.via.key } : {}),
             },
           };
           break;
@@ -565,7 +598,15 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
       for (const entry of priorResults) {
         priorMap.set(entry.nodeId, entry);
       }
-      const nodeSubs: Substitutions = { ...baseSubs };
+      // ADR 0050: this dispatch's iteration and entering edge.
+      const dispatchSubs: Pick<Substitutions, "node" | "edge"> = {
+        node: { iteration },
+        edge: {
+          traversals: next.via?.traversals ?? 0,
+          max_traversals: next.via?.maxTraversals ?? null,
+        },
+      };
+      const nodeSubs: Substitutions = { ...baseSubs, ...dispatchSubs };
       nodeSubs.run = { ...(baseSubs.run ?? {}), outputsDir };
       if (inputsMap !== undefined) nodeSubs.inputs = inputsMap;
       nodeSubs.priorResults = priorMap;
@@ -718,7 +759,7 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
         priorResults: snapshot,
         nodeId,
         iteration,
-        cwd: resolveCwd(node.cwd, inputsMap, outputsDir),
+        cwd: resolveCwd(node.cwd, inputsMap, outputsDir, dispatchSubs),
         outputsDir,
         mcpConfigPath,
         ...(resumeSessionId !== undefined ? { resumeSessionId } : {}),
@@ -1186,7 +1227,9 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
         }
 
         edgeTraversals.set(key, used + 1);
-        queue.push({ nodeId: edge.to });
+        const via: QueueVia = { key, traversals: used + 1 };
+        if (edge.max_traversals !== undefined) via.maxTraversals = edge.max_traversals;
+        queue.push({ nodeId: edge.to, via });
         traversedAny = true;
       }
 

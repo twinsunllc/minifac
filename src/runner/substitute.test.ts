@@ -561,3 +561,48 @@ describe("substitute run.split and run.split_integration", () => {
     ).toBe("{{ run.split.parent_branch }} {{ inputs.a.b }} v");
   });
 });
+
+describe("substitute node.* / edge.* (ADR 0050)", () => {
+  const subs = {
+    node: { iteration: 3 },
+    edge: { traversals: 2, max_traversals: 2 },
+  };
+
+  it("renders node.iteration, edge.traversals and edge.max_traversals", () => {
+    expect(
+      substitute("{{ node.iteration }} {{edge.traversals}} {{  edge.max_traversals  }}", subs),
+    ).toBe("3 2 2");
+  });
+
+  it("renders an empty budget when the edge has none, and 0/empty with no edge", () => {
+    expect(
+      substitute("[{{ edge.traversals }}][{{ edge.max_traversals }}]", {
+        edge: { traversals: 1, max_traversals: null },
+      }),
+    ).toBe("[1][]");
+    expect(substitute("[{{ edge.traversals }}][{{ edge.max_traversals }}]", { edge: {} })).toBe(
+      "[0][]",
+    );
+  });
+
+  it("leaves unknown fields and sub-paths verbatim, without throwing", () => {
+    const input = "{{ node.foo }} {{ edge.bar }} {{ node.iteration.x }} {{ edge.traversals.y }}";
+    expect(substitute(input, subs)).toBe(input);
+  });
+
+  it("leaves the tokens verbatim when the caller supplies no node/edge scope", () => {
+    const input = "{{ node.iteration }} {{ edge.traversals }} {{ edge.max_traversals }}";
+    expect(substitute(input, {})).toBe(input);
+    expect(substitute(input, { node: {} })).toBe(input);
+  });
+
+  it("survives load-time substituteInputs and resolves through an inputs value at dispatch", () => {
+    const loaded = substituteInputs("pass {{ inputs.p }} / {{ node.iteration }}", {
+      p: "{{ node.iteration }}",
+    });
+    expect(loaded).toBe("pass {{ node.iteration }} / {{ node.iteration }}");
+    expect(
+      substitute("pass {{ inputs.p }}", { ...subs, inputs: { p: "#{{ node.iteration }}" } }),
+    ).toBe("pass #3");
+  });
+});
