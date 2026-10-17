@@ -4,7 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { findUnbudgetedCycles } from "./cycles.js";
 import { FactoryLoadError, loadFactory } from "./loader.js";
-import { graphEdges, routeEdgeKey, routeEdges } from "./routes.js";
+import { graphEdges, routeEdgeKey, routeEdges, terminalRoutingNodes } from "./routes.js";
 import { NodeSchema } from "./schema.js";
 import { startNodeIds } from "./start-nodes.js";
 
@@ -304,6 +304,46 @@ describe("routes are edges for start nodes and cycle budgets", () => {
     const { factory } = await load(loop(""));
     expect(graphEdges(factory)).toBe(factory.edges);
     expect(routeEdges(factory)).toEqual([]);
+  });
+});
+
+describe("a terminal node that declares routes", () => {
+  // evaluate is terminal and may route back to implement on a judged failure.
+  const terminalRouting = loop(
+    "    terminal: true\n    routes: [{ to: implement, max_traversals: 2 }]",
+  );
+
+  it("loads with one terminal_routes warning naming the node and the file", async () => {
+    const { sourcePath, warnings } = await load(terminalRouting);
+    expect(warnings).toEqual([
+      {
+        code: "terminal_routes",
+        sourcePath,
+        node: "evaluate",
+        message:
+          'Node "evaluate" is terminal and declares `routes:`: its success ends the run, so its routes are taken only on a judged failure.',
+      },
+    ]);
+  });
+
+  it("still loads under strictBudgets, with the warning", async () => {
+    const dir = await tempDir();
+    const file = await writeAt(dir, "f.yaml", terminalRouting);
+    const { warnings } = await loadFactory(file, dir, { strictBudgets: true });
+    expect(warnings?.map((w) => w.code)).toEqual(["terminal_routes"]);
+  });
+
+  it("a non-terminal routing node gets no such warning", async () => {
+    const { factory, warnings } = await load(
+      loop("    routes: [{ to: implement, max_traversals: 2 }]"),
+    );
+    expect(warnings).toEqual([]);
+    expect(terminalRoutingNodes(factory)).toEqual([]);
+  });
+
+  it("a terminal node without routes gets no such warning", async () => {
+    const { factory } = await load(loop(""));
+    expect(terminalRoutingNodes(factory)).toEqual([]);
   });
 });
 

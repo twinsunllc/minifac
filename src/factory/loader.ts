@@ -11,7 +11,12 @@ import { inlineStepIntoNode } from "../step/inline.js";
 import { findEntryCycles, findUnbudgetedCycles, findUncoveredCycles } from "./cycles.js";
 import { resolveExtendsChain } from "./extends.js";
 import { FactoryLoadError } from "./loader-error.js";
-import { ROUTE_WHEN, synthesizeRouteOutputs, validateRoutes } from "./routes.js";
+import {
+  ROUTE_WHEN,
+  synthesizeRouteOutputs,
+  terminalRoutingNodes,
+  validateRoutes,
+} from "./routes.js";
 import type { Factory, FactoryNode } from "./schema.js";
 import { startNodeIds } from "./start-nodes.js";
 import { validateValueEdges } from "./value-edges.js";
@@ -21,18 +26,25 @@ export { FactoryLoadError };
 /**
  * Options for {@link loadFactory}. `env` reaches the library's git children
  * only (see {@link LibraryGitOptions}); `process.env` is never modified.
- * `strictBudgets` turns every {@link FactoryLoadWarning} into a
- * {@link FactoryLoadError} (ADR 0053).
+ * `strictBudgets` turns every `uncovered_cycle` {@link FactoryLoadWarning}
+ * into a {@link FactoryLoadError} (ADR 0053); other warnings stay warnings.
  */
 export type LoadFactoryOptions = LibraryGitOptions & { strictBudgets?: boolean };
 
 /**
- * A problem that does not stop the factory loading by default. The only
- * code today is `uncovered_cycle`: an elementary cycle with no budget inside
- * a component that carries one elsewhere (ADR 0053). It becomes a load
- * error at the next major version, or now under `strictBudgets`.
+ * A problem that does not stop the factory loading by default, told apart
+ * by `code`:
+ *
+ * - `uncovered_cycle`: an elementary cycle with no budget inside a component
+ *   that carries one elsewhere (ADR 0053). It becomes a load error at the
+ *   next major version, or now under `strictBudgets`.
+ * - `terminal_routes`: a `terminal: true` node that declares `routes:`. Its
+ *   success ends the run, so its routes are only ever taken on a judged
+ *   failure (ADR 0055).
  */
-export interface FactoryLoadWarning {
+export type FactoryLoadWarning = UncoveredCycleWarning | TerminalRoutesWarning;
+
+export interface UncoveredCycleWarning {
   code: "uncovered_cycle";
   /** Absolute path of the factory file that was loaded. */
   sourcePath: string;
@@ -42,6 +54,15 @@ export interface FactoryLoadWarning {
    *  (`edgeWhenKey`), e.g. `on_failure`, `output:result.decision="revise"`,
    *  or `route` for a `routes:` entry. */
   edge: { from: string; to: string; when: string };
+  message: string;
+}
+
+export interface TerminalRoutesWarning {
+  code: "terminal_routes";
+  /** Absolute path of the factory file that was loaded. */
+  sourcePath: string;
+  /** The terminal node that declares `routes:`. */
+  node: string;
   message: string;
 }
 
@@ -107,9 +128,10 @@ export async function loadFactory(
   await inlineSteps(resolved.factory, absolute, callerCwd, layout);
   validateCommandNodes(resolved.factory, absolute);
   const warnings = validatePostSchema(resolved.factory, absolute);
-  if (options.strictBudgets === true && warnings.length > 0) {
+  const uncoveredCycles = warnings.filter((w) => w.code === "uncovered_cycle");
+  if (options.strictBudgets === true && uncoveredCycles.length > 0) {
     throw new FactoryLoadError(
-      `${warnings.map((w) => w.message).join(" ")} (Strict budgets refuse uncovered cycles; see docs/decisions/0053-Loop-Budgets-Per-Cycle.md.)`,
+      `${uncoveredCycles.map((w) => w.message).join(" ")} (Strict budgets refuse uncovered cycles; see docs/decisions/0053-Loop-Budgets-Per-Cycle.md.)`,
       absolute,
     );
   }
@@ -349,7 +371,7 @@ function validatePostSchema(factory: Factory, sourcePath: string): FactoryLoadWa
     }
   }
 
-  return findUnbudgetedCycles(factory).map((c) => ({
+  const cycleWarnings: FactoryLoadWarning[] = findUnbudgetedCycles(factory).map((c) => ({
     code: "uncovered_cycle",
     sourcePath,
     nodes: c.nodes,
@@ -359,4 +381,11 @@ function validatePostSchema(factory: Factory, sourcePath: string): FactoryLoadWa
         ? `Cycle ${[...c.nodes, c.nodes[0]].join(" → ")} is not covered by a budget: add \`max_traversals\` to node "${c.edge.from}"'s route to "${c.edge.to}" (\`{ to: ${c.edge.to}, max_traversals: <n> }\`), or \`max_iterations\` to a node in the cycle.`
         : `Cycle ${[...c.nodes, c.nodes[0]].join(" → ")} is not covered by a budget: add \`max_traversals\` to the ${c.edge.when} edge ${c.edge.from} → ${c.edge.to}, or \`max_iterations\` to a node in the cycle.`,
   }));
+  const terminalRouteWarnings: FactoryLoadWarning[] = terminalRoutingNodes(factory).map((node) => ({
+    code: "terminal_routes",
+    sourcePath,
+    node,
+    message: `Node "${node}" is terminal and declares \`routes:\`: its success ends the run, so its routes are taken only on a judged failure.`,
+  }));
+  return [...cycleWarnings, ...terminalRouteWarnings];
 }

@@ -2,6 +2,8 @@ export {
   loadFactory,
   formatFactoryLoadWarning,
   type FactoryLoadWarning,
+  type TerminalRoutesWarning,
+  type UncoveredCycleWarning,
   type LoadedFactory,
   type LoadFactoryOptions,
 } from "./factory/loader.js";

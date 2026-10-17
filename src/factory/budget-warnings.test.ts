@@ -133,7 +133,7 @@ edges:
 `;
     const file = await writeFactory("two.yaml", body("", ""));
     const loaded = await loadFactory(file);
-    expect(loaded.warnings?.map((w) => w.edge)).toEqual([
+    expect(loaded.warnings?.map((w) => (w.code === "uncovered_cycle" ? w.edge : null))).toEqual([
       { from: "b", to: "a", when: "on_failure" },
       { from: "d", to: "c", when: "on_failure" },
     ]);
