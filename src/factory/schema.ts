@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { checkOutputSchema } from "./output-schema.js";
 
 const PositiveInt = z.number().int().positive();
 
@@ -11,6 +12,9 @@ export const OutputValueSchema = z
     description: z.string().optional(),
     // Reserved for future structural typing; accept and pass through any value.
     shape: z.unknown().optional(),
+    // A JSON Schema (draft 2020-12) the value is validated against at node
+    // completion (ADR 0054). Checked here, so an invalid one is a load error.
+    schema: z.unknown().optional(),
   })
   .strict();
 
@@ -37,11 +41,21 @@ export const OutputDirectorySchema = z
   })
   .strict();
 
-export const OutputDefSchema = z.discriminatedUnion("type", [
-  OutputValueSchema,
-  OutputFileSchema,
-  OutputDirectorySchema,
-]);
+export const OutputDefSchema = z
+  .discriminatedUnion("type", [OutputValueSchema, OutputFileSchema, OutputDirectorySchema])
+  .superRefine((def, ctx) => {
+    // The refinement sits on the union because `discriminatedUnion` only
+    // accepts plain object members.
+    if (def.type !== "value" || def.schema === undefined) return;
+    const problem = checkOutputSchema(def.schema);
+    if (problem !== null) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["schema"],
+        message: `invalid JSON Schema: ${problem}`,
+      });
+    }
+  });
 
 export const OutputsMapSchema = z.record(OutputDefSchema).superRefine((map, ctx) => {
   for (const key of Object.keys(map)) {

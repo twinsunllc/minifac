@@ -13,6 +13,20 @@ conflict; a duplicate or oddly-ordered bullet is tidied when a release is cut.
 
 ### Added
 
+- **Step-declared outputs, and JSON Schema on `value` outputs**
+  (SCARIFW-2250, twinsunllc/minifac#43,
+  [ADR 0054](docs/decisions/0054-Step-Output-Schema.md)). A step file may
+  declare a top-level `outputs:` map; a `uses:` node without its own
+  `outputs:` inherits it, and a node's own map replaces it wholesale. A
+  `type: value` output may declare `schema:`, a JSON Schema (draft
+  2020-12) validated with Ajv 8 (`ajv` is now a direct dependency). An
+  invalid schema is a load error naming the step, factory or layer file.
+  At node completion a value that violates its schema is not indexed,
+  and a succeeded node ends `failed` with outcome `failure` (routing
+  `on_failure`) and reason `output_schema_mismatch: output "<key>" at
+  <pointer>: <keyword> (<message>)`; a missing required output still
+  wins as `missing_required_output`. Steps and nodes without `schema:`
+  are unchanged.
 - **`when: on_error` edges, and a node error distinct from a judged
   failure** (SCARIFW-2247, [ADR 0052](docs/decisions/0052-On-Error-Edges.md)).
   A node *errors* when its executor could not produce a judgment (a

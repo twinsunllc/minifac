@@ -52,6 +52,23 @@ describe("OutputDefSchema — discriminated types", () => {
     expect((out as { shape?: unknown }).shape).toEqual({ items: "array" });
   });
 
+  it("accepts type: value with a JSON Schema `schema:` (ADR 0054)", () => {
+    const schema = { type: "object", required: ["verdict"] };
+    const out = OutputDefSchema.parse({ type: "value", schema });
+    expect((out as { schema?: unknown }).schema).toEqual(schema);
+  });
+
+  it("rejects an invalid `schema:` at path `schema`", () => {
+    const res = OutputDefSchema.safeParse({ type: "value", schema: { type: "strng" } });
+    expect(res.success).toBe(false);
+    expect(res.error?.issues[0]?.path).toEqual(["schema"]);
+    expect(res.error?.issues[0]?.message).toMatch(/^invalid JSON Schema: /);
+  });
+
+  it("rejects `schema:` on a file output", () => {
+    expect(() => OutputDefSchema.parse({ type: "file", schema: {} })).toThrowError();
+  });
+
   it("defaults `required` to false on value outputs", () => {
     const out = OutputDefSchema.parse({ type: "value" });
     expect((out as { required: boolean }).required).toBe(false);

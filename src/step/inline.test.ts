@@ -415,4 +415,74 @@ with:
       expect(out.with?.secrets).toEqual(["A_TOKEN"]);
     });
   });
+
+  describe("step `outputs:` inheritance (ADR 0054)", () => {
+    const STEP = `name: judge
+version: "1"
+executor: claude
+with: { prompt: hi }
+outputs:
+  result:
+    type: value
+    required: true
+    schema:
+      type: object
+      required: [verdict]
+      properties:
+        verdict: { enum: [pass, fail] }
+`;
+
+    it("a node without `outputs:` inherits the step's whole map, schema included", async () => {
+      const repo = await makeRepo();
+      await writeStep(repo, "judge", STEP);
+      const out = await inlineStepIntoNode({
+        factoryPath: FACTORY,
+        nodeId: "n1",
+        node: { uses: "minifac:judge" } as never,
+        callerCwd: repo,
+      });
+      expect(out.outputs).toEqual({
+        result: {
+          type: "value",
+          required: true,
+          schema: {
+            type: "object",
+            required: ["verdict"],
+            properties: { verdict: { enum: ["pass", "fail"] } },
+          },
+        },
+      });
+    });
+
+    it("a node's own `outputs:` wins wholesale; none of the step's leak in", async () => {
+      const repo = await makeRepo();
+      await writeStep(repo, "judge", STEP);
+      const out = await inlineStepIntoNode({
+        factoryPath: FACTORY,
+        nodeId: "n1",
+        node: {
+          uses: "minifac:judge",
+          outputs: { report: { type: "file", required: false } },
+        } as never,
+        callerCwd: repo,
+      });
+      expect(out.outputs).toEqual({ report: { type: "file", required: false } });
+    });
+
+    it("neither node nor step declaring outputs leaves `outputs` absent", async () => {
+      const repo = await makeRepo();
+      await writeStep(
+        repo,
+        "plain",
+        `name: plain\nversion: "1"\nexecutor: claude\nwith: { prompt: hi }\n`,
+      );
+      const out = await inlineStepIntoNode({
+        factoryPath: FACTORY,
+        nodeId: "n1",
+        node: { uses: "minifac:plain" } as never,
+        callerCwd: repo,
+      });
+      expect("outputs" in out).toBe(false);
+    });
+  });
 });

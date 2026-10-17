@@ -87,3 +87,68 @@ describe("validateDeclaredOutputs — transport-aware detail strings", () => {
     }
   });
 });
+
+describe("validateDeclaredOutputs — value `schema:` (ADR 0054)", () => {
+  let dir: string;
+  beforeEach(async () => {
+    dir = await mkdtemp(path.join(tmpdir(), "minfc-schema-"));
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  const schema = {
+    type: "object",
+    required: ["verdict"],
+    properties: { verdict: { enum: ["pass", "fail"] } },
+  };
+  const node = (required: boolean, withSchema = true): FactoryNode => ({
+    terminal: false,
+    outputs: {
+      result: withSchema ? { type: "value", required, schema } : { type: "value", required },
+    },
+  });
+
+  it("indexes a value that matches its schema", async () => {
+    await writeFile(path.join(dir, "result.json"), JSON.stringify({ verdict: "pass" }));
+    const res = await validateDeclaredOutputs(node(true), dir);
+    expect(res.index.result).toBeTruthy();
+    expect(res.missing).toEqual([]);
+    expect(res.mismatched).toEqual([]);
+    expect(res.violations).toEqual({});
+  });
+
+  it("a mismatching value is mismatched with pointer and keyword, not indexed, not missing", async () => {
+    await writeFile(path.join(dir, "result.json"), JSON.stringify({ verdict: "maybe" }));
+    const res = await validateDeclaredOutputs(node(true), dir);
+    expect(res.index.result).toBeUndefined();
+    expect(res.missing).toEqual([]);
+    expect(res.mismatched).toEqual(["result"]);
+    expect(res.violations.result).toEqual([
+      expect.objectContaining({ pointer: "/verdict", keyword: "enum" }),
+    ]);
+  });
+
+  it("an optional output is checked against its schema too", async () => {
+    await writeFile(path.join(dir, "result.json"), JSON.stringify({}));
+    const res = await validateDeclaredOutputs(node(false), dir);
+    expect(res.mismatched).toEqual(["result"]);
+    expect(res.violations.result).toEqual([
+      expect.objectContaining({ pointer: "/", keyword: "required" }),
+    ]);
+  });
+
+  it("an absent value with a schema is missing, not mismatched", async () => {
+    const res = await validateDeclaredOutputs(node(true), dir);
+    expect(res.missing).toEqual(["result"]);
+    expect(res.mismatched).toEqual([]);
+  });
+
+  it("without a schema any JSON value is indexed exactly as before", async () => {
+    await writeFile(path.join(dir, "result.json"), JSON.stringify({ verdict: "maybe" }));
+    const res = await validateDeclaredOutputs(node(true, false), dir);
+    expect(res.index.result).toBeTruthy();
+    expect(res.missing).toEqual([]);
+    expect(res.mismatched).toEqual([]);
+  });
+});

@@ -522,4 +522,65 @@ nodes:
     expect(loaded.factory.nodes.propose?.outputs).toBeUndefined();
     expect(loaded.factory.nodes.propose?.with?.prompt).toBe("overridden-propose");
   });
+
+  describe("step `outputs:` under extends (ADR 0054)", () => {
+    const JUDGE_STEP = `name: judge
+version: "1"
+executor: claude
+with: { prompt: hi }
+outputs:
+  result:
+    type: value
+    required: true
+    schema: { type: object, required: [verdict] }
+`;
+    const BASE = `name: base
+nodes:
+  judge:
+    uses: minifac:judge
+    outputs:
+      base_only: { type: value }
+  other:
+    uses: minifac:judge
+    terminal: true
+    outputs:
+      base_only: { type: value }
+edges:
+  - from: judge
+    to: other
+`;
+
+    it("a derived layer that redeclares a uses: node without outputs: gets the step's, not the base node's", async () => {
+      const repo = await makeRepo();
+      await writeAt(repo, "examples/steps/judge.yaml", JUDGE_STEP);
+      await writeAt(repo, "examples/base.yaml", BASE);
+      const derived = await writeAt(
+        repo,
+        ".minifac/factories/derived.yaml",
+        "extends: minifac:base\nnodes:\n  judge:\n    uses: minifac:judge\n",
+      );
+      const loaded = await loadFactory(derived, repo);
+      expect(Object.keys(loaded.factory.nodes.judge?.outputs ?? {})).toEqual(["result"]);
+      expect(loaded.factory.nodes.judge?.outputs?.result).toMatchObject({
+        schema: { required: ["verdict"] },
+      });
+      // A node the derived layer leaves alone keeps the base's outputs.
+      expect(Object.keys(loaded.factory.nodes.other?.outputs ?? {})).toEqual(["base_only"]);
+    });
+
+    it("an invalid schema in a derived layer's node is a FactoryLoadError naming that layer", async () => {
+      const repo = await makeRepo();
+      await writeAt(repo, "examples/steps/judge.yaml", JUDGE_STEP);
+      await writeAt(repo, "examples/base.yaml", BASE);
+      const derived = await writeAt(
+        repo,
+        ".minifac/factories/derived.yaml",
+        "extends: minifac:base\nnodes:\n  judge:\n    uses: minifac:judge\n    outputs:\n      result: { type: value, schema: { type: strng } }\n",
+      );
+      const err = await loadFactory(derived, repo).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(FactoryLoadError);
+      expect((err as FactoryLoadError).sourcePath).toBe(derived);
+      expect((err as Error).message).toMatch(/invalid JSON Schema/);
+    });
+  });
 });
