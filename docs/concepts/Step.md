@@ -26,6 +26,9 @@ A step is a YAML file with:
 - `executor` — which executor runs this step (`claude` today)
 - `with` — the executor-specific config, templated against
   `{{ inputs.* }}`
+- `outputs` — optional; the step's declared [[Outputs]], in the same
+  shape a node declares them, including a JSON Schema on a `value`
+  output (see "Declared outputs" below)
 
 ## Where steps live
 
@@ -90,6 +93,42 @@ Node-level fields (`terminal`, `max_iterations`, `cwd`) stay on the
 node — they describe the node's position in the graph, not the
 step's behavior.
 
+## Declared outputs
+
+A step MAY declare `outputs:`, so every node using it gets the same
+contract without re-declaring it:
+
+```yaml
+name: judge
+version: "1.0.0"
+executor: claude
+with:
+  prompt: "Review the change and report a verdict."
+outputs:
+  result:
+    type: value
+    required: true
+    schema:
+      type: object
+      required: [verdict, summary]
+      properties:
+        verdict: { enum: [pass, fail] }
+        summary: { type: string }
+```
+
+- A `uses:` node with no `outputs:` of its own carries the step's whole
+  map, schemas included.
+- A node that declares `outputs:` keeps exactly its own map. The two
+  are never merged.
+- Under `extends:`, a derived layer that redeclares a node replaces it
+  whole, so a redeclared `uses:` node without `outputs:` gets its
+  step's outputs, not the base node's. A node the derived layer leaves
+  alone keeps the base's.
+
+An invalid schema is a load error naming the step file. A result that
+violates the schema fails the node (see [[Outputs#JSON Schema on value
+outputs]]). [[0054-Step-Output-Schema]] records the rules.
+
 ## Templating scopes inside a step
 
 - `{{ inputs.* }}` — the factory node's declared inputs to this
@@ -138,6 +177,7 @@ A step file is a single YAML document validated by `StepSchema`.
 | `description` | string | no | — | Human-readable prose describing what the step does. |
 | `inputs` | map of input-name → [[#Input definition fields\|input def]] | no | — | Typed input schema. Input names must match `[a-zA-Z_][a-zA-Z0-9_]*`. If absent the step takes no inputs. |
 | `executor` | string (min 1) | yes | — | Which [[Executor]] runs this step. The only implemented value is `"claude"`. |
+| `outputs` | map of output-key → [[Outputs\|output def]] | no | — | The step's declared outputs, the same schema as a node's `outputs:`. A `uses:` node without its own `outputs:` inherits this map. |
 | `with` | map (string → unknown) | yes | — | Executor-specific configuration. Accepts `{{ inputs.* }}` template tokens that are resolved at dispatch time. See [[Factory#`with:` fields (claude executor)]] for the full field list when `executor: claude`, and [[Executor#`command` executor]] when `executor: command` (validated when the step loads). |
 
 ### Input definition fields
@@ -177,5 +217,6 @@ Source: `src/step/schema.ts`, `src/step/resolve.ts`
 - [[Brief]] — flows through to step inputs
 - [[Run]] — provides `{{ run.* }}` templating
 - [[0018-Reusable-Steps]] — binding decision
+- [[0054-Step-Output-Schema]] — step-declared outputs and JSON Schema
 - [[0008-File-Per-Factory-Composition]] — whole-factory composition
   (sibling pattern)

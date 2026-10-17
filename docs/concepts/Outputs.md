@@ -36,7 +36,12 @@ This concept note covers the v1 (filesystem-JSON) shape.
 Every output type accepts `required: boolean` (default `false`) and
 `description: string` (optional). The `value` type also accepts a
 `shape:` field reserved for future structural typing — schema-accepted
-but ignored by the v1 validator.
+but ignored by the v1 validator — and a `schema:` field holding a JSON
+Schema the value is validated against (below).
+
+A [[Step]] may declare `outputs:` too; a `uses:` node without its own
+`outputs:` inherits the step's map, and a node's own map replaces it
+wholesale ([[0054-Step-Output-Schema]]).
 
 Output keys match the same identifier grammar as step input keys
 (`^[a-zA-Z_][a-zA-Z0-9_]*$`).
@@ -122,6 +127,41 @@ what is *indexed*:
 
 Either way `NodeResult.outputs` is the present-and-satisfied index, or
 `null` when nothing was declared or nothing landed.
+
+## JSON Schema on value outputs
+
+A `type: value` output may declare `schema:`, a JSON Schema (draft
+2020-12), validated with Ajv 8:
+
+```yaml
+outputs:
+  result:
+    type: value
+    required: true
+    schema:
+      type: object
+      required: [verdict]
+      properties:
+        verdict: { enum: [pass, fail] }
+```
+
+- **At load.** The schema is compiled. An invalid one, including an
+  unknown keyword such as a misspelt `requried`, is a load error naming
+  the step, factory or layer file. `format` is an annotation and is not
+  checked.
+- **At node completion.** A present value is validated after it parses.
+  A value that does not match is not indexed. On a succeeded node, it
+  turns the node `failed` with outcome `failure`, so it routes
+  `on_failure`, never `on_error`. The reason names the first violation:
+  `output_schema_mismatch: output "result" at /verdict: enum (must be
+  equal to one of the allowed values)`. stderr carries one line per
+  violation, and the status event's `meta` carries `mismatched_outputs`
+  and `schema_errors`.
+- A missing required output still wins: the node is an `error` with
+  reason `missing_required_output`.
+- On a node that already failed, a mismatch is an `outputs_warning:` on
+  stderr; the node keeps its own reason.
+- A mismatch does not nudge.
 
 ## Operator surfaces
 
@@ -261,4 +301,5 @@ Cross-references: [[Factory]] (the `outputs:` schema slot), [[Run]]
 the index lifecycle), [[Worktree]] (where outputs do **not** live —
 they're separate, run-scoped, persistent across worktree pruning),
 [[0027-Node-Outputs]] (the validation contract), and
-[[0028-Node-Outputs-Nudge]] (the nudge-loop softening).
+[[0028-Node-Outputs-Nudge]] (the nudge-loop softening), and
+[[0054-Step-Output-Schema]] (step-declared outputs and `schema:`).
