@@ -410,6 +410,7 @@ async function handlePostRun(
     factoryId: r.factoryId,
     status: r.status,
     startedAt: r.startedAt,
+    warnings: entry.loaded.warnings ?? [],
   });
 }
 

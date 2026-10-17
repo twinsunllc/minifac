@@ -87,6 +87,43 @@ describe("RunRegistry", () => {
     }
   });
 
+  it("opens the run's events with each factory load warning, replayed from index 0", async () => {
+    const reg = new RunRegistry(buildScripted({}));
+    const loaded: LoadedFactory = {
+      ...makeLoaded(),
+      warnings: [
+        {
+          code: "uncovered_cycle",
+          sourcePath: "/tmp/fake.yaml",
+          nodes: ["a", "b"],
+          edge: { from: "b", to: "a", when: "on_failure" },
+          message: "uncapped loop a → b → a",
+        },
+      ],
+    };
+    const out = reg.start({ factoryId: "x" }, loaded);
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    await waitForRunEnd(out.run.events);
+    const replayed: RunEventEntry[] = [];
+    reg.subscribe(out.run.id, undefined, (e) => replayed.push(e));
+    expect(replayed[0]).toMatchObject({
+      index: 0,
+      kind: "stderr",
+      nodeId: "__runner__",
+      event: { kind: "stderr", line: "warning: /tmp/fake.yaml: uncapped loop a → b → a" },
+    });
+    expect(replayed.at(-1)?.kind).toBe("run_end");
+  });
+
+  it("adds no warning event for a factory without load warnings", async () => {
+    const reg = new RunRegistry(buildScripted({}));
+    const out = reg.start({ factoryId: "x" }, { ...makeLoaded(), warnings: [] });
+    if (!out.ok) throw new Error("start refused");
+    await waitForRunEnd(out.run.events);
+    expect(out.run.events.some((e) => e.nodeId === "__runner__")).toBe(false);
+  });
+
   it("refuses a second run for the same factory while one is running", async () => {
     const reg = new RunRegistry(buildSlowSuccess(50));
     const first = reg.start({ factoryId: "x" }, makeLoaded());
