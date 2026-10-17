@@ -240,6 +240,15 @@ describe("autorun integration", () => {
     expect(existsSync(path.join(repo, "inputs", "bar.md"))).toBe(false);
     expect(existsSync(path.join(repo, "inputs", "done", "foo.md"))).toBe(true);
     expect(existsSync(path.join(repo, "inputs", "done", "bar.md"))).toBe(true);
+    // Each move is its own commit. The two runs end together and call
+    // mark-done in this one working tree; unserialised, one commit carried
+    // both moves and the other's `git commit` failed (or its `git mv` lost
+    // the index lock and the brief stayed in inputs/).
+    const subjects = spawnSync("git", ["log", "--pretty=%s"], { cwd: repo, encoding: "utf8" })
+      .stdout.split("\n")
+      .filter((l) => l.startsWith("Mark "))
+      .sort();
+    expect(subjects).toEqual(["Mark bar done", "Mark foo done"]);
 
     // runs.db has two rows.
     const store = SqliteRunStore.open(storePath);
