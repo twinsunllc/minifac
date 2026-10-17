@@ -1,10 +1,11 @@
+import { graphEdges } from "./routes.js";
 import type { Factory } from "./schema.js";
 
 /**
  * The nodes the runner dispatches when a run begins.
  *
  * A node is a start node when it has **no inbound edge from another node**
- * — of any kind. `on_failure` edges count: a node reachable only through a
+ * — of any kind, routes included (ADR 0055). `on_failure` edges count: a node reachable only through a
  * recovery edge is an escalation / wait / re-poll target, and dispatching
  * it at run start would run it before the failure it exists to handle
  * (issue #36; scarif-factory FINDINGS F6). A self-loop is not an inbound
@@ -21,7 +22,7 @@ import type { Factory } from "./schema.js";
  */
 export function startNodeIds(factory: Factory): string[] {
   const inbound = new Set<string>();
-  for (const edge of factory.edges) {
+  for (const edge of graphEdges(factory)) {
     if (edge.from !== edge.to) inbound.add(edge.to);
   }
   return Object.keys(factory.nodes).filter(

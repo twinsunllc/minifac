@@ -13,6 +13,16 @@ export {
   isValueCondition,
   type ValueCondition,
 } from "./factory/value-edges.js";
+export {
+  RouteEntrySchema,
+  graphEdges,
+  normalizeRoutes,
+  routeEdgeKey,
+  routeEdges,
+  type GraphEdge,
+  type Route,
+  type RouteEntry,
+} from "./factory/routes.js";
 export { ExecutorRegistry } from "./executor/registry.js";
 export { ClaudeExecutor } from "./executor/claude.js";
 export { CheckMergeExecutor } from "./executor/check-merge.js";

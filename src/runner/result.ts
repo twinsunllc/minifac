@@ -63,7 +63,7 @@ export interface ParkedRun {
   pending: Array<{ nodeId: string; iteration: number; via?: string }>;
   /** Edge traversal counts at the boundary, keyed `<from>-><to>:<when>`,
    * where a value edge's `<when>` is `output:<path>=<JSON>` or
-   * `output:<path> in <JSON array>` (ADR 0055). Hand them back as `ResumeState.edgeTraversals` so the resumed run's
+   * `output:<path> in <JSON array>` and a route's is `route` (ADR 0055). Hand them back as `ResumeState.edgeTraversals` so the resumed run's
    * `max_traversals` budgets start where this run's stopped. */
   edgeTraversals: Record<string, number>;
   /** True when the parked dispatch was the seed of an answer (or quota or

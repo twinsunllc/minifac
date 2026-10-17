@@ -11,6 +11,7 @@ import { inlineStepIntoNode } from "../step/inline.js";
 import { findEntryCycles, findUnbudgetedCycles, findUncoveredCycles } from "./cycles.js";
 import { resolveExtendsChain } from "./extends.js";
 import { FactoryLoadError } from "./loader-error.js";
+import { ROUTE_WHEN, synthesizeRouteOutputs, validateRoutes } from "./routes.js";
 import type { Factory, FactoryNode } from "./schema.js";
 import { startNodeIds } from "./start-nodes.js";
 import { validateValueEdges } from "./value-edges.js";
@@ -38,7 +39,8 @@ export interface FactoryLoadWarning {
   /** The uncovered cycle's nodes, in cycle order. */
   nodes: string[];
   /** The edge to cap with `max_traversals`; `when` is its key form
-   *  (`edgeWhenKey`), e.g. `on_failure` or `output:result.decision="revise"`. */
+   *  (`edgeWhenKey`), e.g. `on_failure`, `output:result.decision="revise"`,
+   *  or `route` for a `routes:` entry. */
   edge: { from: string; to: string; when: string };
   message: string;
 }
@@ -306,6 +308,11 @@ function validatePostSchema(factory: Factory, sourcePath: string): FactoryLoadWa
       throw new FactoryLoadError(`Edge references undeclared node "to: ${edge.to}"`, sourcePath);
     }
   }
+  // Routes are edges (ADR 0055): their endpoints are checked here, before
+  // start-node inference reads them, and the routing node gets its
+  // synthesized `next` output before value edges are checked against outputs.
+  validateRoutes(factory, sourcePath);
+  synthesizeRouteOutputs(factory, sourcePath);
 
   // Start nodes are nodes with no inbound edge from another node (any
   // `when`), plus any node declaring `start: true`. See `start-nodes.ts`
@@ -336,7 +343,7 @@ function validatePostSchema(factory: Factory, sourcePath: string): FactoryLoadWa
     const cycle = uncovered[0];
     if (cycle) {
       throw new FactoryLoadError(
-        `Cycle is not covered by any budget (nodes: ${cycle.nodes.join(", ")}). Add \`max_traversals\` to an edge in the cycle, or \`max_iterations\` to a node in it.`,
+        `Cycle is not covered by any budget (nodes: ${cycle.nodes.join(", ")}). Add \`max_traversals\` to an edge or route in the cycle, or \`max_iterations\` to a node in it.`,
         sourcePath,
       );
     }
@@ -347,6 +354,9 @@ function validatePostSchema(factory: Factory, sourcePath: string): FactoryLoadWa
     sourcePath,
     nodes: c.nodes,
     edge: c.edge,
-    message: `Cycle ${[...c.nodes, c.nodes[0]].join(" → ")} is not covered by a budget: add \`max_traversals\` to the ${c.edge.when} edge ${c.edge.from} → ${c.edge.to}, or \`max_iterations\` to a node in the cycle.`,
+    message:
+      c.edge.when === ROUTE_WHEN
+        ? `Cycle ${[...c.nodes, c.nodes[0]].join(" → ")} is not covered by a budget: add \`max_traversals\` to node "${c.edge.from}"'s route to "${c.edge.to}" (\`{ to: ${c.edge.to}, max_traversals: <n> }\`), or \`max_iterations\` to a node in the cycle.`
+        : `Cycle ${[...c.nodes, c.nodes[0]].join(" → ")} is not covered by a budget: add \`max_traversals\` to the ${c.edge.when} edge ${c.edge.from} → ${c.edge.to}, or \`max_iterations\` to a node in the cycle.`,
   }));
 }

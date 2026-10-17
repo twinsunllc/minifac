@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { checkOutputSchema } from "./output-schema.js";
+import { RoutesSchema } from "./routes.js";
 import { ValueConditionSchema } from "./value-edges.js";
 
 const PositiveInt = z.number().int().positive();
@@ -100,6 +101,11 @@ export const NodeSchema = z
     // See `startNodeIds` in `start-nodes.ts` and
     // `docs/decisions/0040-Declared-Start-Nodes.md`.
     start: z.boolean().optional(),
+    // The nodes this node's result may name as the next to run, each a node
+    // id or `{ to, max_traversals }` (ADR 0055). Workflow-only: a step file
+    // cannot declare it. The loader synthesizes the node's `next` output and
+    // treats every entry as an edge; see `routes.ts`.
+    routes: RoutesSchema.optional(),
   })
   .strict();
 
