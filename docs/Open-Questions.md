@@ -151,8 +151,8 @@ outputs so the retried `apply` knows what to fix.
 **Question:** Should a step, rather than the workflow, declare what a
 node may route to (a `checks_gate` step that knows it can send work to
 `implement` or `review`)?
-**Trigger:** SCARIFW-2252 ships `routes:`/`next:` and two or more
-workflows using the same judging step restate the same `routes:` list.
+**Trigger:** Two or more workflows using the same judging step restate
+the same `routes:` list (`routes:`/`next:` shipped in SCARIFW-2252).
 **Status:** Deferred by [[0055-Value-Edges-And-Node-Routing]]: `routes:`
 is declared in the workflow only, because node ids are workflow-scoped
 and a step cannot name `implement` without assuming the workflow that

@@ -167,6 +167,13 @@ outputs:
   path or value the schema rules out, and at run time only an indexed
   (schema-valid) value can match. See [[Factory#Routing on a value]] and
   [[0055-Value-Edges-And-Node-Routing]].
+- **The synthesized `next` output.** A node that declares `routes:` gets an
+  output `next` from the loader: `type: value`, not required, with schema
+  `{ enum: [<route ids>..., null] }`. It is written like any value output,
+  as `next.json` or through `mcp__minifac__report_next`. A value outside
+  the list is an `output_schema_mismatch` like any other, so the node fails
+  and `next` is not indexed. A routing node may not declare `next` itself.
+  See [[Factory#Node-chosen routing]].
 
 ## Operator surfaces
 

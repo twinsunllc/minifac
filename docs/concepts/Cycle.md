@@ -34,7 +34,11 @@ cycle closed only by `on_error` edges needs a budget too
 ([[0052-On-Error-Edges]]), and so does one closed by value edges such as
 `when: { output: result.decision, equals: revise }`
 ([[0055-Value-Edges-And-Node-Routing]]). A value edge's traversals are
-counted under `<from>-><to>:output:<path>=<JSON>`.
+counted under `<from>-><to>:output:<path>=<JSON>`. A node's `routes:`
+entries are edges for this rule as well: a cycle closed by a route needs
+`max_traversals` on the route entry (`{ to: implement, max_traversals: 2 }`)
+or `max_iterations` on a node in the cycle. A route's traversals are
+counted under `<from>-><to>:route`, and park/resume carries the count.
 
 This is enforced at load time, not runtime — so a buggy factory can't
 sneak through.

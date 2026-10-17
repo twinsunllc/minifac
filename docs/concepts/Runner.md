@@ -24,7 +24,14 @@ and produces a structured [[Run]] result.
    success or a judged failure, value edges that match the node's indexed
    outputs are selected in place of the outcome's edges, and the outcome's
    edges are selected when none matches. An error ignores value edges
-   ([[0055-Value-Edges-And-Node-Routing]])
+   ([[0055-Value-Edges-And-Node-Routing]]). A routing node's `next`
+   comes first: when it names one of the node's `routes:`, that route is
+   selected alone, ahead of value and outcome edges; `null` or no `next`
+   falls through. An error ignores `next` too. A chosen route that is
+   budget-exhausted does not fall back. Each route traversed is recorded
+   as a `runner-action` event, `route: node "<from>" chose "<to>"
+   (chosen_by: <from>)`, whose payload carries `chosen_by` and `to`, so
+   runs.db and the event stream show the path the run took
 6. Repeat until: terminal node succeeds (run succeeds), node fails
    with no traversable recovery edge (run fails), or all budgets
    exhausted (run fails — budget-exhausted reason)
