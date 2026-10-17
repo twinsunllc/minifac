@@ -162,6 +162,11 @@ outputs:
 - On a node that already failed, a mismatch is an `outputs_warning:` on
   stderr; the node keeps its own reason.
 - A mismatch does not nudge.
+- **Routing.** An edge can route on the value with
+  `when: { output: result.verdict, equals: fail }`. The loader refuses a
+  path or value the schema rules out, and at run time only an indexed
+  (schema-valid) value can match. See [[Factory#Routing on a value]] and
+  [[0055-Value-Edges-And-Node-Routing]].
 
 ## Operator surfaces
 

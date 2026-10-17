@@ -19,8 +19,12 @@ and produces a structured [[Run]] result.
 3. Dispatch to the node's [[Executor]], consume its event stream
 4. Append every event to the run-wide history (tagged with `nodeId`,
    `iteration`, `emittedAt`)
-5. On node completion: evaluate outbound edges by `when` matching the
-   node's final status, enforce `max_traversals`, enqueue successors
+5. On node completion: select outbound edges by `when` matching the
+   node's outcome, enforce `max_traversals`, enqueue successors. On a
+   success or a judged failure, value edges that match the node's indexed
+   outputs are selected in place of the outcome's edges, and the outcome's
+   edges are selected when none matches. An error ignores value edges
+   ([[0055-Value-Edges-And-Node-Routing]])
 6. Repeat until: terminal node succeeds (run succeeds), node fails
    with no traversable recovery edge (run fails), or all budgets
    exhausted (run fails — budget-exhausted reason)

@@ -147,6 +147,19 @@ conflict context between iterations.
 is a bad precedent). The conflict context flows through node
 outputs so the retried `apply` knows what to fix.
 
+### Step-declared routes
+**Question:** Should a step, rather than the workflow, declare what a
+node may route to (a `checks_gate` step that knows it can send work to
+`implement` or `review`)?
+**Trigger:** SCARIFW-2252 ships `routes:`/`next:` and two or more
+workflows using the same judging step restate the same `routes:` list.
+**Status:** Deferred by [[0055-Value-Edges-And-Node-Routing]]: `routes:`
+is declared in the workflow only, because node ids are workflow-scoped
+and a step cannot name `implement` without assuming the workflow that
+uses it.
+**Likely shape:** The step declares route *names* (roles such as
+`rework`, `recheck`), and the workflow binds each name to a node id.
+
 ### Resumed sessions: append vs fork
 
 **Question:** Should a node's `resume:` continue the target's session

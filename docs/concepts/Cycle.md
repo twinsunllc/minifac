@@ -31,7 +31,10 @@ Every cycle MUST be covered by at least one budget — either
 in the cycle. The loader rejects unbounded cycles. See
 [[0002-Cycles-First-Class]]. The edge's `when` makes no difference: a
 cycle closed only by `on_error` edges needs a budget too
-([[0052-On-Error-Edges]]).
+([[0052-On-Error-Edges]]), and so does one closed by value edges such as
+`when: { output: result.decision, equals: revise }`
+([[0055-Value-Edges-And-Node-Routing]]). A value edge's traversals are
+counted under `<from>-><to>:output:<path>=<JSON>`.
 
 This is enforced at load time, not runtime — so a buggy factory can't
 sneak through.
