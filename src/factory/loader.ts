@@ -8,7 +8,7 @@ import {
   loadProjectLayout,
 } from "../library/library.js";
 import { inlineStepIntoNode } from "../step/inline.js";
-import { findEntryCycles, findUncoveredCycles } from "./cycles.js";
+import { findEntryCycles, findUnbudgetedCycles, findUncoveredCycles } from "./cycles.js";
 import { resolveExtendsChain } from "./extends.js";
 import { FactoryLoadError } from "./loader-error.js";
 import type { Factory, FactoryNode } from "./schema.js";
@@ -19,8 +19,32 @@ export { FactoryLoadError };
 /**
  * Options for {@link loadFactory}. `env` reaches the library's git children
  * only (see {@link LibraryGitOptions}); `process.env` is never modified.
+ * `strictBudgets` turns every {@link FactoryLoadWarning} into a
+ * {@link FactoryLoadError} (ADR 0053).
  */
-export type LoadFactoryOptions = LibraryGitOptions;
+export type LoadFactoryOptions = LibraryGitOptions & { strictBudgets?: boolean };
+
+/**
+ * A problem that does not stop the factory loading by default. The only
+ * code today is `uncovered_cycle`: an elementary cycle with no budget inside
+ * a component that carries one elsewhere (ADR 0053). It becomes a load
+ * error at the next major version, or now under `strictBudgets`.
+ */
+export interface FactoryLoadWarning {
+  code: "uncovered_cycle";
+  /** Absolute path of the factory file that was loaded. */
+  sourcePath: string;
+  /** The uncovered cycle's nodes, in cycle order. */
+  nodes: string[];
+  /** The edge to cap with `max_traversals`. */
+  edge: { from: string; to: string; when: string };
+  message: string;
+}
+
+/** The one-line form the CLI writes to stderr for a load warning. */
+export function formatFactoryLoadWarning(warning: FactoryLoadWarning): string {
+  return `warning: ${warning.sourcePath}: ${warning.message}`;
+}
 
 export interface LoadedFactory {
   factory: Factory;
@@ -32,6 +56,12 @@ export interface LoadedFactory {
    * after the fact (ADR 0039).
    */
   library?: LibraryPin;
+  /**
+   * Load warnings (ADR 0053). {@link loadFactory} always sets it, to `[]`
+   * when the factory is clean; it is optional so a `LoadedFactory` built by
+   * hand (tests, embedders) still type-checks.
+   */
+  warnings?: FactoryLoadWarning[];
 }
 
 /**
@@ -72,12 +102,19 @@ export async function loadFactory(
   validateNodeShape(resolved.factory, absolute);
   await inlineSteps(resolved.factory, absolute, callerCwd, layout);
   validateCommandNodes(resolved.factory, absolute);
-  validatePostSchema(resolved.factory, absolute);
+  const warnings = validatePostSchema(resolved.factory, absolute);
+  if (options.strictBudgets === true && warnings.length > 0) {
+    throw new FactoryLoadError(
+      `${warnings.map((w) => w.message).join(" ")} (--strict-budgets refuses uncovered cycles; see docs/decisions/0053-Loop-Budgets-Per-Cycle.md.)`,
+      absolute,
+    );
+  }
 
   const loaded: LoadedFactory = {
     factory: resolved.factory,
     sourcePath: absolute,
     sourceDir: path.dirname(absolute),
+    warnings,
   };
   if (layout.library !== undefined) {
     const { repo, ref, sha } = layout.library;
@@ -253,7 +290,7 @@ function describeCwd(cwd: string | undefined): string {
   return cwd === undefined ? "<unset>" : `\`${cwd}\``;
 }
 
-function validatePostSchema(factory: Factory, sourcePath: string): void {
+function validatePostSchema(factory: Factory, sourcePath: string): FactoryLoadWarning[] {
   const nodeIds = new Set(Object.keys(factory.nodes));
 
   for (const edge of factory.edges) {
@@ -301,4 +338,12 @@ function validatePostSchema(factory: Factory, sourcePath: string): void {
       );
     }
   }
+
+  return findUnbudgetedCycles(factory).map((c) => ({
+    code: "uncovered_cycle",
+    sourcePath,
+    nodes: c.nodes,
+    edge: c.edge,
+    message: `Cycle ${[...c.nodes, c.nodes[0]].join(" → ")} is not covered by a budget: add \`max_traversals\` to the ${c.edge.when} edge ${c.edge.from} → ${c.edge.to}, or \`max_iterations\` to a node in the cycle.`,
+  }));
 }

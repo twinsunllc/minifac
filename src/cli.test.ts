@@ -1476,3 +1476,101 @@ body
     });
   });
 });
+
+describe("run --strict-budgets (ADR 0053)", () => {
+  // scarif-factory FINDINGS F9: the inner review → implement loop has no
+  // budget; the outer verify → implement loop does.
+  const f9 = (innerCap = "") => `name: f9
+brief: none
+nodes:
+  plan:
+    executor: test
+  implement:
+    executor: test
+  review:
+    executor: test
+  verify:
+    executor: test
+  done:
+    executor: test
+    terminal: true
+edges:
+  - { from: plan, to: implement }
+  - { from: implement, to: review }
+  - { from: review, to: implement, when: on_failure${innerCap} }
+  - { from: review, to: verify }
+  - { from: verify, to: implement, when: on_failure, max_traversals: 3 }
+  - { from: verify, to: done }
+`;
+
+  function recordingRegistry(seen: string[]): () => ExecutorRegistry {
+    return () => {
+      const reg = new ExecutorRegistry();
+      reg.register({
+        type: "test",
+        supportsMcp: false,
+        async *run(node: ResolvedNode): AsyncIterable<NodeEvent> {
+          seen.push(node.id);
+          yield { kind: "status", status: "succeeded" };
+        },
+      });
+      return reg;
+    };
+  }
+
+  it("without the flag, warns on stderr with the file, the cycle and the edge, then runs", async () => {
+    const dir = await makeFixtureDir();
+    const file = await writeFixture(dir, "examples/f9.yaml", f9());
+    const seen: string[] = [];
+    const err = new BufferStream();
+    const code = await runCli(["run", "--in-place", "f9"], {
+      stdout: new BufferStream(),
+      stderr: err,
+      runCwd: dir,
+      buildRegistry: recordingRegistry(seen),
+    });
+    expect(code).toBe(0);
+    const warning = err
+      .text()
+      .split("\n")
+      .find((l) => l.startsWith("warning: "));
+    expect(warning).toBeDefined();
+    expect(warning).toContain(file);
+    expect(warning).toContain("implement → review → implement");
+    expect(warning).toContain("review → implement");
+    expect(seen).toEqual(["plan", "implement", "review", "verify", "done"]);
+  });
+
+  it("with the flag, exits 1 naming the cycle and the edge, and runs no node", async () => {
+    const dir = await makeFixtureDir();
+    await writeFixture(dir, "examples/f9.yaml", f9());
+    const seen: string[] = [];
+    const err = new BufferStream();
+    const code = await runCli(["run", "--in-place", "--strict-budgets", "f9"], {
+      stdout: new BufferStream(),
+      stderr: err,
+      runCwd: dir,
+      buildRegistry: recordingRegistry(seen),
+    });
+    expect(code).toBe(1);
+    expect(err.text()).toMatch(/Error loading factory .*f9\.yaml/);
+    expect(err.text()).toContain("edge review → implement");
+    expect(seen).toEqual([]);
+  });
+
+  it("a fully capped graph runs silently under the flag", async () => {
+    const dir = await makeFixtureDir();
+    await writeFixture(dir, "examples/f9.yaml", f9(", max_traversals: 2"));
+    const seen: string[] = [];
+    const err = new BufferStream();
+    const code = await runCli(["run", "--in-place", "--strict-budgets", "f9"], {
+      stdout: new BufferStream(),
+      stderr: err,
+      runCwd: dir,
+      buildRegistry: recordingRegistry(seen),
+    });
+    expect(code).toBe(0);
+    expect(err.text()).not.toContain("warning: ");
+    expect(seen).toEqual(["plan", "implement", "review", "verify", "done"]);
+  });
+});

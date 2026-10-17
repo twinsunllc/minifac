@@ -260,3 +260,84 @@ describe("runBriefAutomated finalize-before-unlock ordering", () => {
     }
   });
 });
+
+describe("runBriefAutomated loop budgets (ADR 0053)", () => {
+  // F9: the inner review → only loop has no budget; the outer one does.
+  async function writeF9(repo: string): Promise<void> {
+    await writeFile(
+      path.join(repo, "examples", "fake.yaml"),
+      `name: fake-factory
+brief: required
+nodes:
+  plan:
+    executor: fake
+    with:
+      prompt: "noop"
+  only:
+    executor: fake
+    with:
+      prompt: "noop"
+  review:
+    executor: fake
+    with:
+      prompt: "noop"
+  done:
+    executor: fake
+    terminal: true
+    with:
+      prompt: "noop"
+edges:
+  - { from: plan, to: only }
+  - { from: only, to: review }
+  - { from: review, to: only, when: on_failure }
+  - { from: review, to: done }
+  - { from: done, to: only, when: on_failure, max_traversals: 1 }
+`,
+      "utf8",
+    );
+  }
+  const registry = () => {
+    const r = new ExecutorRegistry();
+    r.register(new FakeExecutor());
+    return r;
+  };
+
+  it("delivers each load warning to onLoadWarning and runs", async () => {
+    const { repo, storePath } = await setupRepo("fake");
+    await writeF9(repo);
+    const store = SqliteRunStore.open(storePath);
+    try {
+      const warnings: string[] = [];
+      const result = await runBriefAutomated({
+        brief: await loadBrief("foo", repo),
+        cwd: repo,
+        store,
+        buildRegistry: registry,
+        onLoadWarning: (w) => warnings.push(`${w.edge.from} → ${w.edge.to}`),
+      });
+      expect(result.status).toBe("succeeded");
+      expect(warnings).toEqual(["review → only"]);
+    } finally {
+      await store.close();
+    }
+  });
+
+  it("strictBudgets fails the run at factory load", async () => {
+    const { repo, storePath } = await setupRepo("fake");
+    await writeF9(repo);
+    const store = SqliteRunStore.open(storePath);
+    try {
+      const result = await runBriefAutomated({
+        brief: await loadBrief("foo", repo),
+        cwd: repo,
+        store,
+        buildRegistry: registry,
+        strictBudgets: true,
+      });
+      expect(result.status).toBe("failed");
+      expect(result.reason).toMatch(/^factory load: .*edge review → only/);
+    } finally {
+      await store.close();
+    }
+  });
+});

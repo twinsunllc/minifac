@@ -1,4 +1,5 @@
 import type { Factory } from "./schema.js";
+import { startNodeIds } from "./start-nodes.js";
 
 /**
  * Tarjan's strongly connected components. Each returned component is a list of
@@ -116,4 +117,107 @@ export function findUncoveredCycles(factory: Factory): UncoveredCycle[] {
   }
 
   return uncovered;
+}
+
+export interface UnbudgetedCycle {
+  /** The cycle's nodes in traversal order, starting at the node the edge to cap enters. */
+  nodes: string[];
+  /** The edge that closes the cycle; adding `max_traversals` to it covers the cycle. */
+  edge: { from: string; to: string; when: string };
+}
+
+/**
+ * Returns elementary cycles that carry no budget, per ADR 0053. An
+ * elementary cycle is covered when one of its edges has `max_traversals`
+ * (of any `when`) or one of its nodes has `max_iterations`. Every cycle is
+ * covered exactly when the residual graph — the factory without budgeted
+ * edges and without `max_iterations` nodes — is acyclic, so no cycle
+ * enumeration is needed.
+ *
+ * Each residual cycle is found as a back-edge of a depth-first search whose
+ * roots are the start nodes and then every other node, in declaration
+ * order, following edges in declaration order. That back-edge is the edge
+ * reported to cap. It is then dropped from the residual graph and the
+ * search repeated, so the result is complete: adding `max_traversals` to
+ * every reported edge leaves no uncovered cycle.
+ *
+ * Cycles inside an SCC that {@link findUncoveredCycles} reports (no budget
+ * anywhere in the component) are not repeated here; that case is a load
+ * error of its own.
+ */
+export function findUnbudgetedCycles(factory: Factory): UnbudgetedCycle[] {
+  const hardError = new Set(findUncoveredCycles(factory).flatMap((c) => c.nodes));
+  const residualNode = (id: string): boolean =>
+    factory.nodes[id] !== undefined &&
+    factory.nodes[id]?.max_iterations === undefined &&
+    !hardError.has(id);
+
+  // Edge indices into `factory.edges`, so parallel edges between the same
+  // pair (different `when`) stay distinct.
+  const live = new Set<number>();
+  factory.edges.forEach((e, i) => {
+    if (e.max_traversals === undefined && residualNode(e.from) && residualNode(e.to)) live.add(i);
+  });
+
+  const nodeIds = Object.keys(factory.nodes);
+  const starts = startNodeIds(factory);
+  const roots = [...starts, ...nodeIds.filter((id) => !starts.includes(id))].filter(residualNode);
+
+  const out: UnbudgetedCycle[] = [];
+  for (;;) {
+    const found = firstBackEdge(factory, roots, live);
+    if (found === undefined) return out;
+    live.delete(found.edgeIndex);
+    const edge = factory.edges[found.edgeIndex];
+    if (edge === undefined) return out;
+    out.push({ nodes: found.nodes, edge: { from: edge.from, to: edge.to, when: edge.when } });
+  }
+}
+
+/**
+ * Depth-first search over the live edges. Returns the first back-edge met
+ * (an edge into a node still on the DFS path) with the path segment it
+ * closes, or undefined when the live graph is acyclic.
+ */
+function firstBackEdge(
+  factory: Factory,
+  roots: string[],
+  live: Set<number>,
+): { edgeIndex: number; nodes: string[] } | undefined {
+  const outEdges = new Map<string, number[]>();
+  for (const i of live) {
+    const e = factory.edges[i];
+    if (e === undefined) continue;
+    const list = outEdges.get(e.from) ?? [];
+    list.push(i);
+    outEdges.set(e.from, list);
+  }
+  for (const list of outEdges.values()) list.sort((a, b) => a - b);
+
+  const done = new Set<string>();
+  const path: string[] = [];
+  const onPath = new Set<string>();
+
+  const visit = (v: string): { edgeIndex: number; nodes: string[] } | undefined => {
+    path.push(v);
+    onPath.add(v);
+    for (const i of outEdges.get(v) ?? []) {
+      const w = factory.edges[i]?.to;
+      if (w === undefined || done.has(w)) continue;
+      if (onPath.has(w)) return { edgeIndex: i, nodes: path.slice(path.indexOf(w)) };
+      const found = visit(w);
+      if (found) return found;
+    }
+    path.pop();
+    onPath.delete(v);
+    done.add(v);
+    return undefined;
+  };
+
+  for (const root of roots) {
+    if (done.has(root)) continue;
+    const found = visit(root);
+    if (found) return found;
+  }
+  return undefined;
 }

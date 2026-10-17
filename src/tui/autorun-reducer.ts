@@ -78,6 +78,7 @@ function isAutorunEvent(event: AutorunReducerEvent): event is AutorunEvent {
     case "skipped":
     case "dry-run-decision":
     case "info":
+    case "load-warning":
     case "auto-merge-failed":
       return true;
     default:
@@ -112,6 +113,7 @@ function applyAutorunEvent(state: BriefListState, event: AutorunEvent): BriefLis
     case "startup":
     case "poll-start":
     case "info":
+    case "load-warning":
       return state;
     case "started":
       return upsertBrief(state, event.change, (row) => ({
