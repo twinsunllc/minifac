@@ -42,6 +42,11 @@
       `autorun-integration.test.ts` (TUI mode), `run-registry.test.ts`,
       `server.test.ts`; `cli.test.ts` covers `autorun --strict-budgets`
 
+- [x] 5.4 `serve-daemon` delta (SCARIFW-2259): the warning events are
+      written to the run store as the run's first events (`RunOptions`
+      `preludeEvents`), so a daemon restart replays them; restart test in
+      `run-registry.test.ts`
+
 ## 6. Docs
 
 - [x] 6.1 ADR 0053, `docs/concepts/Cycle.md`, `docs/CLI.md`, CHANGELOG

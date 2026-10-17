@@ -127,6 +127,28 @@ describe("resumeStateFromStore", () => {
     expect(byNode.evaluate).toMatchObject({ iteration: 2, status: "failed", outcome: "error" });
   });
 
+  it("reads a command node's REASON line from its sentinel, and keeps a bare command_failed", async () => {
+    await seed();
+    async function failCommand(nodeId: string, meta: Record<string, unknown>): Promise<void> {
+      await store.recordNodeStart(RUN_ID, nodeId, 1, 1_610);
+      await store.appendEvent(RUN_ID, {
+        nodeId,
+        iteration: 1,
+        kind: "status",
+        payload: { kind: "status", status: "failed", meta },
+        emittedAt: 620,
+      });
+      await store.recordNodeEnd(RUN_ID, nodeId, 1, { status: "failed", at: 1_630 });
+    }
+    await failCommand("checks", { reason: "command_failed", sentinel: "checks: lint red\n" });
+    await failCommand("smoke", { reason: "command_failed" });
+
+    const state = await resumeStateFromStore({ store, runId: RUN_ID, at: "evaluate" });
+    const byNode = Object.fromEntries(state.priorResults.map((r) => [r.nodeId, r]));
+    expect(byNode.checks?.reason).toBe("checks: lint red");
+    expect(byNode.smoke?.reason).toBe("command_failed");
+  });
+
   it("carries per-node iteration counts, including a skipped node's", async () => {
     await seed();
 

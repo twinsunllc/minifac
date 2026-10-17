@@ -352,8 +352,9 @@ async function readNodeReasons(
 /**
  * The reason carried by one persisted `status` event payload.
  *
- * Mirrors the runner's own `extractReason` — a sentinel failure's REASON
- * line, or a categorical reason that names itself — so a rehydrated
+ * Mirrors the runner's own `extractReason` — the `sentinel` of a
+ * `sentinel_failed` or `command_failed` status (the node's REASON line), or a
+ * categorical reason that names itself — so a rehydrated
  * `{{ priorResults.<id>.reason }}` reads exactly what the parked run's
  * downstream nodes read.
  */
@@ -364,7 +365,12 @@ function reasonFromStatusPayload(payload: unknown): string | null {
   const meta = event.meta;
   if (!meta || typeof meta !== "object") return null;
   const m = meta as { reason?: unknown; sentinel?: unknown };
-  if (typeof m.sentinel === "string" && m.reason === "sentinel_failed") {
+  // An agent's sentinel REASON line, or a command node's REASON line (or its
+  // generated reason, ADR 0051), as `extractReason` reads it.
+  if (
+    typeof m.sentinel === "string" &&
+    (m.reason === "sentinel_failed" || m.reason === "command_failed")
+  ) {
     return m.sentinel.replace(/\s+$/, "");
   }
   if (typeof m.reason === "string") return m.reason;
