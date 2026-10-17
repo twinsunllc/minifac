@@ -1,6 +1,6 @@
 // minifac viewer — vanilla ES module, no build step.
 
-import { edgeStyle, valueConditionText } from "./edge-style.js";
+import { edgeStyle, edgeTooltip, routeEdgesOf, valueConditionText } from "./edge-style.js";
 
 const state = {
   factories: [],
@@ -249,7 +249,8 @@ async function openRun(r) {
 
 function drawGraph(factory) {
   const nodes = Object.keys(factory.nodes || {});
-  const edges = factory.edges || [];
+  // Routes (ADR 0055) are edges for the viewer, drawn in their own style.
+  const edges = [...(factory.edges || []), ...routeEdgesOf(factory.nodes)];
   const layout = layered(nodes, edges);
   const svg = els.graph;
   // Reset SVG.
@@ -272,6 +273,9 @@ function drawGraph(factory) {
     </marker>
     <marker id="arrow-value" viewBox="0 -5 10 10" refX="10" refY="0" markerWidth="6" markerHeight="6" orient="auto">
       <path d="M0,-5L10,0L0,5" fill="#7aa2f7" />
+    </marker>
+    <marker id="arrow-route" viewBox="0 -5 10 10" refX="10" refY="0" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M0,-5L10,0L0,5" fill="#bb9af7" />
     </marker>`;
   svg.appendChild(defs);
 
@@ -284,10 +288,10 @@ function drawGraph(factory) {
     path.setAttribute("class", cls);
     path.setAttribute("d", edgePath(a, b));
     path.setAttribute("marker-end", marker);
-    const condition = valueConditionText(e.when);
-    if (condition !== null) {
+    const tooltip = edgeTooltip(e);
+    if (tooltip !== null) {
       const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
-      title.textContent = condition;
+      title.textContent = tooltip;
       path.appendChild(title);
     }
     svg.appendChild(path);
@@ -331,14 +335,18 @@ function edgePath(a, b) {
   const mx = a.x + dx / 2;
   const my = a.y + dy / 2;
   const offset = dy < 0 ? -30 : 0; // pull back-edges out a bit
-  return `M${a.x},${a.y} Q${mx + offset},${my} ${b.x},${b.y}`;
+  // A right-to-left edge (a loop back to an earlier column) bows below the
+  // row, further the more columns it spans, so it does not lie on the
+  // forward edges between the same nodes.
+  const bow = dx < 0 ? 30 + Math.abs(dx) / 6 : 0;
+  return `M${a.x},${a.y} Q${mx + offset},${my + bow} ${b.x},${b.y}`;
 }
 
 function layered(nodes, edges) {
   // Compute longest path from any source to each node along on_success edges
-  // and forward value edges (ADR 0055). A value edge whose target already
-  // reaches its source along on_success edges (a revise loop) is a back-edge
-  // and is skipped. Cycles via on_failure / on_error are ignored for layout
+  // and forward value edges and routes (ADR 0055). A value edge or route
+  // whose target already reaches its source along on_success edges (a revise
+  // loop) is a back-edge and is skipped. Cycles via on_failure / on_error are ignored for layout
   // purposes; place those nodes at the level of their target.
   const outSucc = new Map(nodes.map((n) => [n, []]));
   for (const e of edges) if (e.when === "on_success") outSucc.get(e.from)?.push(e.to);
@@ -356,7 +364,8 @@ function layered(nodes, edges) {
   };
   const inSucc = new Map(nodes.map((n) => [n, []]));
   for (const e of edges) {
-    const forwardValue = valueConditionText(e.when) !== null && !reaches(e.to, e.from);
+    const forwardValue =
+      (valueConditionText(e.when) !== null || e.when === "route") && !reaches(e.to, e.from);
     if (e.when !== "on_success" && !forwardValue) continue;
     inSucc.get(e.to)?.push(e.from);
   }

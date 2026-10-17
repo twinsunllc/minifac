@@ -7,6 +7,7 @@ import { Client as ClientCls } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { ReadBuffer, serializeMessage } from "@modelcontextprotocol/sdk/shared/stdio.js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { nextOutputDef } from "../factory/routes.js";
 import type { OutputDef } from "../factory/schema.js";
 import {
   type RunnerMcpServer,
@@ -394,6 +395,27 @@ describe("startRunnerMcpServer — MCP-to-filesystem bridge", () => {
       const contents = await readFile(path.join(outDir, "findings.json"), "utf8");
       expect(JSON.parse(contents)).toEqual(payload);
       expect(h.outputsByCall).toEqual([{ nodeId: "propose", key: "findings", value: payload }]);
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("a routing node's synthesized next is reportable through report_next (ADR 0055)", async () => {
+    const outDir = await makeOutputsDir(h, "evaluate");
+    h.server.registerNodeOutputs("evaluate", outDir, {
+      next: nextOutputDef([{ to: "implement" }, { to: "checks_gate" }]),
+    });
+    const client = await connectClient(h.server.socketPath);
+    try {
+      const list = await client.listTools();
+      expect(list.tools.map((t) => t.name)).toEqual(["mcp__minifac__report_next"]);
+      const res = await client.callTool({
+        name: "mcp__minifac__report_next",
+        arguments: { value: "checks_gate" },
+      });
+      expect(res.isError).not.toBe(true);
+      const contents = await readFile(path.join(outDir, "next.json"), "utf8");
+      expect(JSON.parse(contents)).toBe("checks_gate");
     } finally {
       await client.close();
     }
