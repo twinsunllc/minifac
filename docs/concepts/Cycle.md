@@ -36,6 +36,16 @@ cycle closed only by `on_error` edges needs a budget too
 This is enforced at load time, not runtime — so a buggy factory can't
 sneak through.
 
+The rule is per elementary cycle ([[0053-Loop-Budgets-Per-Cycle]]): an
+uncapped inner loop is not covered by a budget on another loop it shares
+nodes with. A node's `max_iterations` covers every cycle through that
+node. Until the next major version the loader enforces this in two
+steps: a loop with no budget anywhere is a load error, and an uncovered
+cycle inside an otherwise budgeted loop loads with a warning
+(`LoadedFactory.warnings`; a `warning:` line from `minifac run`). The
+`strictBudgets` loader option and the `--strict-budgets` flag make the
+warning an error now.
+
 ## Knowing which pass you are on
 
 A node in a cycle can read its own pass and its loop budget from

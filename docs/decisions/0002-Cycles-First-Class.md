@@ -63,3 +63,4 @@ distinguished from `node_failed` (a real failure with no recovery).
 - [[Factory]] — where cycles live in the graph
 - [[Runner]] — enforces budgets
 - `openspec/specs/factory-schema/spec.md` — "Cycle budgets are mandatory"
+- [[0053-Loop-Budgets-Per-Cycle]] — budget coverage is checked per elementary cycle, warn-first
