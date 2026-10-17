@@ -33,7 +33,7 @@ import { ClaudeExecutor } from "./executor/claude.js";
 import { CommandExecutor } from "./executor/command.js";
 import { ExecutorRegistry } from "./executor/registry.js";
 import type { EmittedEvent } from "./executor/types.js";
-import { FactoryLoadError, loadFactory } from "./factory/loader.js";
+import { FactoryLoadError, formatFactoryLoadWarning, loadFactory } from "./factory/loader.js";
 import { pruneOutputs } from "./outputs/prune.js";
 import { runFactory } from "./runner/run.js";
 import { type DaemonHandle, startDaemon } from "./serve/server.js";
@@ -174,10 +174,15 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
       "--require-clean",
       "Refuse to run if the brief (or any depends_on ancestor) is uncommitted",
     )
+    .option(
+      "--strict-budgets",
+      "Refuse a factory with a cycle that carries no budget instead of warning (ADR 0053)",
+    )
     .action(
       async (
         arg: string | undefined,
         opts: {
+          strictBudgets?: boolean;
           resume?: string;
           at?: string;
           feedback?: string;
@@ -253,6 +258,7 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
               ...(opts.at !== undefined ? { at: opts.at } : {}),
               ...(opts.feedback !== undefined ? { feedbackPath: opts.feedback } : {}),
               cwd,
+              ...(opts.strictBudgets === true ? { strictBudgets: true } : {}),
               store: resumeStore,
               registry: (io.buildRegistry ?? defaultRegistry)(),
               stdout: io.stdout,
@@ -298,7 +304,12 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
           if (opts.factory !== undefined && resolved.kind === "brief") {
             factoryPath = await resolveFactoryByName(opts.factory, cwd);
           }
-          const loaded = await loadFactory(factoryPath, cwd);
+          const loaded = await loadFactory(factoryPath, cwd, {
+            strictBudgets: opts.strictBudgets === true,
+          });
+          for (const w of loaded.warnings ?? []) {
+            io.stderr.write(`${formatFactoryLoadWarning(w)}\n`);
+          }
           const factoryName = loaded.factory.name;
           const briefMode = loaded.factory.brief;
           const brief = resolved.kind === "brief" ? resolved.brief : undefined;
@@ -1003,8 +1014,13 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
       "--ff-only",
       "Forbid the merge-commit fallback in autorun's auto-merge step (no-op when --no-auto-merge is set)",
     )
+    .option(
+      "--strict-budgets",
+      "Refuse (fail the run of) a factory with a cycle that carries no budget instead of warning (ADR 0053)",
+    )
     .action(
       async (opts: {
+        strictBudgets?: boolean;
         watch?: string;
         maxConcurrent?: string;
         maxFailures?: string;
@@ -1077,6 +1093,7 @@ export async function runCli(argv: readonly string[], io: CliIO): Promise<number
             ...(opts.tui !== undefined ? { tui: opts.tui } : {}),
             ...(noAutoMerge ? { noAutoMerge: true } : {}),
             ...(ffOnly ? { ffOnly: true } : {}),
+            ...(opts.strictBudgets === true ? { strictBudgets: true } : {}),
             outputMode,
           },
           cwd,

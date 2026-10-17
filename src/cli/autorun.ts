@@ -4,7 +4,11 @@ import path from "node:path";
 import { type Brief, BriefLoadError, loadBrief } from "../brief/loader.js";
 import type { ExecutorRegistry } from "../executor/registry.js";
 import type { EmittedEvent } from "../executor/types.js";
-import { loadFactory } from "../factory/loader.js";
+import {
+  type FactoryLoadWarning,
+  formatFactoryLoadWarning,
+  loadFactory,
+} from "../factory/loader.js";
 import { markBriefDone } from "../runner/mark-done.js";
 import { openDefaultRunStore } from "../storage/open.js";
 import type { RunStore, StoredRun } from "../storage/run-store.js";
@@ -53,6 +57,9 @@ export interface AutorunOptions {
    *  reason=non-fast-forward`. When `noAutoMerge` is set, this flag is a
    *  no-op (warned at startup, not a usage error). */
   ffOnly?: boolean;
+  /** `--strict-budgets`: a factory with an uncovered cycle fails its run at
+   *  load instead of logging a `load-warning` event (ADR 0053). */
+  strictBudgets?: boolean;
   /** Pre-resolved output mode from `pickOutputMode`. When omitted, the
    *  action falls back to raw. The CLI layer is responsible for picking
    *  the mode (and for refusing `--raw` + `--tui` / `--tui` + `--json`
@@ -105,6 +112,7 @@ interface ResolvedOptions {
   force: boolean;
   noAutoMerge: boolean;
   ffOnly: boolean;
+  strictBudgets: boolean;
   outputMode: "raw" | "tui";
 }
 
@@ -139,6 +147,11 @@ export type AutorunEvent =
   | (AutorunEventBase & {
       kind: "info";
       message: string;
+    })
+  | (AutorunEventBase & {
+      kind: "load-warning";
+      change: string;
+      warning: FactoryLoadWarning;
     })
   | (AutorunEventBase & {
       kind: "auto-merge-failed";
@@ -192,6 +205,8 @@ function formatHuman(event: AutorunEvent): string {
       }${event.detail ? ` detail=${event.detail}` : ""}`;
     case "info":
       return `${ts} info ${event.message}`;
+    case "load-warning":
+      return `${ts} load-warning ${event.change} ${formatFactoryLoadWarning(event.warning)}`;
     case "auto-merge-failed":
       return `${ts} auto-merge-failed ${event.change} reason=${event.reason}${
         event.runId ? ` runId=${event.runId}` : ""
@@ -328,6 +343,7 @@ function validateOptions(
       force: options.force === true,
       noAutoMerge: options.noAutoMerge === true,
       ffOnly: options.ffOnly === true,
+      strictBudgets: options.strictBudgets === true,
       outputMode: options.outputMode ?? "raw",
     },
   };
@@ -338,6 +354,8 @@ function buildDefaultRunFactory(
   store: RunStore | undefined,
   buildRegistry: (() => ExecutorRegistry) | undefined,
   skipMarkDone: boolean,
+  strictBudgets: boolean,
+  onLoadWarning: (change: string, warning: FactoryLoadWarning) => void,
 ): AutorunRunFactory {
   return (args: RunFactoryArgs) => {
     const ac = new AbortController();
@@ -349,6 +367,8 @@ function buildDefaultRunFactory(
       ...(buildRegistry ? { buildRegistry } : {}),
       ...(args.onRunEvent ? { onEvent: args.onRunEvent } : {}),
       ...(skipMarkDone ? { skipMarkDone: true } : {}),
+      ...(strictBudgets ? { strictBudgets: true } : {}),
+      onLoadWarning: (w) => onLoadWarning(args.brief.frontmatter.change, w),
     }).then((result) => ({
       status: result.status,
       runId: result.runId,
@@ -415,12 +435,20 @@ export async function autorunAction(input: AutorunActionInput): Promise<number> 
       once: resolved.once,
       filter: resolved.filterExpr,
       force: resolved.force,
+      strictBudgets: resolved.strictBudgets,
     },
   });
 
   const runFactory =
     input.runFactory ??
-    buildDefaultRunFactory(cwd, store, input.buildRegistry, !resolved.noAutoMerge);
+    buildDefaultRunFactory(
+      cwd,
+      store,
+      input.buildRegistry,
+      !resolved.noAutoMerge,
+      resolved.strictBudgets,
+      (change, warning) => emit({ kind: "load-warning", ts: now(), change, warning }),
+    );
 
   // In-process mutex serializing the auto-merge step across concurrent
   // run completions. Each completion's merge work is chained onto this
@@ -690,7 +718,7 @@ export async function autorunAction(input: AutorunActionInput): Promise<number> 
         if (resolved.outputMode === "tui") {
           try {
             const fp = await resolveFactoryByName(decision.brief.frontmatter.factory, cwd);
-            const loaded = await loadFactory(fp, cwd);
+            const loaded = await loadFactory(fp, cwd, { strictBudgets: resolved.strictBudgets });
             initByChange.set(decision.brief.frontmatter.change, {
               factory: { name: loaded.factory.name },
               brief: { change: decision.brief.frontmatter.change },

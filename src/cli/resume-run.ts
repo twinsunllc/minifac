@@ -12,7 +12,7 @@ import { readFile, stat } from "node:fs/promises";
 import type { Brief } from "../brief/loader.js";
 import type { ExecutorRegistry } from "../executor/registry.js";
 import type { EmittedEvent } from "../executor/types.js";
-import { loadFactory } from "../factory/loader.js";
+import { formatFactoryLoadWarning, loadFactory } from "../factory/loader.js";
 import type { RunResult } from "../runner/result.js";
 import { ResumeStateError, resumeStateFromStore } from "../runner/resume.js";
 import { runFactory } from "../runner/run.js";
@@ -32,6 +32,8 @@ export interface ResumeRunOptions {
   /** The `--feedback` argument: a path to the answer's text. */
   feedbackPath?: string;
   cwd: string;
+  /** `--strict-budgets`: refuse a factory with an uncovered cycle (ADR 0053). */
+  strictBudgets?: boolean;
   store: RunStore;
   registry: ExecutorRegistry;
   stdout: NodeJS.WritableStream;
@@ -99,13 +101,16 @@ export async function resumeRunAction(options: ResumeRunOptions): Promise<number
 
   let loaded: Awaited<ReturnType<typeof loadFactory>>;
   try {
-    loaded = await loadFactory(row.factoryPath, cwd);
+    loaded = await loadFactory(row.factoryPath, cwd, {
+      strictBudgets: options.strictBudgets === true,
+    });
   } catch (err) {
     stderr.write(
       `Could not load the factory this run used (${row.factoryPath}): ${(err as Error).message}\n`,
     );
     return 1;
   }
+  for (const w of loaded.warnings ?? []) stderr.write(`${formatFactoryLoadWarning(w)}\n`);
 
   // Refused HERE as well as in the runner. The runner's own check is what
   // makes the guarantee true of every caller; this one is what makes the

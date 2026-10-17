@@ -87,12 +87,21 @@ Resolution order for `<thing>`:
 | `--resume <run>` | — | Resume a recorded run at `--at` instead of starting a new one. Takes a run id or a prefix of at least 6 characters (hex digits and hyphens, so a whole id from `minifac runs` works) |
 | `--at <node>` | — | With `--resume`: the node to resume at. Required |
 | `--feedback <file>` | — | With `--resume`: a file whose contents are the human answer to deliver |
+| `--strict-budgets` | off | Refuse a factory with a cycle that carries no budget (exit `1`, no node runs) instead of warning. Also applies with `--resume`. See [[0053-Loop-Budgets-Per-Cycle]] |
 
 `--raw` and `--tui` are mutually exclusive. When neither is passed, the
 TUI is used when stdout is a TTY; raw output is used otherwise (e.g. in CI).
 
 `--in-place` is also implied when the brief's own frontmatter sets
 `mode: "in-place"`.
+
+Without `--strict-budgets`, a factory with an uncovered cycle (one with no
+`max_traversals` edge and no `max_iterations` node on it, inside a loop that
+carries a budget elsewhere) still runs, after one stderr line per cycle:
+
+```
+warning: /abs/path/f9.yaml: Cycle implement → review → implement is not covered by a budget: add `max_traversals` to the on_failure edge review → implement, or `max_iterations` to a node in the cycle.
+```
 
 #### Resuming a parked run
 
@@ -655,6 +664,7 @@ degradation. See [[Auto-Mode]] → "Cleanliness gate" and
 | `--dry-run` | off | Run a single poll cycle, print scheduling decisions, invoke no runs |
 | `--json` | off | Emit log lines as one JSON object per line (includes a `startup` event with resolved options) |
 | `--force` | off | On first `SIGINT`/`SIGTERM`, kill in-flight child executors instead of waiting for them to finish |
+| `--strict-budgets` | off | A brief whose factory has a cycle that carries no budget fails its run at factory load (`completed status=failed reason=factory load: …`) instead of logging a `load-warning` event and running. See [[0053-Loop-Budgets-Per-Cycle]] |
 
 ### Exit codes
 

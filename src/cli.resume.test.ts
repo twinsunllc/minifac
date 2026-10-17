@@ -191,6 +191,38 @@ describe("minifac run --resume", () => {
     expect(prompts[0]?.prompt).not.toContain("## Human answer (resume)");
   });
 
+  // ADR 0053: --resume reloads the factory, so it warns, or refuses under --strict-budgets.
+  const UNCAPPED_LOOP = FACTORY.replace("  plan:\n", "  plan:\n    start: true\n").concat(
+    "  - { from: evaluate, to: plan, when: on_failure }\n",
+    "  - { from: evaluate, to: evaluate, when: on_failure, max_traversals: 1 }\n",
+  );
+
+  it("warns on stderr about an uncovered cycle and resumes", async () => {
+    await writeFile(factoryPath, UNCAPPED_LOOP, "utf8");
+    await seedParkedRun();
+    const { code, err } = await run(["run", "--resume", RUN_ID, "--at", "evaluate"]);
+    expect(code).toBe(0);
+    expect(err).toContain(`warning: ${factoryPath}: Cycle plan → evaluate → plan`);
+    expect(prompts.map((p) => p.nodeId)).toEqual(["evaluate"]);
+  });
+
+  it("--strict-budgets refuses the resume and dispatches nothing", async () => {
+    await writeFile(factoryPath, UNCAPPED_LOOP, "utf8");
+    await seedParkedRun();
+    const { code, err } = await run([
+      "run",
+      "--resume",
+      RUN_ID,
+      "--at",
+      "evaluate",
+      "--strict-budgets",
+    ]);
+    expect(code).toBe(1);
+    expect(err).toContain("Could not load the factory this run used");
+    expect(err).toContain("edge evaluate → plan");
+    expect(prompts).toEqual([]);
+  });
+
   it("refuses a missing --at, naming what is missing", async () => {
     await seedParkedRun();
     const { code, err } = await run(["run", "--resume", "abcdef"]);

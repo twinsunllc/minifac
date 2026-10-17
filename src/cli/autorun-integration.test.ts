@@ -452,3 +452,84 @@ describe("autorun integration", () => {
     expect(started3).toContain("beta");
   });
 });
+
+describe("autorun loop budgets (ADR 0053)", () => {
+  // F9: the inner review → only loop has no budget; the outer one does.
+  async function writeF9AndCommit(repo: string): Promise<void> {
+    await writeFile(
+      path.join(repo, "examples", "fake.yaml"),
+      `name: fake-factory
+brief: required
+nodes:
+  plan:
+    executor: fake
+    with:
+      prompt: "noop"
+  only:
+    executor: fake
+    with:
+      prompt: "noop"
+  review:
+    executor: fake
+    with:
+      prompt: "noop"
+  done:
+    executor: fake
+    terminal: true
+    with:
+      prompt: "noop"
+edges:
+  - { from: plan, to: only }
+  - { from: only, to: review }
+  - { from: review, to: only, when: on_failure }
+  - { from: review, to: done }
+  - { from: done, to: only, when: on_failure, max_traversals: 1 }
+`,
+      "utf8",
+    );
+    await writeBriefAndCommit(repo, "foo");
+  }
+
+  it("--json logs a load-warning event and the run proceeds", async () => {
+    const { repo, storeDir } = await setupIntegrationRepo();
+    await writeF9AndCommit(repo);
+    const out = new BufferStream();
+    const code = await autorunAction({
+      options: { once: true, json: true, noAutoMerge: true },
+      cwd: repo,
+      io: { stdout: out, stderr: new BufferStream() },
+      buildRegistry,
+      openRunStore: async () => SqliteRunStore.open(path.join(storeDir, "runs.db")),
+    });
+    expect(code).toBe(0);
+    const lines = out.lines().map((l) => JSON.parse(l));
+    const warning = lines.find((l) => l.event === "load-warning");
+    expect(warning?.change).toBe("foo");
+    expect(warning?.warning).toMatchObject({
+      code: "uncovered_cycle",
+      nodes: ["only", "review"],
+      edge: { from: "review", to: "only", when: "on_failure" },
+    });
+    expect(warning?.warning.sourcePath).toBe(path.join(repo, "examples", "fake.yaml"));
+    const completed = lines.find((l) => l.event === "completed" && l.change === "foo");
+    expect(completed?.status).toBe("succeeded");
+  });
+
+  it("strictBudgets fails the run at factory load", async () => {
+    const { repo, storeDir } = await setupIntegrationRepo();
+    await writeF9AndCommit(repo);
+    const out = new BufferStream();
+    await autorunAction({
+      options: { once: true, json: true, noAutoMerge: true, strictBudgets: true },
+      cwd: repo,
+      io: { stdout: out, stderr: new BufferStream() },
+      buildRegistry,
+      openRunStore: async () => SqliteRunStore.open(path.join(storeDir, "runs.db")),
+    });
+    const lines = out.lines().map((l) => JSON.parse(l));
+    expect(lines.some((l) => l.event === "load-warning")).toBe(false);
+    const completed = lines.find((l) => l.event === "completed" && l.change === "foo");
+    expect(completed?.status).toBe("failed");
+    expect(completed?.reason).toMatch(/^factory load: .*edge review → only/);
+  });
+});

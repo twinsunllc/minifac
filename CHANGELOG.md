@@ -33,6 +33,20 @@ conflict; a duplicate or oddly-ordered bullet is tidied when a release is cut.
   `claude` result with `is_error: true` and no sentinel is now `failed`
   even on exit 0. A `RunResult.log` entry now records the
   `missing_required_output` override as `failed`.
+- **Loop budgets per elementary cycle, warn-first** (SCARIFW-2248,
+  [ADR 0053](docs/decisions/0053-Loop-Budgets-Per-Cycle.md)). Every cycle
+  needs a `max_traversals` edge or a `max_iterations` node on it; a budget
+  on another loop in the same component no longer covers an uncapped
+  inner loop (scarif-factory FINDINGS F9). Such a factory still loads:
+  `loadFactory` returns each uncovered cycle in `LoadedFactory.warnings`
+  as a `FactoryLoadWarning` (`code: "uncovered_cycle"`, `sourcePath`,
+  `nodes`, `edge: { from, to, when }`, `message`; exported with
+  `formatFactoryLoadWarning`), `minifac run` writes a `warning:` line to
+  stderr for each, and `minifac autorun` logs a `load-warning` event. The
+  new `strictBudgets` loader option and `--strict-budgets` flag (on
+  `minifac run`, including `--resume`, and `minifac autorun`) refuse it
+  instead. A component with no budget anywhere is still a load error.
+  Strict becomes the default at the next major version.
 
 ## [0.2.0] — 2026-10-17
 

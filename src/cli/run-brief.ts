@@ -4,7 +4,7 @@ import type { Brief } from "../brief/loader.js";
 import { CheckMergeExecutor } from "../executor/check-merge.js";
 import { ClaudeExecutor } from "../executor/claude.js";
 import { ExecutorRegistry } from "../executor/registry.js";
-import { type LoadedFactory, loadFactory } from "../factory/loader.js";
+import { type FactoryLoadWarning, type LoadedFactory, loadFactory } from "../factory/loader.js";
 import { runFactory } from "../runner/run.js";
 import type { RunStore } from "../storage/run-store.js";
 import { loadWorktreeConfig } from "../worktree/config.js";
@@ -40,6 +40,10 @@ export interface RunBriefAutomatedArgs {
    *  tests to observe when the lockfile `release` is invoked relative to
    *  the run store's `finalizeRun` resolution. */
   claimLockFn?: (lockPath: string) => Promise<LockHandle>;
+  /** `--strict-budgets`: an uncovered cycle fails the load (ADR 0053). */
+  strictBudgets?: boolean;
+  /** Receives each load warning when the factory loads (autorun logs them). */
+  onLoadWarning?: (warning: FactoryLoadWarning) => void;
 }
 
 export interface RunBriefAutomatedResult {
@@ -83,10 +87,11 @@ export async function runBriefAutomated(
 
   let loaded: LoadedFactory;
   try {
-    loaded = await loadFactory(factoryPath, cwd);
+    loaded = await loadFactory(factoryPath, cwd, { strictBudgets: args.strictBudgets === true });
   } catch (err) {
     return { status: "failed", runId, reason: `factory load: ${(err as Error).message}` };
   }
+  for (const w of loaded.warnings ?? []) args.onLoadWarning?.(w);
   const factoryName = loaded.factory.name;
 
   const config = await loadWorktreeConfig(cwd);
