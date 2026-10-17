@@ -396,6 +396,12 @@ describe("CommandExecutor", () => {
       expect(alive(pid)).toBe(false);
     });
 
+    it("an aborted command is red even when it handles SIGTERM and exits 0", async () => {
+      const out = await runAborting("trap 'exit 0' TERM; echo up; sleep 30 & wait");
+      expect(out.result.commands[0]).toMatchObject({ exit_code: 0, met: false });
+      expect(out.last).toMatchObject({ status: "failed", meta: { sentinel: "c: aborted" } });
+    });
+
     it("starts no further command after an abort, even under continue_on_red", async () => {
       const marker = path.join(dir, "second-ran");
       const out = await runAborting("echo up; sleep 30", undefined, [

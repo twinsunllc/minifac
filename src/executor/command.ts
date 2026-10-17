@@ -465,8 +465,6 @@ function startCommand(
       }, opts.killGraceMs);
     });
     child.on("close", () => finish());
-    // An abort that fired before the listener above was attached.
-    if (opts.abortSignal?.aborted) onAbort();
   });
 
   return { pid, events: channel.drain(), outcome };
@@ -564,11 +562,6 @@ export class CommandExecutor implements NodeExecutor {
 
     try {
       for (const cmd of spec.commands) {
-        // A cancelled run starts nothing more.
-        if (ctx.abortSignal?.aborted) {
-          aborted = true;
-          break;
-        }
         const cwd = path.resolve(ctx.cwd, cmd.cwd ?? ".");
         const env: NodeJS.ProcessEnv = {
           ...process.env,
@@ -580,7 +573,15 @@ export class CommandExecutor implements NodeExecutor {
         let spawnError: string | null = null;
         let cmdAborted = false;
 
-        if (cmd.tool !== undefined && (await resolveTool(cmd.tool, cwd, env.PATH)) === null) {
+        const toolMissing =
+          cmd.tool !== undefined && (await resolveTool(cmd.tool, cwd, env.PATH)) === null;
+        // A cancelled run starts nothing more. Checked after the last await
+        // before the spawn, which attaches the abort listener synchronously.
+        if (ctx.abortSignal?.aborted) {
+          aborted = true;
+          break;
+        }
+        if (toolMissing) {
           rec = {
             id: cmd.id,
             exit_code: null,

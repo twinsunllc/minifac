@@ -76,8 +76,28 @@ dispatch and fails with `invalid_with`, as `check-merge` does.
   it backgrounded does not outlive the command. If something that left the
   group (with `setsid`) still holds the output pipes, the executor stops
   waiting for them after the same 5 s.
-- If the run stops consuming the node's events (an aborted run), the
+- When the run's abort signal fires (`RunOptions.abortSignal`, passed to
+  the executor as `RunContext.abortSignal`), the running command's group
+  gets SIGTERM, then SIGKILL after the same grace, and no further command
+  starts, under `continue_on_red` too. A command already running when the
+  signal fires is red whatever it then exits with, and its generated
+  reason is `<id>: aborted`. The
+  node then ends, and the runner reports the run as `user_quit`. The
+  runner checks the signal only between events, so without this a silent
+  command would run until it exited or timed out.
+- If the consumer stops iterating the node's events before they end, the
   running command's group gets SIGKILL.
+- Because each command is in its own process group, a signal sent to
+  minifac's group (a terminal's Ctrl-C, a supervisor's SIGTERM) does not
+  reach it. So the executor tracks the groups of the commands it has
+  running and, from the first spawn on, SIGKILLs them on the process's
+  `exit` and on SIGINT, SIGTERM and SIGHUP. Its signal listener is
+  prepended. When no other listener exists, it removes itself and
+  re-raises the signal, so the process still ends by that signal, as it
+  did before. When the host process has its own listener, that listener
+  goes on to decide what happens. `killAllCommandGroups()` is exported for
+  an embedder that ends its process some other way. Nothing can run when
+  minifac itself gets SIGKILL, so command groups survive that.
 - A command is green iff it was spawned, did not time out, and its exit
   code is in `expect.exit`. A command ended by a signal has
   `exit_code: null` and is red. By default the node stops at the first red
@@ -134,8 +154,9 @@ When the node fails, its reason (`NodeResult.reason`,
    stdout (`/^REASON:[ \t]*(.*)$/`, the form `claude` nodes use);
 3. a generated reason naming the first red command:
    `<id>: exit N, expected [0]`, `<id>: host_missing <tool>`,
-   `<id>: timed out after Ns`, `<id>: killed by <signal>` or
-   `<id>: failed to start: <error>`.
+   `<id>: timed out after Ns`, `<id>: killed by <signal>`,
+   `<id>: aborted` or `<id>: failed to start: <error>`. A run aborted
+   before any red command, with no command running, gives `aborted`.
 
 A `REASON:` line does not fail a node by itself. A script that exits 0
 while printing one succeeds. `plan_gate` must exit non-zero to escalate.

@@ -358,6 +358,64 @@ edges: []
   );
 });
 
+// An embedder with its own SIGTERM handler: the executor's hook kills the
+// command groups and leaves the embedder's shutdown to run.
+describe("an embedder's own signal handling", () => {
+  const distCommand = path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "..",
+    "..",
+    "dist",
+    "executor",
+    "command.js",
+  );
+
+  it("SIGTERM kills the group and the embedder's handler still decides the exit", async () => {
+    if (!existsSync(distCommand)) {
+      console.warn(`skipping: ${distCommand} not present; run \`npm run build\` first.`);
+      return;
+    }
+    const script = `
+      import { CommandExecutor } from ${JSON.stringify(distCommand)};
+      process.once("SIGTERM", () => {
+        setTimeout(() => { console.log("graceful"); process.exit(7); }, 100);
+      });
+      const ctx = { factory: { name: "t", nodes: {}, edges: [] }, priorResults: [], nodeId: "n",
+        iteration: 1, cwd: ${JSON.stringify(repo)}, outputsDir: ${JSON.stringify(path.join(repo, "out"))} };
+      const node = { id: "n", executor: "command", with: { commands: [{ id: "c",
+        run: "sleep 120 & echo $! > ${repo}/gc.pid; echo up; wait" }] } };
+      for await (const e of new CommandExecutor().run(node, ctx)) {
+        if (e.kind === "stdout") console.log(e.line);
+      }
+    `;
+    const child = spawn(process.execPath, ["--input-type=module", "-e", script], {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let output = "";
+    const exited = new Promise<{ code: number | null; signal: string | null }>((resolve) =>
+      child.on("exit", (code, signal) => resolve({ code, signal })),
+    );
+    child.stderr.on("data", (c: Buffer) => {
+      output += c.toString();
+    });
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`no "up" line; output:\n${output}`)), 15_000);
+      child.stdout.on("data", (c: Buffer) => {
+        output += c.toString();
+        if (/^up$/m.test(output)) {
+          clearTimeout(timer);
+          resolve();
+        }
+      });
+    });
+    const gcPid = Number((await readFile(path.join(repo, "gc.pid"), "utf8")).trim());
+    child.kill("SIGTERM");
+    expect(await exited).toEqual({ code: 7, signal: null });
+    expect(output).toContain("graceful");
+    expect(await waitFor(() => !alive(gcPid))).toBe(true);
+  }, 20_000);
+});
+
 describe("CLI default registry", () => {
   class Buf extends Writable {
     text = "";

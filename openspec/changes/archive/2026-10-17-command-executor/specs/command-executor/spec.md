@@ -71,7 +71,7 @@ The executor SHALL run `commands` in declared order, each as `/bin/sh -c <run>` 
 
 ### Requirement: Process-group kill
 
-Each command SHALL run in its own process group. At `timeout_seconds` the executor SHALL send SIGTERM to the group, then SIGKILL after a grace (5 s by default) if the command's shell has not exited, and mark the command `timed_out`; a timed-out command SHALL be red. When the shell exits, the executor SHALL send SIGKILL to its group. When the executor's event stream is abandoned before it ends, the running command's group SHALL be sent SIGKILL.
+Each command SHALL run in its own process group. At `timeout_seconds` the executor SHALL send SIGTERM to the group, then SIGKILL after a grace (5 s by default) if the command's shell has not exited, and mark the command `timed_out`; a timed-out command SHALL be red. When the shell exits, the executor SHALL send SIGKILL to its group. When the executor's event stream is abandoned before it ends, the running command's group SHALL be sent SIGKILL. When the run's abort signal fires, the executor SHALL send SIGTERM to the running command's group, then SIGKILL after the grace, SHALL mark that command red, and SHALL start no further command; a command SHALL NOT be spawned once the signal has fired. The executor SHALL send SIGKILL to the group of every command it has running when the process exits and when it receives SIGINT, SIGTERM or SIGHUP; when no other listener for that signal is registered, the process SHALL then end by the signal.
 
 #### Scenario: Timeout kills a grandchild
 
@@ -87,6 +87,16 @@ Each command SHALL run in its own process group. At `timeout_seconds` the execut
 
 - **WHEN** a command backgrounds `sleep 60` and exits 0
 - **THEN** the command is green and the `sleep` is no longer alive after the node
+
+#### Scenario: An aborted run reaches a silent command
+
+- **WHEN** a run's abort signal fires while a command waits on a backgrounded `sleep 30`
+- **THEN** `runFactory` returns `user_quit` within 2 s and the `sleep` is no longer alive
+
+#### Scenario: A signal to minifac reaches the command's group
+
+- **WHEN** `minifac run` receives SIGTERM, SIGINT or SIGHUP while a command waits on a backgrounded `sleep`
+- **THEN** minifac ends by that signal, and neither the command's shell nor the `sleep` is alive
 
 ### Requirement: `tool` resolution and `host_missing`
 
@@ -132,7 +142,7 @@ With `result_from: <id>`, once that command has run, the executor SHALL parse it
 
 ### Requirement: Command failure reason
 
-When the node fails, the executor SHALL yield `failed` with `meta: { reason: "command_failed", sentinel, commands }`, and the runner SHALL take `sentinel` as `NodeResult.reason`. `sentinel` SHALL be, in order of precedence: the `result_parse:` reason; the text after the last `REASON:` line a command that ran printed on stdout; a generated reason naming the first red command (`<id>: exit N, expected [..]`, `<id>: host_missing <tool>`, `<id>: timed out after Ns`, `<id>: killed by <signal>`, `<id>: failed to start: <error>`). A `REASON:` line SHALL NOT fail a node whose commands all met their expectation.
+When the node fails, the executor SHALL yield `failed` with `meta: { reason: "command_failed", sentinel, commands }`, and the runner SHALL take `sentinel` as `NodeResult.reason`. `sentinel` SHALL be, in order of precedence: the `result_parse:` reason; the text after the last `REASON:` line a command that ran printed on stdout; a generated reason naming the first red command (`<id>: exit N, expected [..]`, `<id>: host_missing <tool>`, `<id>: timed out after Ns`, `<id>: killed by <signal>`, `<id>: aborted`, `<id>: failed to start: <error>`; `aborted` when the run was aborted before any command went red). A `REASON:` line SHALL NOT fail a node whose commands all met their expectation.
 
 #### Scenario: plan_gate shape
 

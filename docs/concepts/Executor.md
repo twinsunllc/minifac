@@ -61,6 +61,12 @@ reached: `id`, `exit_code`, `signal`, `duration_ms`, `host_missing`,
 `timed_out`, `met`, and `stdout_tail` / `stderr_tail` (each at most 8192
 bytes). Declare `outputs: { result: { type: value } }` to index it.
 
+Cancelling the run (its `abortSignal`) SIGTERMs the running command's
+group, SIGKILLs it after the grace, and starts no further command. SIGINT,
+SIGTERM or SIGHUP to minifac, or minifac's exit, SIGKILLs every running
+command's group first. An embedder that ends its process some other way
+calls `killAllCommandGroups()`.
+
 On failure the node's reason is the last `REASON: …` line a command printed
 on stdout, or else one naming the first red command
 (`test: exit 2, expected [0]`). A result that fails to parse outranks both.
