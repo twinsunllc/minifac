@@ -85,6 +85,11 @@ export interface RunContext {
    * Absent for nodes that declare no `resume:`; executors that speak
    * sessions forward it to their CLI's resume argument. */
   resumeSessionId?: string;
+  /** Per-command environment for the `command` executor, keyed by command
+   * id: the `MINIFAC_TOKEN_<n>` values the runner's shell-safe substitution
+   * of that command's `run` refers to (ADR 0050). Absent for every other
+   * executor. */
+  commandEnv?: Readonly<Record<string, Readonly<Record<string, string>>>>;
 }
 
 export type ResolvedNode = FactoryNode & { id: string };

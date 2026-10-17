@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { parseDocument } from "yaml";
 import { ZodError } from "zod";
+import { validateCommandWith } from "../executor/command.js";
 import { StepLoadError } from "./loader-error.js";
 import { type Step, StepSchema } from "./schema.js";
 
@@ -39,6 +40,12 @@ export async function loadStep(absPath: string): Promise<LoadedStep> {
   const data = doc.toJS();
   try {
     const step = StepSchema.parse(data);
+    // The command executor's `with:` is validated where the step is
+    // declared, so the error names the step file (ADR 0050).
+    if (step.executor === "command") {
+      const issue = validateCommandWith(step.with);
+      if (issue !== null) throw new StepLoadError(`Schema error at with.${issue}`, absolute);
+    }
     return { step, sourcePath: absolute };
   } catch (err) {
     if (err instanceof ZodError) {

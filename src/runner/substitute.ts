@@ -64,78 +64,128 @@ export function substitute(input: string, subs: Substitutions): string {
   return substituteOnce(first, subs);
 }
 
-function substituteOnce(input: string, subs: Substitutions): string {
-  let out = substitutePriorResults(input, subs);
-  out = substitutePriorResultFields(out, subs);
+/** Output of {@link substituteForShell}. */
+export interface ShellSubstitution {
+  /** `input` with every resolved token replaced by `"${MINIFAC_TOKEN_<n>}"`. */
+  text: string;
+  /** `MINIFAC_TOKEN_<n>` → the token's rendered value. */
+  env: Record<string, string>;
+}
+
+/**
+ * Shell-safe substitution for a command executor's `run` (ADR 0050). Same
+ * token grammar, pass-through rules and {@link TemplateSubstitutionError}
+ * cases as {@link substitute}, but a resolved token is never spliced into the
+ * text: it becomes a double-quoted reference to an environment variable, and
+ * the rendered value goes in `env` for the caller to hand the child. A value
+ * therefore reaches `/bin/sh` as data, whatever quotes, `$()` or newlines it
+ * holds. A token left verbatim (unknown namespace or field) stays verbatim.
+ *
+ * `substitute`'s second pass resolves a token a value itself carried (an
+ * input defaulting to `{{ run.outputs_dir }}`); here that pass runs on the
+ * value, so the env holds the same text `substitute` would have spliced.
+ */
+export function substituteForShell(input: string, subs: Substitutions): ShellSubstitution {
+  const env: Record<string, string> = {};
+  let n = 0;
+  const text = substituteOnce(input, subs, (value) => {
+    const name = `MINIFAC_TOKEN_${n++}`;
+    env[name] = substituteOnce(value, subs);
+    return `"\${${name}}"`;
+  });
+  return { text, env };
+}
+
+/** How a resolved token's value enters the output: as-is for `substitute`,
+ * as an env reference for `substituteForShell`. Pass-throughs never reach it. */
+type Emit = (value: string) => string;
+
+const emitValue: Emit = (value) => value;
+
+function substituteOnce(input: string, subs: Substitutions, emit: Emit = emitValue): string {
+  let out = substitutePriorResults(input, subs, emit);
+  out = substitutePriorResultFields(out, subs, emit);
   out = out.replace(TOKEN_REGEX, (match, ns: string, field: string, subPath: string) => {
-    if (ns === "run" && (field === "split" || field === "split_integration")) {
-      const run = subs.run;
-      if (!run) return match;
-      return renderRunContext(run[field] ?? null, subPath);
-    }
-    // Only the two run-context objects above have keys to walk.
-    if (subPath.length > 0) return match;
-    if (ns === "brief") {
-      const brief = subs.brief;
-      if (!brief) return match;
-      switch (field) {
-        case "change":
-          return brief.frontmatter.change;
-        case "factory":
-          return brief.frontmatter.factory;
-        case "body":
-          return brief.body;
-        case "base_branch":
-          return brief.frontmatter.base_branch ?? "";
-        case "model":
-          return brief.frontmatter.model ?? "";
-        default:
-          return match;
-      }
-    }
-    if (ns === "run") {
-      const run = subs.run;
-      if (!run) return match;
-      if (field === "cwd") {
-        return run.cwd ?? match;
-      }
-      if (field === "outputs_dir") {
-        return run.outputsDir ?? match;
-      }
-      if (field === "base_branch") {
-        return run.base_branch ?? match;
-      }
-      if (field === "feedback") {
-        // The human answer a resumed run carries (ADR 0042). The EMPTY STRING
-        // rather than a pass-through when absent: unlike `cwd` or
-        // `base_branch`, a step binding this token is asking "what did the
-        // human say", and "nobody said anything" is a real answer to that —
-        // handing the literal `{{ run.feedback }}` to the model instead would
-        // read as an instruction. Same convention as a missing `inputs.*` key.
-        return run.feedback ?? "";
-      }
-      // ADR 0043. Same empty-not-verbatim convention as `feedback`, each with
-      // the value that means "none": no resume seed, not a follow-up, no
-      // prior asks.
-      if (field === "resumed_at") {
-        return run.resumed_at ?? "";
-      }
-      if (field === "follow_up") {
-        return run.follow_up ?? "false";
-      }
-      if (field === "prior_asks") {
-        return run.prior_asks ?? "[]";
-      }
-      return match;
-    }
-    if (ns === "inputs") {
-      if (subs.inputs === undefined) return match;
-      if (!Object.hasOwn(subs.inputs, field)) return "";
-      return stringifyInputValue(subs.inputs[field]);
-    }
-    return match;
+    const value = resolveToken(subs, ns, field, subPath);
+    return value === null ? match : emit(value);
   });
   return out;
+}
+
+/** The rendered value of one `brief.*` / `run.*` / `inputs.*` token, or `null`
+ * when the token passes through verbatim. */
+function resolveToken(
+  subs: Substitutions,
+  ns: string,
+  field: string,
+  subPath: string,
+): string | null {
+  if (ns === "run" && (field === "split" || field === "split_integration")) {
+    const run = subs.run;
+    if (!run) return null;
+    return renderRunContext(run[field] ?? null, subPath);
+  }
+  // Only the two run-context objects above have keys to walk.
+  if (subPath.length > 0) return null;
+  if (ns === "brief") {
+    const brief = subs.brief;
+    if (!brief) return null;
+    switch (field) {
+      case "change":
+        return brief.frontmatter.change;
+      case "factory":
+        return brief.frontmatter.factory;
+      case "body":
+        return brief.body;
+      case "base_branch":
+        return brief.frontmatter.base_branch ?? "";
+      case "model":
+        return brief.frontmatter.model ?? "";
+      default:
+        return null;
+    }
+  }
+  if (ns === "run") {
+    const run = subs.run;
+    if (!run) return null;
+    if (field === "cwd") {
+      return run.cwd ?? null;
+    }
+    if (field === "outputs_dir") {
+      return run.outputsDir ?? null;
+    }
+    if (field === "base_branch") {
+      return run.base_branch ?? null;
+    }
+    if (field === "feedback") {
+      // The human answer a resumed run carries (ADR 0042). The EMPTY STRING
+      // rather than a pass-through when absent: unlike `cwd` or
+      // `base_branch`, a step binding this token is asking "what did the
+      // human say", and "nobody said anything" is a real answer to that —
+      // handing the literal `{{ run.feedback }}` to the model instead would
+      // read as an instruction. Same convention as a missing `inputs.*` key.
+      return run.feedback ?? "";
+    }
+    // ADR 0043. Same empty-not-verbatim convention as `feedback`, each with
+    // the value that means "none": no resume seed, not a follow-up, no
+    // prior asks.
+    if (field === "resumed_at") {
+      return run.resumed_at ?? "";
+    }
+    if (field === "follow_up") {
+      return run.follow_up ?? "false";
+    }
+    if (field === "prior_asks") {
+      return run.prior_asks ?? "[]";
+    }
+    return null;
+  }
+  if (ns === "inputs") {
+    if (subs.inputs === undefined) return null;
+    if (!Object.hasOwn(subs.inputs, field)) return "";
+    return stringifyInputValue(subs.inputs[field]);
+  }
+  return null;
 }
 
 /**
@@ -163,7 +213,7 @@ export function substituteInputs(input: string, inputs: Record<string, unknown>)
   return once(first);
 }
 
-function substitutePriorResults(input: string, subs: Substitutions): string {
+function substitutePriorResults(input: string, subs: Substitutions, emit: Emit): string {
   if (!PRIOR_RESULTS_TOKEN_REGEX.test(input)) return input;
   // Reset lastIndex on the global regex before re-using.
   PRIOR_RESULTS_TOKEN_REGEX.lastIndex = 0;
@@ -177,10 +227,10 @@ function substitutePriorResults(input: string, subs: Substitutions): string {
       const entry = outputs ? outputs[outputKey] : undefined;
       if (!entry) {
         // Not found → empty string (consistent with optional brief/inputs).
-        return "";
+        return emit("");
       }
       if (!isRead) {
-        return entry.path;
+        return emit(entry.path);
       }
       // :read suffix — directory outputs are not valid.
       if (entry.type === "directory") {
@@ -203,13 +253,15 @@ function substitutePriorResults(input: string, subs: Substitutions): string {
           `output too large for :read substitution (node "${nodeId}", output "${outputKey}", size ${size} bytes, cap ${PRIOR_RESULTS_READ_CAP} bytes)`,
         );
       }
+      let content: string;
       try {
-        return readFileSync(entry.path, "utf8");
+        content = readFileSync(entry.path, "utf8");
       } catch (err) {
         throw new TemplateSubstitutionError(
           `failed to read output for :read substitution (node "${nodeId}", output "${outputKey}", path "${entry.path}"): ${(err as Error).message}`,
         );
       }
+      return emit(content);
     },
   );
 }
@@ -220,14 +272,14 @@ function substitutePriorResults(input: string, subs: Substitutions): string {
  * with no prior result in this run, or a null reason, substitutes the
  * empty string — the same convention as a missing output key.
  */
-function substitutePriorResultFields(input: string, subs: Substitutions): string {
+function substitutePriorResultFields(input: string, subs: Substitutions, emit: Emit): string {
   if (!PRIOR_RESULTS_FIELD_TOKEN_REGEX.test(input)) return input;
   PRIOR_RESULTS_FIELD_TOKEN_REGEX.lastIndex = 0;
   return input.replace(PRIOR_RESULTS_FIELD_TOKEN_REGEX, (_match, nodeId: string, field: string) => {
     const result = subs.priorResults?.get(nodeId);
-    if (!result) return "";
-    if (field === "status") return result.status;
-    return result.reason ?? "";
+    if (!result) return emit("");
+    if (field === "status") return emit(result.status);
+    return emit(result.reason ?? "");
   });
 }
 
