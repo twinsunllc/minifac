@@ -96,7 +96,10 @@ The reason names the first violation:
 output_schema_mismatch: output "<key>" at <json-pointer>: <keyword> (<ajv message>)
 ```
 
-The pointer is Ajv's `instancePath`, `/` for the root. A `required`
+The pointer is Ajv's `instancePath`, an RFC 6901 JSON pointer: the
+empty string for the root (`/` would name the property `""`). The
+reason renders the root as `(root)`, as in `output "result" at (root):
+type (must be object)`; `schema_errors` keeps the empty string. A `required`
 violation points at the object missing the property; the message names
 it. A stderr line per violation and a `status` event
 (`meta.reason: "output_schema_mismatch"`, `mismatched_outputs`,

@@ -184,6 +184,45 @@ describe("output schema validation (ADR 0054)", () => {
     }
   });
 
+  describe("an optional (required: false) value output", () => {
+    const optionalNode: Factory["nodes"][string] = {
+      executor: "fake",
+      outputs: { result: { type: "value", required: false, schema: verdictSchema } },
+    };
+
+    it("present but violating its schema fails the node, routes on_failure and is not indexed", async () => {
+      const exec = new WritingExecutor((id) =>
+        id === "a" ? { result: "pass", status: succeeded } : { status: succeeded },
+      );
+      const seen: EmittedEvent[] = [];
+      const result = await runFactory(wrap(graph(optionalNode)), {
+        registry: registryWith(exec),
+        onEvent: (e) => seen.push(e),
+      });
+      expect(exec.ids()).toEqual(["a", "r"]);
+      expect(result.log[0]).toMatchObject({ nodeId: "a", status: "failed", outcome: "failure" });
+      const priorA = exec.dispatches[1]?.prior.find((p) => p.nodeId === "a");
+      expect(priorA).toMatchObject({ status: "failed", outcome: "failure", outputs: null });
+      // A root violation: RFC 6901's "" as data, `(root)` in the reason.
+      expect(priorA?.reason).toBe(
+        'output_schema_mismatch: output "result" at (root): type (must be object)',
+      );
+      expect(terminalStatuses(seen, "a")[1]).toMatchObject({
+        meta: {
+          reason: "output_schema_mismatch",
+          mismatched_outputs: ["result"],
+          schema_errors: { result: [expect.objectContaining({ pointer: "", keyword: "type" })] },
+        },
+      });
+    });
+
+    it("absent, succeeds and routes on_success", async () => {
+      const exec = new WritingExecutor(() => ({ status: succeeded }));
+      await runFactory(wrap(graph(optionalNode)), { registry: registryWith(exec) });
+      expect(exec.ids()).toEqual(["a", "s"]);
+    });
+  });
+
   it("a missing required output with a schema is still an error / missing_required_output", async () => {
     const exec = new WritingExecutor(() => ({ status: succeeded }));
     const result = await runFactory(wrap(graph(schemaNode)), { registry: registryWith(exec) });

@@ -83,4 +83,45 @@ describe("markBriefDone", () => {
     expect(result.moved).toBe(false);
     expect(result.warning).toMatch(/git mv/);
   });
+
+  it("two concurrent calls in one repo each move and commit their own brief", async () => {
+    // autorun --max-concurrent N with in-place briefs ends several runs at
+    // once, each calling markBriefDone against the same repo. Unserialised,
+    // one `git mv` or `git commit` lost the race for .git/index.lock, or one
+    // commit swept up both moves and the other found nothing to commit.
+    const repo = await makeRepo();
+    const changes = ["c1", "c2", "c3", "c4"];
+    for (const change of changes) {
+      await mkdir(path.join(repo, "inputs"), { recursive: true });
+      await writeFile(path.join(repo, "inputs", `${change}.md`), `---\nchange: ${change}\n---\n`);
+    }
+    shOrThrow(repo, ["git", "add", "."]);
+    shOrThrow(repo, ["git", "commit", "-q", "-m", "add briefs"]);
+
+    const results = await Promise.all(
+      changes.map((change) => markBriefDone({ change, runCwd: repo })),
+    );
+    for (const result of results) {
+      expect(result.warning).toBeUndefined();
+      expect(result.moved).toBe(true);
+    }
+    // Each commit carries exactly its own move.
+    for (let i = 0; i < changes.length; i++) {
+      const show = spawnSync(
+        "git",
+        ["show", "--no-renames", "--name-only", "--pretty=%s", `HEAD~${i}`],
+        {
+          cwd: repo,
+          encoding: "utf8",
+        },
+      );
+      const [subject, ...files] = show.stdout
+        .trim()
+        .split("\n")
+        .filter((l) => l.length > 0);
+      const change = subject?.replace(/^Mark (.*) done$/, "$1") ?? "";
+      expect(changes).toContain(change);
+      expect(files.sort()).toEqual([`inputs/${change}.md`, `inputs/done/${change}.md`]);
+    }
+  });
 });

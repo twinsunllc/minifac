@@ -38,14 +38,39 @@ function runGit(cwd: string, args: readonly string[]): Promise<ChildResult> {
   });
 }
 
+// One tail per working tree: the in-flight markBriefDone chain for that
+// `runCwd`. `git mv` and `git commit` both take the working tree's
+// index.lock, and `git commit` commits everything staged, so two calls
+// interleaving in one working tree (autorun ending several in-place runs at
+// once) either lose the lock or commit each other's move. Calls for
+// different working trees still run in parallel.
+const tails = new Map<string, Promise<unknown>>();
+
+function serialisePerWorkTree<T>(runCwd: string, work: () => Promise<T>): Promise<T> {
+  const key = path.resolve(runCwd);
+  const prev = tails.get(key) ?? Promise.resolve();
+  const next = prev.then(work, work);
+  const tail = next.catch(() => undefined);
+  tails.set(key, tail);
+  void tail.then(() => {
+    if (tails.get(key) === tail) tails.delete(key);
+  });
+  return next;
+}
+
 /**
  * Move a brief from `inputs/<change>.md` to `inputs/done/<change>.md` and
  * commit the move inside `runCwd`. Idempotent: if the source is already
  * gone and the destination exists, returns `{ moved: false }` without a
  * warning. Failures of `git mv` or `git commit` produce a warning string
  * but do not throw — callers SHALL still record the run as `succeeded`.
+ * Calls against the same `runCwd` within this process run one at a time.
  */
-export async function markBriefDone(input: MarkBriefDoneInput): Promise<MarkBriefDoneResult> {
+export function markBriefDone(input: MarkBriefDoneInput): Promise<MarkBriefDoneResult> {
+  return serialisePerWorkTree(input.runCwd, () => markBriefDoneNow(input));
+}
+
+async function markBriefDoneNow(input: MarkBriefDoneInput): Promise<MarkBriefDoneResult> {
   const sourceRel = path.posix.join("inputs", `${input.change}.md`);
   const destRel = path.posix.join("inputs", "done", `${input.change}.md`);
   const sourceAbs = path.join(input.runCwd, "inputs", `${input.change}.md`);

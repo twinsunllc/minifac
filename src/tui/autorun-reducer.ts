@@ -1,4 +1,5 @@
 import type { AutoMergeFailEventReason, AutorunEvent } from "../cli/autorun.js";
+import { formatFactoryLoadWarning } from "../factory/loader.js";
 import { type RunState, type RunStateInit, createInitialRunState } from "./reducer.js";
 
 export type BriefStatus =
@@ -31,6 +32,9 @@ export interface BriefListState {
   /** Process-level info: watch dir basename, max-concurrent (header). */
   watchBasename?: string;
   maxConcurrent?: number;
+  /** Factory load warnings (ADR 0053), each formatted with
+   *  `formatFactoryLoadWarning` and kept once however many runs report it. */
+  loadWarnings?: string[];
 }
 
 export type AutorunUIEvent =
@@ -113,8 +117,13 @@ function applyAutorunEvent(state: BriefListState, event: AutorunEvent): BriefLis
     case "startup":
     case "poll-start":
     case "info":
-    case "load-warning":
       return state;
+    case "load-warning": {
+      const line = formatFactoryLoadWarning(event.warning);
+      const existing = state.loadWarnings ?? [];
+      if (existing.includes(line)) return state;
+      return { ...state, loadWarnings: [...existing, line] };
+    }
     case "started":
       return upsertBrief(state, event.change, (row) => ({
         ...row,

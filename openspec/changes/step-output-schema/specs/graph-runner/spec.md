@@ -20,7 +20,9 @@ On a node whose resolved terminal status is `succeeded`:
   routes by `on_failure` edges and never by `on_error`. Its reason SHALL be
   `output_schema_mismatch: output "<key>" at <pointer>: <keyword>
   (<message>)` for the first violation, where `<pointer>` is the JSON
-  pointer into the value (`/` for the root). The runner SHALL emit a
+  pointer into the value, rendered as `(root)` when it is the root. Each
+  violation's pointer SHALL be an RFC 6901 JSON pointer, the empty string
+  for the root, wherever it is carried as data. The runner SHALL emit a
   stderr line beginning `output_schema_mismatch:` naming the node, the
   mismatched keys and the outputs directory, one stderr line per
   violation, and a `status` event with status `failed`, outcome

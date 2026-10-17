@@ -1,5 +1,7 @@
 // minifac viewer — vanilla ES module, no build step.
 
+import { edgeStyle } from "./edge-style.js";
+
 const state = {
   factories: [],
   selectedFactoryId: null,
@@ -264,6 +266,9 @@ function drawGraph(factory) {
     </marker>
     <marker id="arrow-fail" viewBox="0 -5 10 10" refX="10" refY="0" markerWidth="6" markerHeight="6" orient="auto">
       <path d="M0,-5L10,0L0,5" fill="#b06868" />
+    </marker>
+    <marker id="arrow-error" viewBox="0 -5 10 10" refX="10" refY="0" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M0,-5L10,0L0,5" fill="#ffae8a" />
     </marker>`;
   svg.appendChild(defs);
 
@@ -271,8 +276,7 @@ function drawGraph(factory) {
     const a = layout.pos[e.from];
     const b = layout.pos[e.to];
     if (!a || !b) continue;
-    const cls = `edge-path${e.when === "on_failure" ? " on-failure" : ""}`;
-    const marker = e.when === "on_failure" ? "url(#arrow-fail)" : "url(#arrow)";
+    const { cls, marker } = edgeStyle(e.when);
     const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
     path.setAttribute("class", cls);
     path.setAttribute("d", edgePath(a, b));
@@ -323,7 +327,7 @@ function edgePath(a, b) {
 
 function layered(nodes, edges) {
   // Compute longest path from any source to each node along on_success edges.
-  // Cycles via on_failure are ignored for layout purposes; place those nodes
+  // Cycles via on_failure / on_error are ignored for layout purposes; place those nodes
   // at the level of their target.
   const inSucc = new Map(nodes.map((n) => [n, []]));
   for (const e of edges) {

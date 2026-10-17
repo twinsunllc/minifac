@@ -68,10 +68,24 @@ describe("validateOutputValue", () => {
     ]);
   });
 
-  it("renders the root pointer as `/`", () => {
-    expect(validateOutputValue(verdictSchema, "pass")).toEqual([
-      expect.objectContaining({ pointer: "/", keyword: "type" }),
-    ]);
+  it("gives a root violation RFC 6901's empty pointer, rendered as (root)", () => {
+    const violations = validateOutputValue(verdictSchema, "pass");
+    expect(violations).toEqual([expect.objectContaining({ pointer: "", keyword: "type" })]);
+    expect(describeViolation("result", violations[0] as never)).toBe(
+      'output "result" at (root): type (must be object)',
+    );
+  });
+
+  it("keeps a nested pointer as is", () => {
+    const schema = {
+      type: "object",
+      properties: { a: { type: "array", items: { type: "string" } } },
+    };
+    const [v] = validateOutputValue(schema, { a: [1] });
+    expect(v?.pointer).toBe("/a/0");
+    expect(describeViolation("result", v as never)).toBe(
+      'output "result" at /a/0: type (must be string)',
+    );
   });
 
   it("reports every violation (allErrors)", () => {

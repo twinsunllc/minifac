@@ -403,4 +403,40 @@ describe("autorunReducer", () => {
       expect(s.briefs[0]?.autoMergeFailReason).toBe("conflict");
     });
   });
+
+  describe("load-warning", () => {
+    const warning = {
+      code: "uncovered_cycle" as const,
+      sourcePath: "/repo/examples/fake.yaml",
+      nodes: ["only", "review"],
+      edge: { from: "review", to: "only", when: "on_failure" },
+      message: "cycle only → review → only has no budget",
+    };
+
+    it("keeps the formatted warning, once however many runs report it", () => {
+      let s = createInitialBriefListState();
+      s = autorunReducer(s, ev({ kind: "load-warning", ts: 0, change: "foo", warning }));
+      s = autorunReducer(s, ev({ kind: "load-warning", ts: 1, change: "bar", warning }));
+      expect(s.loadWarnings).toEqual([
+        "warning: /repo/examples/fake.yaml: cycle only → review → only has no budget",
+      ]);
+      expect(s.briefs).toHaveLength(0);
+    });
+
+    it("keeps distinct warnings in arrival order", () => {
+      let s = createInitialBriefListState();
+      s = autorunReducer(s, ev({ kind: "load-warning", ts: 0, change: "foo", warning }));
+      s = autorunReducer(
+        s,
+        ev({
+          kind: "load-warning",
+          ts: 1,
+          change: "bar",
+          warning: { ...warning, sourcePath: "/repo/examples/other.yaml" },
+        }),
+      );
+      expect(s.loadWarnings).toHaveLength(2);
+      expect(s.loadWarnings?.[1]).toContain("/repo/examples/other.yaml");
+    });
+  });
 });

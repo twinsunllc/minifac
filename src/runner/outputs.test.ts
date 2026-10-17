@@ -134,7 +134,7 @@ describe("validateDeclaredOutputs — value `schema:` (ADR 0054)", () => {
     const res = await validateDeclaredOutputs(node(false), dir);
     expect(res.mismatched).toEqual(["result"]);
     expect(res.violations.result).toEqual([
-      expect.objectContaining({ pointer: "/", keyword: "required" }),
+      expect.objectContaining({ pointer: "", keyword: "required" }),
     ]);
   });
 

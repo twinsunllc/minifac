@@ -447,7 +447,11 @@ export async function autorunAction(input: AutorunActionInput): Promise<number> 
       input.buildRegistry,
       !resolved.noAutoMerge,
       resolved.strictBudgets,
-      (change, warning) => emit({ kind: "load-warning", ts: now(), change, warning }),
+      (change, warning) => {
+        const ev: AutorunEvent = { kind: "load-warning", ts: now(), change, warning };
+        emit(ev);
+        renderer?.onEvent(ev);
+      },
     );
 
   // In-process mutex serializing the auto-merge step across concurrent

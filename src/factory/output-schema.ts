@@ -28,7 +28,8 @@ const ajv = new Ajv2020({
 });
 
 export interface OutputSchemaViolation {
-  /** JSON pointer into the value (Ajv's `instancePath`); `/` for the root. */
+  /** RFC 6901 JSON pointer into the value (Ajv's `instancePath`): `""` for
+   *  the root, which {@link describeViolation} renders as `(root)`. */
   pointer: string;
   /** The violated JSON Schema keyword, e.g. `enum`, `required`, `type`. */
   keyword: string;
@@ -87,13 +88,15 @@ export function validateOutputValue(
   const fn = compile(schema);
   if (fn(value)) return [];
   return (fn.errors ?? []).map((e) => ({
-    pointer: e.instancePath === "" ? "/" : e.instancePath,
+    pointer: e.instancePath,
     keyword: e.keyword,
     message: e.message ?? "",
   }));
 }
 
-/** Render a violation the way the node's failure reason does. */
+/** Render a violation the way the node's failure reason does. The root
+ *  pointer, `""`, reads as `(root)`. */
 export function describeViolation(key: string, v: OutputSchemaViolation): string {
-  return `output "${key}" at ${v.pointer}: ${v.keyword} (${v.message})`;
+  const at = v.pointer === "" ? "(root)" : v.pointer;
+  return `output "${key}" at ${at}: ${v.keyword} (${v.message})`;
 }

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { ExecutorRegistry } from "../executor/registry.js";
 import type { EmittedEvent } from "../executor/types.js";
-import type { LoadedFactory } from "../factory/loader.js";
+import { type LoadedFactory, formatFactoryLoadWarning } from "../factory/loader.js";
 import type { RunResult } from "../runner/result.js";
 import { runFactory } from "../runner/run.js";
 import type { ListRunsFilter, RunStore, StoredEvent, StoredRun } from "../storage/run-store.js";
@@ -212,6 +212,17 @@ export class RunRegistry {
     };
     this.runs.set(id, record);
     this.subscribers.set(id, new Set());
+
+    // Factory load warnings (ADR 0053) open the run's event log, so a
+    // subscriber, and any later replay, sees them before the run's output.
+    for (const warning of factory.warnings ?? []) {
+      this.recordEvent(id, {
+        nodeId: "__runner__",
+        iteration: 0,
+        emittedAt: 0,
+        event: { kind: "stderr", line: formatFactoryLoadWarning(warning) },
+      });
+    }
 
     const loaded = applyCwdOverride(factory, input.cwd);
     const registry = this.buildRegistry();

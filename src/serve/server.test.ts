@@ -15,6 +15,24 @@ nodes:
 edges: []
 `;
 
+// F9 (ADR 0053): the review → a loop has no budget; the outer loop does.
+const UNCOVERED_YAML = `name: uncovered
+nodes:
+  a:
+    executor: test
+    start: true
+  review:
+    executor: test
+  done:
+    executor: test
+    terminal: true
+edges:
+  - { from: a, to: review }
+  - { from: review, to: a, when: on_failure }
+  - { from: review, to: done }
+  - { from: done, to: a, when: on_failure, max_traversals: 1 }
+`;
+
 const BROKEN_YAML = `name: bad
 nodes:
   oops:
@@ -154,6 +172,48 @@ describe("startDaemon http API", () => {
     const body = (await r.json()) as { id: string; status: string };
     expect(body.id).toBeTruthy();
     expect(body.status).toBe("running");
+  });
+
+  it("POST /api/runs returns an empty warnings array for a capped factory", async () => {
+    await writeFile(path.join(dir, "hello.yaml"), HELLO_YAML);
+    h = await start({ dir, web: webDir });
+    const r = await fetch(`${h.base}/api/runs`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ factoryId: "hello" }),
+    });
+    expect(r.status).toBe(201);
+    const body = (await r.json()) as { warnings: unknown[] };
+    expect(body.warnings).toEqual([]);
+  });
+
+  it("a run of an uncovered-cycle factory carries the load warning in its 201 body and events", async () => {
+    await writeFile(path.join(dir, "uncovered.yaml"), UNCOVERED_YAML);
+    h = await start({ dir, web: webDir });
+    const post = await fetch(`${h.base}/api/runs`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ factoryId: "uncovered" }),
+    });
+    expect(post.status).toBe(201);
+    const body = (await post.json()) as {
+      id: string;
+      warnings: Array<{ code: string; sourcePath: string; nodes: string[] }>;
+    };
+    expect(body.warnings).toHaveLength(1);
+    expect(body.warnings[0]?.code).toBe("uncovered_cycle");
+    expect(body.warnings[0]?.sourcePath).toBe(path.join(dir, "uncovered.yaml"));
+
+    await new Promise((r) => setTimeout(r, 100));
+    const r = await fetch(`${h.base}/api/runs/${body.id}/events`);
+    expect(r.status).toBe(200);
+    const text = await r.text();
+    // The warning is the run's first event, ahead of the run's own output.
+    const first = text.split("\n\n").find((frame) => frame.includes("data:")) ?? "";
+    expect(first).toContain("event: stderr");
+    expect(first).toContain('"nodeId":"__runner__"');
+    expect(first).toContain(`warning: ${path.join(dir, "uncovered.yaml")}: `);
+    expect(text).toContain("event: run_end");
   });
 
   it("POST /api/runs returns 404 for unknown factory", async () => {

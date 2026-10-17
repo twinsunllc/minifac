@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Writable } from "node:stream";
@@ -106,6 +106,14 @@ describe("autorunAction", () => {
     await writeBrief(repo, "active", "foo");
     await writeBrief(repo, "active", "bar");
     await writeBrief(repo, "active", "baz");
+    // enumerateBriefs orders by mtime, then by change name. Three writes in
+    // a row can share one mtime (a coarse filesystem timestamp tick), and
+    // the name tie-break then picks bar and baz, not foo and bar. Pin the
+    // mtimes so the FIFO order this test asserts is the one on disk.
+    for (const [i, change] of ["foo", "bar", "baz"].entries()) {
+      const t = new Date(Date.UTC(2026, 0, 1, 0, 0, i));
+      await utimes(path.join(repo, "inputs", `${change}.md`), t, t);
+    }
     const store = await freshStore();
     const rec = makeRecorder(false);
     const out = new BufferStream();
