@@ -552,6 +552,7 @@ export class CommandExecutor implements NodeExecutor {
           reason: "invalid_with",
           message: `Invalid \`with:\` for executor \`command\`: ${issue}`,
         },
+        outcome: "error",
       };
       return;
     }
@@ -559,6 +560,10 @@ export class CommandExecutor implements NodeExecutor {
 
     const records: CommandRecord[] = [];
     let firstRed: string | null = null;
+    // ADR 0052: a red command that never produced an exit code of its own
+    // choosing (host_missing, spawn error, timeout, signal, abort) is an
+    // error, not a judged failure.
+    let errored = false;
     let lastReason: string | null = null;
     let resultFromStdout: string | null | undefined;
     let running: RunningCommand | null = null;
@@ -635,6 +640,16 @@ export class CommandExecutor implements NodeExecutor {
         }
 
         records.push(rec);
+        if (
+          !rec.met &&
+          (rec.host_missing ||
+            spawnError !== null ||
+            cmdAborted ||
+            rec.timed_out ||
+            rec.exit_code === null)
+        ) {
+          errored = true;
+        }
         if (cmdAborted) {
           aborted = true;
           if (firstRed === null) firstRed = redReason(cmd, rec, spawnError, true);
@@ -651,6 +666,7 @@ export class CommandExecutor implements NodeExecutor {
       if (running !== null) killGroup(running.pid, "SIGKILL");
     }
     if (aborted && firstRed === null) firstRed = "aborted";
+    if (aborted) errored = true;
 
     // Emitted keys. A `result_from` command that never ran (an earlier red
     // stopped the node) emits nothing; a `result_file` that is absent while
@@ -693,6 +709,7 @@ export class CommandExecutor implements NodeExecutor {
       kind: "status",
       status: "failed",
       meta: { reason: "command_failed", sentinel: reason, commands: records },
+      ...(errored || parseFailure !== null ? { outcome: "error" as const } : {}),
     };
   }
 

@@ -186,7 +186,8 @@ describe("ClaudeExecutor", () => {
     const events = await collect(executor, makeNode(), makeCtx());
     expect(events).toEqual([
       { kind: "stderr", line: "oops" },
-      { kind: "status", status: "failed", meta: { exitCode: 1 } },
+      // No sentinel: the model produced no judgment (ADR 0052).
+      { kind: "status", status: "failed", meta: { exitCode: 1 }, outcome: "error" },
     ]);
   });
 

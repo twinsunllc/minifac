@@ -554,6 +554,7 @@ describe("runFactory", () => {
         "iteration",
         "nodeId",
         "nudges_used",
+        "outcome",
         "outputs",
         "reason",
         "session_id",
@@ -562,6 +563,7 @@ describe("runFactory", () => {
       ].sort(),
     );
     expect(entry?.nudges_used).toBe(0);
+    expect(entry?.outcome).toBe("success");
   });
 
   it("P on iteration 2 sees P iter-1 result and V iter-1 result", async () => {
@@ -724,10 +726,11 @@ describe("runFactory", () => {
       registry: reg,
       onEvent: (e) => seen.push(e),
     });
+    // The terminal status is delivered with its outcome set (ADR 0052).
     expect(seen.map((s) => s.event)).toEqual([
       { kind: "stdout", line: "x" },
       { kind: "stdout", line: "y" },
-      succeeded,
+      { ...succeeded, outcome: "success" },
     ]);
   });
 

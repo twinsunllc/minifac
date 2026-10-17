@@ -23,6 +23,7 @@ interface StatementSyncInstance {
   get(...params: unknown[]): unknown;
   all(...params: unknown[]): unknown[];
 }
+import type { NodeOutcome } from "../executor/types.js";
 import type {
   AppendEventInput,
   CreateRunInput,
@@ -153,7 +154,8 @@ export class SqliteRunStore implements RunStore {
       this.db
         .prepare(
           `UPDATE node_executions
-              SET status = ?, ended_at = ?, sentinel_status = ?, exit_code = ?, session_id = ?
+              SET status = ?, ended_at = ?, sentinel_status = ?, exit_code = ?, session_id = ?,
+                  outcome = ?
             WHERE run_id = ? AND node_id = ? AND iteration = ?`,
         )
         .run(
@@ -162,6 +164,7 @@ export class SqliteRunStore implements RunStore {
           end.sentinelStatus ?? null,
           end.exitCode ?? null,
           end.sessionId ?? null,
+          end.outcome ?? null,
           runId,
           nodeId,
           iteration,
@@ -171,8 +174,9 @@ export class SqliteRunStore implements RunStore {
       this.db
         .prepare(
           `INSERT INTO node_executions
-            (run_id, node_id, iteration, status, started_at, ended_at, sentinel_status, exit_code, session_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            (run_id, node_id, iteration, status, started_at, ended_at, sentinel_status, exit_code, session_id,
+             outcome)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           runId,
@@ -184,6 +188,7 @@ export class SqliteRunStore implements RunStore {
           end.sentinelStatus ?? null,
           end.exitCode ?? null,
           end.sessionId ?? null,
+          end.outcome ?? null,
         );
     }
   }
@@ -257,7 +262,7 @@ export class SqliteRunStore implements RunStore {
   async getNodeExecutions(runId: RunId): Promise<NodeExecutionRow[]> {
     const rows = this.db
       .prepare(
-        `SELECT run_id, node_id, iteration, status, started_at, ended_at, session_id
+        `SELECT run_id, node_id, iteration, status, started_at, ended_at, session_id, outcome
            FROM node_executions
           WHERE run_id = ?
           ORDER BY node_id ASC, iteration ASC`,
@@ -270,6 +275,7 @@ export class SqliteRunStore implements RunStore {
       started_at: number;
       ended_at: number | null;
       session_id: string | null;
+      outcome: string | null;
     }>;
     return rows.map((r) => ({
       runId: r.run_id,
@@ -279,6 +285,7 @@ export class SqliteRunStore implements RunStore {
       startedAt: r.started_at,
       endedAt: r.ended_at ?? null,
       sessionId: r.session_id ?? null,
+      outcome: isNodeOutcome(r.outcome) ? r.outcome : null,
     }));
   }
 
@@ -395,6 +402,11 @@ interface EventRow {
   kind: StoredEventKind;
   payload: string;
   emitted_at: number;
+}
+
+/** A stored `node_executions.outcome` the runner could have written. */
+function isNodeOutcome(v: string | null): v is NodeOutcome {
+  return v === "success" || v === "failure" || v === "error";
 }
 
 function rowToStoredRun(r: RunRow): StoredRun {

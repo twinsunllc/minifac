@@ -7,6 +7,7 @@
  * See `openspec/changes/run-history-persistence/design.md`.
  */
 
+import type { NodeOutcome } from "../executor/types.js";
 import type { NodeOutputIndex, NodeOutputType } from "../factory/schema.js";
 import type { LibraryPin } from "../library/library.js";
 
@@ -78,6 +79,12 @@ export interface RecordNodeEndInput {
    * finished run back to the session transcript (e.g. for splitting cost
    * by model across a resume cascade). */
   sessionId?: string | null;
+  /** The dispatch's outcome (ADR 0052): `success`, a judged `failure`, or an
+   * `error` where no judgment was produced. Absent or `null` stores `null`
+   * (a skipped node, or a store written by a caller that does not set it).
+   * Optional so a structurally typed store built against an older minifac
+   * still type-checks. */
+  outcome?: NodeOutcome | null;
   at: number;
 }
 
@@ -125,6 +132,11 @@ export interface NodeExecutionRow {
   startedAt: number;
   endedAt: number | null;
   sessionId: string | null;
+  /** `RecordNodeEndInput.outcome` as stored; `null` for a row written
+   * without one (schema v5 and earlier, a skipped node, a running node).
+   * Optional so an implementation of the optional `getNodeExecutions`
+   * built against an older minifac still type-checks. */
+  outcome?: NodeOutcome | null;
 }
 
 export interface NodeOutputRow {

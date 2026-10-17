@@ -1,5 +1,14 @@
 import type { Factory, FactoryNode, NodeOutputIndex } from "../factory/schema.js";
 
+/**
+ * How a node dispatch ended (ADR 0052). `success` and `failure` are the
+ * node's own judgment; `error` means the executor could not produce one
+ * (crash, timeout, API or rate-limit failure, unparseable result, invalid
+ * configuration). An `error` routes on `on_error` edges when the node
+ * declares any, and on `on_failure` edges otherwise.
+ */
+export type NodeOutcome = "success" | "failure" | "error";
+
 export type NodeEvent =
   | { kind: "stdout"; line: string }
   | { kind: "stderr"; line: string }
@@ -7,6 +16,11 @@ export type NodeEvent =
       kind: "status";
       status: "started" | "succeeded" | "failed";
       meta?: unknown;
+      /** Set to `error` on a `failed` status when the executor could not
+       * produce a judgment (ADR 0052). Absent means `success` for
+       * `succeeded` and `failure` for `failed`. The runner sets it on every
+       * terminal status event it delivers, its own and the executor's. */
+      outcome?: NodeOutcome;
     }
   // Runner-originated event: a one-line operator-visible narration of an
   // intervention the runner is performing on the executor's behalf
@@ -30,6 +44,11 @@ export interface NodeResult {
   nodeId: string;
   iteration: number;
   status: "succeeded" | "failed";
+  /** The dispatch's outcome (ADR 0052): `success`, a judged `failure`, or an
+   * `error` where no judgment was produced. The runner always sets it;
+   * optional so a caller that builds NodeResults itself (a resume) still
+   * type-checks, and absent reads as `status`'s outcome. */
+  outcome?: NodeOutcome;
   reason: string | null;
   startedAt: number;
   endedAt: number;

@@ -39,7 +39,7 @@ describe("SqliteRunStore", () => {
     }
   });
 
-  it("creates the DB file lazily and applies migrations through v5", async () => {
+  it("creates the DB file lazily and applies migrations through v6", async () => {
     const dbPath = path.join(dir, "nested", "runs.db");
     store = SqliteRunStore.open(dbPath);
     // Verify by opening a parallel read-only handle.
@@ -52,7 +52,7 @@ describe("SqliteRunStore", () => {
       const ver = inspector
         .prepare("SELECT COALESCE(MAX(version), 0) AS v FROM schema_version")
         .get() as { v: number };
-      expect(ver.v).toBe(5);
+      expect(ver.v).toBe(6);
       const tables = inspector
         .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
         .all() as Array<{ name: string }>;
@@ -142,7 +142,7 @@ describe("SqliteRunStore", () => {
       const ver = inspector
         .prepare("SELECT COALESCE(MAX(version), 0) AS v FROM schema_version")
         .get() as { v: number };
-      expect(ver.v).toBe(5);
+      expect(ver.v).toBe(6);
       const cols = inspector.prepare("PRAGMA table_info(runs)").all() as Array<{ name: string }>;
       expect(cols.map((c) => c.name)).toContain("branch_name");
     } finally {
@@ -230,7 +230,7 @@ describe("SqliteRunStore", () => {
       const ver = inspector
         .prepare("SELECT COALESCE(MAX(version), 0) AS v FROM schema_version")
         .get() as { v: number };
-      expect(ver.v).toBe(5);
+      expect(ver.v).toBe(6);
       const cols = inspector.prepare("PRAGMA table_info(node_executions)").all() as Array<{
         name: string;
       }>;
@@ -316,6 +316,18 @@ describe("SqliteRunStore", () => {
         ended_at INTEGER,
         branch_name TEXT
       );
+      CREATE TABLE node_executions (
+        run_id TEXT NOT NULL,
+        node_id TEXT NOT NULL,
+        iteration INTEGER NOT NULL,
+        status TEXT NOT NULL,
+        started_at INTEGER NOT NULL,
+        ended_at INTEGER,
+        sentinel_status TEXT,
+        exit_code INTEGER,
+        session_id TEXT,
+        PRIMARY KEY (run_id, node_id, iteration)
+      );
     `);
     seed
       .prepare(
@@ -333,7 +345,7 @@ describe("SqliteRunStore", () => {
       const ver = inspector
         .prepare("SELECT COALESCE(MAX(version), 0) AS v FROM schema_version")
         .get() as { v: number };
-      expect(ver.v).toBe(5);
+      expect(ver.v).toBe(6);
       const cols = inspector.prepare("PRAGMA table_info(runs)").all() as Array<{ name: string }>;
       expect(cols.map((c) => c.name)).toEqual(
         expect.arrayContaining(["library_repo", "library_ref", "library_sha"]),

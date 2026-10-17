@@ -111,6 +111,16 @@
 //    falls back to the existing exit-code semantics: code `0` → `succeeded`,
 //    non-zero → `failed`. `meta.exitCode` is always populated.
 //
+// ## Outcome — error vs failure (ADR 0052)
+//
+// A `failed` status carries `outcome: "error"` when the model produced no
+// judgment: `invalid_with`, `spawn_error`, `missing_binary`, and, with no
+// sentinel, a non-zero exit or a final `result` event with `is_error: true`
+// (API error, rate limit, `error_max_turns`, ...). The `is_error` case is
+// `failed` even on exit 0, and `meta.subtype` carries the result's subtype.
+// A `MINIFAC_STATUS: failed` sentinel is a judged failure whatever the exit
+// code, and carries no `outcome`.
+//
 // Only the FINAL `result` event is inspected — earlier sentinels (e.g. in
 // mid-conversation tool-call planning) are ignored. This is implemented by
 // keeping a rolling "last `result.result` seen" string and scanning it
@@ -405,6 +415,7 @@ export class ClaudeExecutor implements NodeExecutor {
         kind: "status",
         status: "failed",
         meta: { reason: "invalid_with", error: parsed.error.format() },
+        outcome: "error",
       };
       return;
     }
@@ -430,6 +441,7 @@ export class ClaudeExecutor implements NodeExecutor {
           reason: "spawn_error",
           error: (err as Error).message,
         },
+        outcome: "error",
       };
       return;
     }
@@ -487,6 +499,12 @@ export class ClaudeExecutor implements NodeExecutor {
     // arrive. JSON parse failures on a line are non-fatal: the line is
     // still emitted as a `stdout` event by the line-stream handler.
     const lastResultBox: { value: string | null } = { value: null };
+    // The same event's `is_error` / `subtype` (ADR 0052): with no sentinel,
+    // an error result means the model produced no judgment.
+    const lastResultErrorBox: { isError: boolean; subtype: string | null } = {
+      isError: false,
+      subtype: null,
+    };
 
     const bindLineStream = (
       stream: NodeJS.ReadableStream | null,
@@ -512,6 +530,10 @@ export class ClaudeExecutor implements NodeExecutor {
               typeof obj.result === "string"
             ) {
               lastResultBox.value = obj.result;
+            }
+            if (obj && typeof obj === "object" && obj.type === "result") {
+              lastResultErrorBox.isError = obj.is_error === true;
+              lastResultErrorBox.subtype = typeof obj.subtype === "string" ? obj.subtype : null;
             }
           } catch {
             /* non-JSON line; ignored for sentinel detection */
@@ -562,6 +584,7 @@ export class ClaudeExecutor implements NodeExecutor {
               kind: "status",
               status: "failed",
               meta: { reason: "missing_binary", binary: this.binary },
+              outcome: "error",
             };
             return;
           }
@@ -595,13 +618,26 @@ export class ClaudeExecutor implements NodeExecutor {
               }
             }
           }
-          if (exitCode === 0) {
+          if (lastResultErrorBox.isError) {
+            yield {
+              kind: "status",
+              status: "failed",
+              meta: {
+                exitCode,
+                ...(lastResultErrorBox.subtype !== null
+                  ? { subtype: lastResultErrorBox.subtype }
+                  : {}),
+              },
+              outcome: "error",
+            };
+          } else if (exitCode === 0) {
             yield { kind: "status", status: "succeeded", meta: { exitCode: 0 } };
           } else {
             yield {
               kind: "status",
               status: "failed",
               meta: { exitCode },
+              outcome: "error",
             };
           }
           return;
@@ -614,6 +650,7 @@ export class ClaudeExecutor implements NodeExecutor {
           kind: "status",
           status: "failed",
           meta: { reason: "missing_binary", binary: this.binary },
+          outcome: "error",
         };
         return;
       }
