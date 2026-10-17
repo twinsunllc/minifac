@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runCli } from "./cli.js";
 import { ExecutorRegistry } from "./executor/registry.js";
 import type { NodeEvent, NodeExecutor, ResolvedNode } from "./executor/types.js";
+import { SqliteRunStore } from "./storage/sqlite.js";
 
 class BufferStream extends Writable {
   chunks: string[] = [];
@@ -1572,5 +1573,41 @@ edges:
     expect(code).toBe(0);
     expect(err.text()).not.toContain("warning: ");
     expect(seen).toEqual(["plan", "implement", "review", "verify", "done"]);
+  });
+});
+
+describe("autorun --strict-budgets (ADR 0053)", () => {
+  // The startup event records the options autorunAction resolved, so it
+  // shows what runCli handed over for the flag.
+  async function startupOptions(flags: string[]): Promise<Record<string, unknown>> {
+    const dir = await makeFixtureDir();
+    await mkdir(path.join(dir, "inputs"), { recursive: true });
+    const out = new BufferStream();
+    const code = await runCli(
+      ["autorun", "--dry-run", "--json", ...flags, "--watch", path.join(dir, "inputs")],
+      {
+        stdout: out,
+        stderr: new BufferStream(),
+        runCwd: dir,
+        openRunStore: async () => SqliteRunStore.open(path.join(dir, "runs.db")),
+      },
+    );
+    expect(code).toBe(0);
+    const startup = out
+      .text()
+      .split("\n")
+      .filter((l) => l.length > 0)
+      .map((l) => JSON.parse(l) as { event: string; options?: Record<string, unknown> })
+      .find((l) => l.event === "startup");
+    expect(startup?.options).toBeDefined();
+    return startup?.options ?? {};
+  }
+
+  it("maps --strict-budgets to strictBudgets: true", async () => {
+    expect((await startupOptions(["--strict-budgets"])).strictBudgets).toBe(true);
+  });
+
+  it("leaves strictBudgets false without the flag", async () => {
+    expect((await startupOptions([])).strictBudgets).toBe(false);
   });
 });
