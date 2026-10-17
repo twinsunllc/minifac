@@ -11,8 +11,6 @@ conflict; a duplicate or oddly-ordered bullet is tidied when a release is cut.
 
 ## [Unreleased]
 
-## [0.2.0] — 2026-10-17
-
 ### Added
 
 - **`when: on_error` edges, and a node error distinct from a judged
@@ -35,6 +33,10 @@ conflict; a duplicate or oddly-ordered bullet is tidied when a release is cut.
   `claude` result with `is_error: true` and no sentinel is now `failed`
   even on exit 0. A `RunResult.log` entry now records the
   `missing_required_output` override as `failed`.
+
+## [0.2.0] — 2026-10-17
+
+### Added
 
 - **A `command` executor runs a node's declared commands without a model**
   (SCARIFW-2245, [ADR 0051](docs/decisions/0051-Command-Executor.md)).
