@@ -76,7 +76,7 @@ The executor SHALL run `commands` in declared order, each as `/bin/sh -c <run>` 
 
 ### Requirement: Process-group kill
 
-Each command SHALL run in its own process group. At `timeout_seconds` the executor SHALL send SIGTERM to the group, then SIGKILL after a grace (5 s by default) if the command's shell has not exited, and mark the command `timed_out`; a timed-out command SHALL be red. When the shell exits, the executor SHALL send SIGKILL to its group. When the executor's event stream is abandoned before it ends, the running command's group SHALL be sent SIGKILL. When the run's abort signal fires, the executor SHALL send SIGTERM to the running command's group, then SIGKILL after the grace, SHALL mark that command red, and SHALL start no further command; a command SHALL NOT be spawned once the signal has fired. The executor SHALL send SIGKILL to the group of every command it has running when the process exits and when it receives SIGINT, SIGTERM or SIGHUP; when no other listener for that signal is registered, the process SHALL then end by the signal.
+Each command SHALL run in its own process group. At `timeout_seconds` the executor SHALL send SIGTERM to the group, then SIGKILL after a grace (5 s by default) if the command's shell has not exited, and mark the command `timed_out`; a timed-out command SHALL be red. When the shell exits, the executor SHALL send SIGKILL to its group. When the executor's event stream is abandoned before it ends, the running command's group SHALL be sent SIGKILL. When the run's abort signal fires, the executor SHALL send SIGTERM to the running command's group, then SIGKILL after the grace, SHALL mark that command red, and SHALL start no further command; a command SHALL NOT be spawned once the signal has fired. The executor SHALL send SIGKILL to the group of every command it has running when the process exits. When the process receives SIGINT, SIGTERM or SIGHUP and no other listener for that signal is registered, the executor SHALL send SIGKILL to those groups and the process SHALL then end by the signal. When another listener for that signal is registered, the executor SHALL NOT signal any running command's group; the host owns the shutdown.
 
 #### Scenario: Timeout kills a grandchild
 
@@ -102,6 +102,16 @@ Each command SHALL run in its own process group. At `timeout_seconds` the execut
 
 - **WHEN** `minifac run` receives SIGTERM, SIGINT or SIGHUP while a command waits on a backgrounded `sleep`
 - **THEN** minifac ends by that signal, and neither the command's shell nor the `sleep` is alive
+
+#### Scenario: An embedder's drain lets a running command finish
+
+- **WHEN** a process with its own SIGTERM listener receives SIGTERM while a command runs `sleep 2; echo done; exit 0`, and the listener waits for the node before exiting
+- **THEN** the command is green, and once the process exits neither the command's shell nor its child is alive
+
+#### Scenario: The exit hook covers an embedder that exits mid-command
+
+- **WHEN** a process with its own SIGTERM listener calls `process.exit` from it while a command waits on a backgrounded `sleep 120`
+- **THEN** neither the command's shell nor the `sleep` is alive after the process exits
 
 ### Requirement: `tool` resolution and `host_missing`
 

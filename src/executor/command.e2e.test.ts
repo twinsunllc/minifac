@@ -358,8 +358,9 @@ edges: []
   );
 });
 
-// An embedder with its own SIGTERM handler: the executor's hook kills the
-// command groups and leaves the embedder's shutdown to run.
+// An embedder with its own SIGTERM handler owns the shutdown: the executor's
+// hook leaves running commands alone, and the `exit` hook kills what is left
+// when the embedder exits.
 describe("an embedder's own signal handling", () => {
   const distCommand = path.resolve(
     path.dirname(fileURLToPath(import.meta.url)),
@@ -370,23 +371,29 @@ describe("an embedder's own signal handling", () => {
     "command.js",
   );
 
-  it("SIGTERM kills the group and the embedder's handler still decides the exit", async () => {
-    if (!existsSync(distCommand)) {
-      console.warn(`skipping: ${distCommand} not present; run \`npm run build\` first.`);
-      return;
-    }
+  /** Run `CommandExecutor` in a child Node process with `handler` as its
+   * SIGTERM listener, send SIGTERM once the command prints `up`, and return
+   * the exit and everything printed. The child prints `status:<status>` and,
+   * on failure, `sentinel:<sentinel>`; the handler can await `done`, which
+   * resolves when the executor's stream ends. */
+  async function embed(run: string, handler: string) {
     const script = `
       import { CommandExecutor } from ${JSON.stringify(distCommand)};
-      process.once("SIGTERM", () => {
-        setTimeout(() => { console.log("graceful"); process.exit(7); }, 100);
-      });
+      let finish;
+      const done = new Promise((r) => { finish = r; });
+      process.once("SIGTERM", ${handler});
       const ctx = { factory: { name: "t", nodes: {}, edges: [] }, priorResults: [], nodeId: "n",
         iteration: 1, cwd: ${JSON.stringify(repo)}, outputsDir: ${JSON.stringify(path.join(repo, "out"))} };
       const node = { id: "n", executor: "command", with: { commands: [{ id: "c",
-        run: "sleep 120 & echo $! > ${repo}/gc.pid; echo up; wait" }] } };
+        run: ${JSON.stringify(run)} }] } };
       for await (const e of new CommandExecutor().run(node, ctx)) {
         if (e.kind === "stdout") console.log(e.line);
+        if (e.kind === "status" && e.status !== "started") {
+          console.log("status:" + e.status);
+          if (e.meta?.sentinel) console.log("sentinel:" + e.meta.sentinel);
+        }
       }
+      finish();
     `;
     const child = spawn(process.execPath, ["--input-type=module", "-e", script], {
       stdio: ["ignore", "pipe", "pipe"],
@@ -408,11 +415,41 @@ describe("an embedder's own signal handling", () => {
         }
       });
     });
+    const shPid = Number((await readFile(path.join(repo, "sh.pid"), "utf8")).trim());
     const gcPid = Number((await readFile(path.join(repo, "gc.pid"), "utf8")).trim());
     child.kill("SIGTERM");
-    expect(await exited).toEqual({ code: 7, signal: null });
-    expect(output).toContain("graceful");
-    expect(await waitFor(() => !alive(gcPid))).toBe(true);
+    return { exit: await exited, output: () => output, shPid, gcPid };
+  }
+
+  it("SIGTERM leaves a running command to finish green while the handler drains", async () => {
+    if (!existsSync(distCommand)) {
+      console.warn(`skipping: ${distCommand} not present; run \`npm run build\` first.`);
+      return;
+    }
+    const { exit, output, shPid, gcPid } = await embed(
+      `echo $$ > ${repo}/sh.pid; sleep 2 & echo $! > ${repo}/gc.pid; echo up; wait; echo done; exit 0`,
+      `() => { console.log("draining"); done.then(() => process.exit(7)); }`,
+    );
+    expect(exit).toEqual({ code: 7, signal: null });
+    expect(output()).toMatch(/draining[\s\S]*^done$[\s\S]*^status:succeeded$/m);
+    expect(output()).not.toContain("killed by");
+    expect(alive(shPid)).toBe(false);
+    expect(alive(gcPid)).toBe(false);
+  }, 20_000);
+
+  it("the exit hook kills the group when the handler exits mid-command", async () => {
+    if (!existsSync(distCommand)) {
+      console.warn(`skipping: ${distCommand} not present; run \`npm run build\` first.`);
+      return;
+    }
+    const { exit, output, shPid, gcPid } = await embed(
+      `echo $$ > ${repo}/sh.pid; sleep 120 & echo $! > ${repo}/gc.pid; echo up; wait`,
+      `() => { setTimeout(() => { console.log("graceful"); process.exit(7); }, 100); }`,
+    );
+    expect(exit).toEqual({ code: 7, signal: null });
+    expect(output()).toContain("graceful");
+    expect(output()).not.toContain("status:");
+    expect(await waitFor(() => !alive(shPid) && !alive(gcPid))).toBe(true);
   }, 20_000);
 });
 

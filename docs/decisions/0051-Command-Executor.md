@@ -91,13 +91,19 @@ dispatch and fails with `invalid_with`, as `check-merge` does.
   minifac's group (a terminal's Ctrl-C, a supervisor's SIGTERM) does not
   reach it. So the executor tracks the groups of the commands it has
   running and, from the first spawn on, SIGKILLs them on the process's
-  `exit` and on SIGINT, SIGTERM and SIGHUP. Its signal listener is
-  prepended. When no other listener exists, it removes itself and
+  `exit`. It also installs a prepended SIGINT, SIGTERM and SIGHUP
+  listener. When no other listener for the signal exists, the process is
+  about to die by it: the listener SIGKILLs the groups, removes itself and
   re-raises the signal, so the process still ends by that signal, as it
-  did before. When the host process has its own listener, that listener
-  goes on to decide what happens. `killAllCommandGroups()` is exported for
-  an embedder that ends its process some other way. Nothing can run when
-  minifac itself gets SIGKILL, so command groups survive that.
+  did before. When the host process has its own listener, the executor's
+  listener does nothing: the host owns the shutdown. A graceful drain
+  (scarif-worker's lifecycle, minifac's own `autorun`) therefore lets a
+  running command finish, and its group still dies on `exit` when the
+  host exits. A host that wants commands stopped sooner fires the run's
+  `abortSignal`, or calls the exported `killAllCommandGroups()`, which is
+  also for an embedder that ends its process without Node's `exit` (such
+  as `process.abort()`). Nothing can run when minifac itself gets
+  SIGKILL, so command groups survive that.
 - A command is green iff it was spawned, did not time out, and its exit
   code is in `expect.exit`. A command ended by a signal has
   `exit_code: null` and is red. By default the node stops at the first red

@@ -222,10 +222,11 @@ const liveGroups = new Set<number>();
  * module has spawned and not yet seen settle. Synchronous, so it is safe in a
  * `process.on("exit")` handler.
  *
- * The executor calls it itself from `exit` and from SIGINT, SIGTERM and
- * SIGHUP handlers it installs when it spawns its first command. An embedder
- * that ends its process some other way (for example `process.abort()`, or
- * handling a fatal signal itself before Node's `exit`) should call it first.
+ * The executor calls it itself from `exit`, and from the SIGINT, SIGTERM and
+ * SIGHUP handlers it installs when it spawns its first command when no other
+ * listener for that signal is registered. An embedder that handles those
+ * signals itself owns the drain; it, or one that ends its process some other
+ * way (for example `process.abort()`), should call this to stop commands.
  * Nothing can run on SIGKILL of minifac itself: groups survive that.
  */
 export function killAllCommandGroups(signal: NodeJS.Signals = "SIGKILL"): void {
@@ -242,9 +243,12 @@ let processHooksInstalled = false;
  *
  * The signal listener is prepended, so it runs before any listener the host
  * process has, while those are all still registered. When it is the only
- * listener, it removes itself and re-raises the signal, so the process ends
- * the way it would have with no listener at all. Otherwise it leaves the
- * host's own handling (a graceful shutdown, say) to proceed.
+ * listener, the process is about to die by that signal: it kills every live
+ * group, removes itself and re-raises the signal, so the process ends the way
+ * it would have with no listener at all. When the host has its own listener,
+ * it does nothing: the host owns the shutdown, and a graceful drain lets
+ * running commands finish. Their groups still die on `exit`, when the host
+ * fires the run's `abortSignal`, or when it calls {@link killAllCommandGroups}.
  */
 function installProcessHooks(): void {
   if (processHooksInstalled) return;
@@ -252,8 +256,8 @@ function installProcessHooks(): void {
   process.on("exit", () => killAllCommandGroups("SIGKILL"));
   for (const sig of FORWARDED_SIGNALS) {
     const onSignal = (): void => {
-      killAllCommandGroups("SIGKILL");
       if (process.listenerCount(sig) === 1) {
+        killAllCommandGroups("SIGKILL");
         process.removeListener(sig, onSignal);
         process.kill(process.pid, sig);
       }

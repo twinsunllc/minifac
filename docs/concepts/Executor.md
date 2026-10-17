@@ -62,10 +62,13 @@ reached: `id`, `exit_code`, `signal`, `duration_ms`, `host_missing`,
 bytes). Declare `outputs: { result: { type: value } }` to index it.
 
 Cancelling the run (its `abortSignal`) SIGTERMs the running command's
-group, SIGKILLs it after the grace, and starts no further command. SIGINT,
-SIGTERM or SIGHUP to minifac, or minifac's exit, SIGKILLs every running
-command's group first. An embedder that ends its process some other way
-calls `killAllCommandGroups()`.
+group, SIGKILLs it after the grace, and starts no further command.
+minifac's exit SIGKILLs every running command's group. So does SIGINT,
+SIGTERM or SIGHUP when nothing else listens for it, before minifac dies by
+the signal. A host with its own listener for the signal owns the drain:
+running commands are left to finish, and the host stops them sooner with
+the run's `abortSignal` or `killAllCommandGroups()`. An embedder that ends
+its process without Node's `exit` calls `killAllCommandGroups()` first.
 
 On failure the node's reason is the last `REASON: …` line a command printed
 on stdout, or else one naming the first red command

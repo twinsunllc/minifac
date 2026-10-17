@@ -21,8 +21,10 @@ conflict; a duplicate or oddly-ordered bullet is tidied when a release is cut.
   `result_file`. Each command runs as `/bin/sh -c` in its own process
   group, killed at its timeout (SIGTERM, then SIGKILL after 5 s), after
   it exits, and when the run is aborted. Running groups are also killed
-  when minifac exits or gets SIGINT, SIGTERM or SIGHUP;
-  `killAllCommandGroups()` is exported for embedders. A `tool` that does not resolve is red with `host_missing` and
+  when minifac exits, and on SIGINT, SIGTERM or SIGHUP when no other
+  listener for the signal is installed; a host with its own listener owns
+  the drain, and `killAllCommandGroups()` is exported for it. A `tool`
+  that does not resolve is red with `host_missing` and
   is never run or skipped. `<outputs_dir>/result.json` carries one entry
   per command with its exit code, duration and 8192-byte stdout/stderr
   tails, merged with the keys a `result_from` command or `result_file`
