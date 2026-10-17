@@ -8,7 +8,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ExecutorRegistry } from "../executor/registry.js";
 import type { NodeEvent, NodeExecutor, ResolvedNode, RunContext } from "../executor/types.js";
 import { SqliteRunStore } from "../storage/sqlite.js";
-import { autorunAction } from "./autorun.js";
+import type { BriefListState } from "../tui/autorun-reducer.js";
+import { createInkAutorunRenderer } from "../tui/autorun-renderer.js";
+import { type AutorunEvent, autorunAction } from "./autorun.js";
 
 class BufferStream extends Writable {
   chunks: string[] = [];
@@ -513,6 +515,59 @@ edges:
     expect(warning?.warning.sourcePath).toBe(path.join(repo, "examples", "fake.yaml"));
     const completed = lines.find((l) => l.event === "completed" && l.change === "foo");
     expect(completed?.status).toBe("succeeded");
+  });
+
+  it("TUI mode shows the load warning instead of suppressing it", async () => {
+    const { repo, storeDir } = await setupIntegrationRepo();
+    await writeF9AndCommit(repo);
+    const out = new BufferStream();
+    const frames = new BufferStream();
+    Object.assign(frames, { isTTY: false, columns: 200, rows: 40 });
+    const seen: AutorunEvent[] = [];
+    let last: BriefListState | undefined;
+    const code = await autorunAction({
+      options: { once: true, noAutoMerge: true, outputMode: "tui" },
+      cwd: repo,
+      io: { stdout: out, stderr: new BufferStream() },
+      buildRegistry,
+      openRunStore: async () => SqliteRunStore.open(path.join(storeDir, "runs.db")),
+      createAutorunTuiRenderer: (opts) => {
+        // The real Ink renderer, drawing into `frames`; the wrapper only
+        // records what reaches it and its state before autorun unmounts it.
+        const real = createInkAutorunRenderer({
+          ...opts,
+          stdout: frames as unknown as NodeJS.WriteStream,
+          stdin: Object.assign(new Readable({ read() {} }), {
+            isTTY: true,
+            setRawMode: () => undefined,
+            ref: () => undefined,
+            unref: () => undefined,
+          }) as unknown as NodeJS.ReadStream,
+          env: { LANG: "C" },
+        });
+        return {
+          ...real,
+          onEvent: (event) => {
+            seen.push(event);
+            real.onEvent(event);
+          },
+          unmount: (info) => {
+            last = real.snapshot();
+            real.unmount(info);
+          },
+        };
+      },
+    });
+    expect(code).toBe(0);
+    // The human/JSON logger stays suppressed in TUI mode.
+    expect(out.text()).not.toMatch(/load-warning/);
+    const warning = seen.find((e) => e.kind === "load-warning");
+    expect(warning).toMatchObject({ change: "foo", warning: { code: "uncovered_cycle" } });
+    const line = `warning: ${path.join(repo, "examples", "fake.yaml")}:`;
+    expect(last?.loadWarnings).toHaveLength(1);
+    expect(last?.loadWarnings?.[0]).toContain(line);
+    expect(frames.text()).toContain("warning: ");
+    expect(frames.text()).toContain("fake.yaml");
   });
 
   it("strictBudgets fails the run at factory load", async () => {

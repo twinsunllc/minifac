@@ -84,11 +84,25 @@ function BriefRow({
   );
 }
 
+function LoadWarnings({ warnings }: { warnings: string[] | undefined }): ReactElement | null {
+  if (!warnings || warnings.length === 0) return null;
+  return (
+    <Box flexDirection="column" marginTop={1}>
+      {warnings.map((line) => (
+        <Text key={line} color="yellow">
+          {line}
+        </Text>
+      ))}
+    </Box>
+  );
+}
+
 export function BriefListPane({ state, glyphs }: BriefListPaneProps): ReactElement {
   if (state.briefs.length === 0) {
     return (
       <Box flexDirection="column">
         <Text color="gray">(no briefs yet)</Text>
+        <LoadWarnings warnings={state.loadWarnings} />
       </Box>
     );
   }
@@ -105,6 +119,7 @@ export function BriefListPane({ state, glyphs }: BriefListPaneProps): ReactEleme
           tick={state.tick}
         />
       ))}
+      <LoadWarnings warnings={state.loadWarnings} />
     </Box>
   );
 }

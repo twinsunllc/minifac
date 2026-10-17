@@ -97,4 +97,24 @@ describe("BriefListPane", () => {
     expect(frame).toContain(ASCII_GLYPHS.succeededButUnmerged);
     expect(frame).toMatch(/unmerged: non-fast-forward/);
   });
+
+  it("renders factory load warnings below the brief rows", () => {
+    let state = withAllStatuses();
+    state = autorunReducer(state, {
+      kind: "load-warning",
+      ts: 2,
+      change: "running-row",
+      warning: {
+        code: "uncovered_cycle",
+        sourcePath: "/repo/examples/fake.yaml",
+        nodes: ["only", "review"],
+        edge: { from: "review", to: "only", when: "on_failure" },
+        message: "uncapped loop",
+      },
+    });
+    const { lastFrame } = render(<BriefListPane state={state} glyphs={ASCII_GLYPHS} />);
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("warning: /repo/examples/fake.yaml: uncapped loop");
+    expect(frame.indexOf("skipped-row")).toBeLessThan(frame.indexOf("warning:"));
+  });
 });
