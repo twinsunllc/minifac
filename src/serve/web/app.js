@@ -336,12 +336,28 @@ function edgePath(a, b) {
 
 function layered(nodes, edges) {
   // Compute longest path from any source to each node along on_success edges
-  // and value edges (ADR 0055), which lay out like on_success edges.
-  // Cycles via on_failure / on_error are ignored for layout purposes; place those nodes
-  // at the level of their target.
+  // and forward value edges (ADR 0055). A value edge whose target already
+  // reaches its source along on_success edges (a revise loop) is a back-edge
+  // and is skipped. Cycles via on_failure / on_error are ignored for layout
+  // purposes; place those nodes at the level of their target.
+  const outSucc = new Map(nodes.map((n) => [n, []]));
+  for (const e of edges) if (e.when === "on_success") outSucc.get(e.from)?.push(e.to);
+  const reaches = (from, to) => {
+    const seen = new Set();
+    const stack = [from];
+    while (stack.length > 0) {
+      const id = stack.pop();
+      if (id === to) return true;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      stack.push(...(outSucc.get(id) || []));
+    }
+    return false;
+  };
   const inSucc = new Map(nodes.map((n) => [n, []]));
   for (const e of edges) {
-    if (e.when !== "on_success" && valueConditionText(e.when) === null) continue;
+    const forwardValue = valueConditionText(e.when) !== null && !reaches(e.to, e.from);
+    if (e.when !== "on_success" && !forwardValue) continue;
     inSucc.get(e.to)?.push(e.from);
   }
   const level = new Map();
