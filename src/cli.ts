@@ -30,6 +30,7 @@ import {
 import { stepsAction } from "./cli/steps.js";
 import { CheckMergeExecutor } from "./executor/check-merge.js";
 import { ClaudeExecutor } from "./executor/claude.js";
+import { CommandExecutor } from "./executor/command.js";
 import { ExecutorRegistry } from "./executor/registry.js";
 import type { EmittedEvent } from "./executor/types.js";
 import { FactoryLoadError, loadFactory } from "./factory/loader.js";
@@ -78,6 +79,7 @@ function defaultRegistry(): ExecutorRegistry {
   const reg = new ExecutorRegistry();
   reg.register(new ClaudeExecutor());
   reg.register(new CheckMergeExecutor());
+  reg.register(new CommandExecutor());
   return reg;
 }
 

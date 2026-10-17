@@ -13,6 +13,25 @@ conflict; a duplicate or oddly-ordered bullet is tidied when a release is cut.
 
 ### Added
 
+- **A `command` executor runs a node's declared commands without a model**
+  (SCARIFW-2245, [ADR 0051](docs/decisions/0051-Command-Executor.md)).
+  `executor: command` takes `with.commands` (`id`, `run`, and optional
+  `cwd`, `timeout_seconds` (default 600), `expect.exit` (default 0, or a
+  list) and `tool`), plus `continue_on_red`, `result_from` and
+  `result_file`. Each command runs as `/bin/sh -c` in its own process
+  group, killed at its timeout (SIGTERM, then SIGKILL after 5 s), after
+  it exits, and when the run is aborted. Running groups are also killed
+  when minifac exits, and on SIGINT, SIGTERM or SIGHUP when no other
+  listener for the signal is installed; a host with its own listener owns
+  the drain, and `killAllCommandGroups()` is exported for it. A `tool`
+  that does not resolve is red with `host_missing` and
+  is never run or skipped. `<outputs_dir>/result.json` carries one entry
+  per command with its exit code, duration and 8192-byte stdout/stderr
+  tails, merged with the keys a `result_from` command or `result_file`
+  emits. The last `REASON:` line becomes the node's failure reason.
+  Template tokens reach `run` as environment variables, never spliced into
+  the shell. The `with:` is validated at load time, naming the file and
+  the key. Registered by default and exported as `CommandExecutor`.
 - **`{{ node.iteration }}`, `{{ edge.traversals }}` and
   `{{ edge.max_traversals }}` template tokens** (SCARIFW-2249, minifac#42,
   [ADR 0050](docs/decisions/0050-Iteration-Traversal-Tokens.md)). They

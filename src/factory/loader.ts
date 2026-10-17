@@ -1,4 +1,5 @@
 import path from "node:path";
+import { validateCommandWith } from "../executor/command.js";
 import {
   LibraryError,
   type LibraryGitOptions,
@@ -70,6 +71,7 @@ export async function loadFactory(
 
   validateNodeShape(resolved.factory, absolute);
   await inlineSteps(resolved.factory, absolute, callerCwd, layout);
+  validateCommandNodes(resolved.factory, absolute);
   validatePostSchema(resolved.factory, absolute);
 
   const loaded: LoadedFactory = {
@@ -177,6 +179,23 @@ async function inlineSteps(
       layout,
     });
     factory.nodes[nodeId] = inlined;
+  }
+}
+
+/**
+ * Validate the `with:` of every `executor: command` node against the command
+ * executor's schema (ADR 0051). Runs after step inlining, so it sees the
+ * `with:` a `uses:` node resolved to; a step file's own `with:` was already
+ * checked when the step loaded, so a failure here names an inline node (or a
+ * `with.secrets` a `uses:` node merged in). Other executors are untouched.
+ */
+function validateCommandNodes(factory: Factory, sourcePath: string): void {
+  for (const [nodeId, node] of Object.entries(factory.nodes)) {
+    if (node.executor !== "command") continue;
+    const issue = validateCommandWith(node.with);
+    if (issue !== null) {
+      throw new FactoryLoadError(`Node "${nodeId}" with.${issue}`, sourcePath);
+    }
   }
 }
 

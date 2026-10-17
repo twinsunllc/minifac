@@ -9,6 +9,7 @@ import {
   TemplateSubstitutionError,
   substitute,
   substituteBriefTokens,
+  substituteForShell,
   substituteInputs,
 } from "./substitute.js";
 
@@ -559,6 +560,76 @@ describe("substitute run.split and run.split_integration", () => {
     expect(
       substituteInputs("{{ run.split.parent_branch }} {{ inputs.a.b }} {{ inputs.a }}", { a: "v" }),
     ).toBe("{{ run.split.parent_branch }} {{ inputs.a.b }} v");
+  });
+});
+
+describe("substituteForShell (ADR 0051)", () => {
+  it("replaces each resolved token with a quoted env reference and carries the value", () => {
+    expect(
+      substituteForShell("printf '%s' {{ inputs.title }} > {{ run.outputs_dir }}/out", {
+        inputs: { title: "a'b" },
+        run: { outputsDir: "/out" },
+      }),
+    ).toEqual({
+      text: `printf '%s' "\${MINIFAC_TOKEN_0}" > "\${MINIFAC_TOKEN_1}"/out`,
+      env: { MINIFAC_TOKEN_0: "a'b", MINIFAC_TOKEN_1: "/out" },
+    });
+  });
+
+  it("leaves a pass-through token verbatim and out of the env", () => {
+    expect(substituteForShell("echo {{ brief.change }} {{ nope.x }}", {})).toEqual({
+      text: "echo {{ brief.change }} {{ nope.x }}",
+      env: {},
+    });
+  });
+
+  it("resolves priorResults outputs, :read, status and reason through the env", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "minifac-shell-"));
+    const file = path.join(dir, "v.json");
+    await writeFile(file, '{"k":"$(id)"}');
+    const map = new Map<string, NodeResult>([
+      [
+        "gate",
+        {
+          ...nodeResult("gate", { result: { type: "value", path: file, size: 12 } }),
+          status: "failed",
+          reason: "escalate: `rm -rf /`",
+        },
+      ],
+    ]);
+    const out = substituteForShell(
+      "{{ priorResults.gate.outputs.result }} {{ priorResults.gate.outputs.result:read }} {{ priorResults.gate.status }} {{ priorResults.gate.reason }}",
+      { priorResults: map },
+    );
+    expect(out.text).toBe(
+      `"\${MINIFAC_TOKEN_0}" "\${MINIFAC_TOKEN_1}" "\${MINIFAC_TOKEN_2}" "\${MINIFAC_TOKEN_3}"`,
+    );
+    expect(out.env).toEqual({
+      MINIFAC_TOKEN_0: file,
+      MINIFAC_TOKEN_1: '{"k":"$(id)"}',
+      MINIFAC_TOKEN_2: "failed",
+      MINIFAC_TOKEN_3: "escalate: `rm -rf /`",
+    });
+  });
+
+  it("resolves a token an input value itself carries into the env value", () => {
+    expect(
+      substituteForShell("cat {{ inputs.p }}", {
+        inputs: { p: "{{ run.outputs_dir }}/x" },
+        run: { outputsDir: "/out" },
+      }),
+    ).toEqual({ text: `cat "\${MINIFAC_TOKEN_0}"`, env: { MINIFAC_TOKEN_0: "/out/x" } });
+  });
+
+  it("throws TemplateSubstitutionError where substitute throws", () => {
+    const map = new Map<string, NodeResult>([
+      ["d", nodeResult("d", { logs: { type: "directory", path: "/tmp", size: 0 } })],
+    ]);
+    const input = "{{ priorResults.d.outputs.logs:read }}";
+    expect(() => substitute(input, { priorResults: map })).toThrow(TemplateSubstitutionError);
+    expect(() => substituteForShell(input, { priorResults: map })).toThrow(
+      TemplateSubstitutionError,
+    );
   });
 });
 

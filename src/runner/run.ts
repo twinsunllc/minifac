@@ -29,7 +29,12 @@ import {
   humanAnswerBlock,
   splitContextBlock,
 } from "./resume.js";
-import { type Substitutions, TemplateSubstitutionError, substitute } from "./substitute.js";
+import {
+  type Substitutions,
+  TemplateSubstitutionError,
+  substitute,
+  substituteForShell,
+} from "./substitute.js";
 
 export interface RunOptions {
   registry: ExecutorRegistry;
@@ -612,6 +617,9 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
       nodeSubs.priorResults = priorMap;
 
       let resolvedNode: ResolvedNode = { ...node, id: nodeId };
+      // `command` nodes only (ADR 0051): each command's `run` token env,
+      // keyed by command id, handed to the executor through the RunContext.
+      let commandEnv: Record<string, Record<string, string>> | undefined;
       if ((nodeSubs.brief || nodeSubs.run || nodeSubs.inputs) && node.with) {
         const nextWith: Record<string, unknown> = { ...node.with };
         let changed = false;
@@ -624,6 +632,15 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
           if (typeof node.with.base === "string") {
             nextWith.base = substitute(node.with.base, nodeSubs);
             changed = true;
+          }
+          if (node.executor === "command") {
+            const rendered = renderCommandWith(node.with, nodeSubs);
+            if (rendered !== null) {
+              nextWith.commands = rendered.commands;
+              if (rendered.resultFile !== undefined) nextWith.result_file = rendered.resultFile;
+              commandEnv = rendered.env;
+              changed = true;
+            }
           }
         } catch (err) {
           if (err instanceof TemplateSubstitutionError) {
@@ -763,6 +780,8 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
         outputsDir,
         mcpConfigPath,
         ...(resumeSessionId !== undefined ? { resumeSessionId } : {}),
+        ...(commandEnv !== undefined ? { commandEnv } : {}),
+        ...(options.abortSignal !== undefined ? { abortSignal: options.abortSignal } : {}),
       };
 
       const startedAt = Date.now() - runStart;
@@ -1329,9 +1348,44 @@ function extractReason(status: "succeeded" | "failed", meta: unknown): string | 
   if (m.reason === "resume_unavailable" || m.reason === "resume_unsupported") {
     return m.reason;
   }
-  if (m.reason !== "sentinel_failed") return null;
+  // The command executor's REASON line, or its generated reason (ADR 0051).
+  if (m.reason !== "sentinel_failed" && m.reason !== "command_failed") return null;
   if (typeof m.sentinel !== "string") return null;
   return m.sentinel.replace(/\s+$/, "");
+}
+
+/**
+ * Render a `command` node's `with:` (ADR 0051): each command's `run` through
+ * {@link substituteForShell}, so a token's value reaches the shell as an
+ * environment variable, and its `cwd` and the node's `result_file`, which are
+ * not shell, through {@link substitute}. Returns `null` when `commands` is not
+ * a list; the executor's own validation reports that. Entries that are not
+ * objects are passed on untouched for the same reason.
+ */
+function renderCommandWith(
+  withValue: Record<string, unknown>,
+  subs: Substitutions,
+): {
+  commands: unknown[];
+  resultFile: string | undefined;
+  env: Record<string, Record<string, string>>;
+} | null {
+  if (!Array.isArray(withValue.commands)) return null;
+  const env: Record<string, Record<string, string>> = {};
+  const commands = withValue.commands.map((entry: unknown) => {
+    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) return entry;
+    const cmd = { ...(entry as Record<string, unknown>) };
+    if (typeof cmd.run === "string") {
+      const shell = substituteForShell(cmd.run, subs);
+      cmd.run = shell.text;
+      if (typeof cmd.id === "string") env[cmd.id] = shell.env;
+    }
+    if (typeof cmd.cwd === "string") cmd.cwd = substitute(cmd.cwd, subs);
+    return cmd;
+  });
+  const resultFile =
+    typeof withValue.result_file === "string" ? substitute(withValue.result_file, subs) : undefined;
+  return { commands, resultFile, env };
 }
 
 /**
