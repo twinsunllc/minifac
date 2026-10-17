@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { OutputsMapSchema } from "../factory/schema.js";
 
 const INPUT_NAME_RE = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
 const STEP_NAME_RE = /^[a-z][a-z0-9-]*$/;
@@ -59,6 +60,9 @@ export const StepSchema = z
     inputs: StepInputsRecord.optional(),
     executor: z.string().min(1),
     with: z.record(z.unknown()),
+    // The step's declared outputs, in the same shape a node declares them.
+    // A `uses:` node without its own `outputs:` inherits this map (ADR 0054).
+    outputs: OutputsMapSchema.optional(),
   })
   .strict();
 

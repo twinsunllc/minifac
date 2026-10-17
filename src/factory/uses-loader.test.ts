@@ -535,4 +535,82 @@ edges:
     expect(factory.nodes.propose?.start).toBe(true);
     expect(factory.nodes.verify?.start).toBeUndefined();
   });
+
+  describe("step `outputs:` and `schema:` (ADR 0054)", () => {
+    const JUDGE_STEP = `name: judge
+version: "1"
+executor: claude
+with: { prompt: hi }
+outputs:
+  result:
+    type: value
+    required: true
+    schema:
+      type: object
+      required: [verdict]
+      properties:
+        verdict: { enum: [pass, fail] }
+`;
+
+    it("a uses: node without outputs: carries the step's outputs on the resolved factory", async () => {
+      const repo = await makeRepo();
+      await writeAt(repo, "examples/steps/judge.yaml", JUDGE_STEP);
+      const fac = await writeAt(
+        repo,
+        "fac.yaml",
+        "name: f\nnodes:\n  judge:\n    uses: minifac:judge\n    terminal: true\nedges: []\n",
+      );
+      const { factory } = await loadFactory(fac, repo);
+      expect(factory.nodes.judge?.outputs?.result).toMatchObject({
+        type: "value",
+        required: true,
+        schema: { required: ["verdict"] },
+      });
+    });
+
+    it("a step with an invalid schema is a FactoryLoadError naming the factory and the step", async () => {
+      const repo = await makeRepo();
+      const stepFile = await writeAt(
+        repo,
+        "examples/steps/judge.yaml",
+        JUDGE_STEP.replace("type: object", "type: strng"),
+      );
+      const fac = await writeAt(
+        repo,
+        "fac.yaml",
+        "name: f\nnodes:\n  judge:\n    uses: minifac:judge\n    terminal: true\nedges: []\n",
+      );
+      const err = await loadFactory(fac, repo).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(FactoryLoadError);
+      expect((err as FactoryLoadError).sourcePath).toBe(fac);
+      expect((err as Error).message).toContain(`step \`${stepFile}\``);
+      expect((err as Error).message).toMatch(/outputs\.result\.schema: invalid JSON Schema/);
+    });
+
+    it("an inline node with an invalid schema is a FactoryLoadError naming the factory", async () => {
+      const repo = await makeRepo();
+      const fac = await writeAt(
+        repo,
+        "fac.yaml",
+        `name: f
+nodes:
+  judge:
+    executor: claude
+    terminal: true
+    with: { prompt: hi }
+    outputs:
+      result:
+        type: value
+        schema: { type: object, requried: [verdict] }
+edges: []
+`,
+      );
+      const err = await loadFactory(fac, repo).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(FactoryLoadError);
+      expect((err as FactoryLoadError).sourcePath).toBe(fac);
+      expect((err as Error).message).toMatch(
+        /nodes\.judge\.outputs\.result\.schema: invalid JSON Schema: strict mode: unknown keyword: "requried"/,
+      );
+    });
+  });
 });

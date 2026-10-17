@@ -324,4 +324,65 @@ with: { prompt: hi }
     );
     await expect(loadStep(file)).rejects.toThrowError(/type/);
   });
+
+  describe("step `outputs:` (ADR 0054)", () => {
+    it("loads a step whose value output declares a JSON Schema, schema preserved", async () => {
+      const file = await writeStep(
+        "outputs.yaml",
+        `name: judge
+version: "1.0.0"
+executor: claude
+with: { prompt: hi }
+outputs:
+  result:
+    type: value
+    required: true
+    schema:
+      type: object
+      required: [verdict]
+      properties:
+        verdict: { enum: [pass, fail] }
+`,
+      );
+      const { step } = await loadStep(file);
+      expect(step.outputs?.result).toEqual({
+        type: "value",
+        required: true,
+        schema: {
+          type: "object",
+          required: ["verdict"],
+          properties: { verdict: { enum: ["pass", "fail"] } },
+        },
+      });
+    });
+
+    it.each([
+      ["a bad type name", "type: strng", /schema is invalid/],
+      ["an unknown keyword", "requried: [verdict]", /unknown keyword: "requried"/],
+    ])(
+      "refuses an invalid schema (%s) with a StepLoadError naming the step file",
+      async (_label, body, detail) => {
+        const file = await writeStep(
+          "bad-schema.yaml",
+          `name: judge
+version: "1.0.0"
+executor: claude
+with: { prompt: hi }
+outputs:
+  result:
+    type: value
+    schema:
+      ${body}
+`,
+        );
+        const err = await loadStep(file).catch((e: unknown) => e);
+        expect(err).toBeInstanceOf(StepLoadError);
+        expect((err as StepLoadError).sourcePath).toBe(file);
+        expect((err as Error).message).toMatch(
+          /^Schema error at outputs\.result\.schema: invalid JSON Schema: /,
+        );
+        expect((err as Error).message).toMatch(detail);
+      },
+    );
+  });
 });

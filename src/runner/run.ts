@@ -12,6 +12,7 @@ import type {
   RunContext,
 } from "../executor/types.js";
 import type { LoadedFactory } from "../factory/loader.js";
+import { describeViolation } from "../factory/output-schema.js";
 import type { NodeOutputIndex } from "../factory/schema.js";
 import { startNodeIds } from "../factory/start-nodes.js";
 import type { RunStore, StoredEventKind } from "../storage/run-store.js";
@@ -1123,6 +1124,25 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
             await appendStoreEvent(nodeId, iteration, "stderr", entry.event, entry.emittedAt);
           }
         }
+        // A value that violates its schema is not indexed; on a node that
+        // already failed it is a warning and the node keeps its own reason
+        // (ADR 0054).
+        if (validation.mismatched.length > 0) {
+          const lines: string[] = [
+            `outputs_warning: node "${nodeId}" failed and has outputs that do not match their schema: ${validation.mismatched.join(", ")} (dir: ${outputsDir})`,
+            ...schemaViolationLines(validation),
+          ];
+          for (const line of lines) {
+            const entry: EmittedEvent = {
+              nodeId,
+              iteration,
+              emittedAt: Date.now() - runStart,
+              event: { kind: "stderr", line },
+            };
+            onEvent?.(entry);
+            await appendStoreEvent(nodeId, iteration, "stderr", entry.event, entry.emittedAt);
+          }
+        }
       } else if (finalStatus === "succeeded" && node.outputs) {
         const validation =
           lastValidation !== null
@@ -1194,6 +1214,59 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
                 nudges_used: nudgesUsed,
               },
               outcome: "error",
+            },
+          };
+          onEvent?.(statusEvent);
+          await appendStoreEvent(
+            nodeId,
+            iteration,
+            "status",
+            statusEvent.event,
+            statusEvent.emittedAt,
+          );
+        } else if (validation.mismatched.length > 0) {
+          // The node ran and returned a result, but the result is not the
+          // shape its schema declares: a judged failure, not an error, so it
+          // routes `on_failure` (ADR 0054). A missing output above wins.
+          finalStatus = "failed";
+          finalOutcome = "failure";
+          logEntry.status = finalStatus;
+          logEntry.outcome = finalOutcome;
+          const firstKey = validation.mismatched[0] as string;
+          const first = validation.violations[firstKey]?.[0];
+          resultReason =
+            first !== undefined
+              ? `output_schema_mismatch: ${describeViolation(firstKey, first)}`
+              : "output_schema_mismatch";
+          const lines: string[] = [
+            `output_schema_mismatch: node "${nodeId}" succeeded but outputs do not match their schema: ${validation.mismatched.join(", ")} (dir: ${outputsDir})`,
+            ...schemaViolationLines(validation),
+          ];
+          for (const line of lines) {
+            const entry: EmittedEvent = {
+              nodeId,
+              iteration,
+              emittedAt: Date.now() - runStart,
+              event: { kind: "stderr", line },
+            };
+            onEvent?.(entry);
+            await appendStoreEvent(nodeId, iteration, "stderr", entry.event, entry.emittedAt);
+          }
+          const statusEvent: EmittedEvent = {
+            nodeId,
+            iteration,
+            emittedAt: Date.now() - runStart,
+            event: {
+              kind: "status",
+              status: "failed",
+              meta: {
+                reason: "output_schema_mismatch",
+                mismatched_outputs: validation.mismatched,
+                schema_errors: validation.violations,
+                outputs_dir: outputsDir,
+                partial_index: validation.index,
+              },
+              outcome: "failure",
             },
           };
           onEvent?.(statusEvent);
@@ -1381,6 +1454,17 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
     // mid-run still releases the socket per ADR-0029's lifecycle scenario.
     await cleanupRunResources();
   }
+}
+
+/** One stderr line per schema violation, every mismatched output. */
+function schemaViolationLines(validation: ValidateOutputsResult): string[] {
+  const lines: string[] = [];
+  for (const key of validation.mismatched) {
+    for (const v of validation.violations[key] ?? []) {
+      lines.push(`  - ${describeViolation(key, v)}`);
+    }
+  }
+  return lines;
 }
 
 function extractReason(status: "succeeded" | "failed", meta: unknown): string | null {

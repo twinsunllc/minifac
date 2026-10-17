@@ -1,5 +1,6 @@
 import { readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
+import { type OutputSchemaViolation, validateOutputValue } from "../factory/output-schema.js";
 import type {
   FactoryNode,
   NodeOutputEntry,
@@ -19,6 +20,12 @@ export interface ValidateOutputsResult {
   /** Per-key detail string explaining why an output is unsatisfied. Keys
    * are the same as `missing`. */
   detail: Record<string, string>;
+  /** Value output keys that were present and parsed but did not match their
+   * declared `schema:` (ADR 0054). Not indexed, and not in `missing`
+   * whether or not they are required. */
+  mismatched: string[];
+  /** Per-key schema violations. Keys are the same as `mismatched`. */
+  violations: Record<string, OutputSchemaViolation[]>;
 }
 
 interface OutputCheck {
@@ -28,6 +35,8 @@ interface OutputCheck {
   /** When set, the output is considered unsatisfied; for required outputs
    * this turns into a failure. */
   unsatisfied?: string;
+  /** When set, the value was present and parsed but violates its schema. */
+  mismatch?: OutputSchemaViolation[];
 }
 
 export interface ValidateDeclaredOutputsOptions {
@@ -49,17 +58,23 @@ export async function validateDeclaredOutputs(
   const index: NodeOutputIndex = {};
   const missing: string[] = [];
   const detail: Record<string, string> = {};
+  const mismatched: string[] = [];
+  const violations: Record<string, OutputSchemaViolation[]> = {};
   const mcpAvailable = options.mcpAvailable === true;
   const mcpReported = options.mcpReported ?? null;
 
   const outputs = node.outputs;
-  if (!outputs) return { index, missing, detail };
+  if (!outputs) return { index, missing, detail, mismatched, violations };
 
   for (const [key, defRaw] of Object.entries(outputs)) {
     const def = defRaw as OutputDef;
     const check = await checkOne(key, def, outputsDir);
     if (check.entry) {
       index[key] = check.entry;
+    }
+    if (check.mismatch !== undefined) {
+      mismatched.push(key);
+      violations[key] = check.mismatch;
     }
     if (check.unsatisfied !== undefined && def.required) {
       missing.push(key);
@@ -77,7 +92,7 @@ export async function validateDeclaredOutputs(
     }
   }
 
-  return { index, missing, detail };
+  return { index, missing, detail, mismatched, violations };
 }
 
 async function checkOne(key: string, def: OutputDef, outputsDir: string): Promise<OutputCheck> {
@@ -92,7 +107,7 @@ async function checkOne(key: string, def: OutputDef, outputsDir: string): Promis
 
 async function checkValue(
   key: string,
-  _def: OutputValueDef,
+  def: OutputValueDef,
   outputsDir: string,
 ): Promise<OutputCheck> {
   const filePath = path.join(outputsDir, `${key}.json`);
@@ -113,12 +128,17 @@ async function checkValue(
       unsatisfied: `value output "${key}" failed to read at ${filePath}: ${(err as Error).message}`,
     };
   }
+  let parsed: unknown;
   try {
-    JSON.parse(contents);
+    parsed = JSON.parse(contents);
   } catch (err) {
     return {
       unsatisfied: `value output "${key}" failed to parse as JSON at ${filePath}: ${(err as Error).message}`,
     };
+  }
+  if (def.schema !== undefined) {
+    const violations = validateOutputValue(def.schema as object | boolean, parsed);
+    if (violations.length > 0) return { mismatch: violations };
   }
   return {
     entry: {
