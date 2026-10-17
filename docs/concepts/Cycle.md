@@ -53,7 +53,8 @@ cycle inside an otherwise budgeted loop loads with a warning
 stderr; `minifac autorun` logs a `load-warning` event, and in its TUI
 lists the warning below the briefs; a run started through `minifac
 serve` returns it in the `POST /api/runs` body's `warnings` and opens its
-event stream with a `warning:` line. The
+event stream with a `warning:` line, which is also written to
+[[Runs-DB]] as the run's first event, so a restarted daemon replays it. The
 `strictBudgets` loader option and the `--strict-budgets` flag make the
 warning an error now.
 

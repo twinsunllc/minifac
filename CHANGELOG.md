@@ -11,6 +11,8 @@ conflict; a duplicate or oddly-ordered bullet is tidied when a release is cut.
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-10-17
+
 ### Added
 
 - **Value-conditioned edges** (SCARIFW-2251, twinsunllc/minifac#37,
@@ -54,6 +56,53 @@ conflict; a duplicate or oddly-ordered bullet is tidied when a release is cut.
   evaluate with `routes: [implement, checks_gate]`. A graph without
   `routes:` loads and routes as before. ADR 0055 is amended for the
   terminal-reachability rule and the `chosen_by` event.
+- **A `terminal_routes` load warning** (SCARIFW-2259, from SCARIFW-2252).
+  A `terminal: true` node that declares `routes:` loads with a warning
+  naming the node: its success ends the run before `next` is read, so its
+  routes are taken only on a judged failure. It reaches the same surfaces
+  as an `uncovered_cycle` warning. `docs/concepts/Factory.md` states the
+  rule.
+- **`RunOptions.preludeEvents`** (SCARIFW-2259, from SCARIFW-2255). Events
+  `runFactory` writes to the run store, in order, right after the run's
+  row is created or reopened, without passing them to `onEvent`.
+
+### Changed
+
+- **`FactoryLoadWarning` is a union on `code`** (SCARIFW-2259):
+  `UncoveredCycleWarning` (`code: "uncovered_cycle"`, with `nodes` and
+  `edge`, unchanged) or `TerminalRoutesWarning` (`code:
+  "terminal_routes"`, with `node`). Both are exported. Code that formats a
+  warning with `formatFactoryLoadWarning` or reads `sourcePath`/`message`
+  is unaffected; TypeScript code that reads `edge` or `nodes` narrows on
+  `code` first.
+- **`strictBudgets` refuses only `uncovered_cycle` warnings**
+  (SCARIFW-2259). It turned every load warning into a load error; a
+  `terminal_routes` warning stays a warning under it.
+
+### Fixed
+
+- **A resumed run reads a command node's REASON line** (SCARIFW-2259, from
+  SCARIFW-2246). `resumeStateFromStore` rebuilt a failed `command` node's
+  `reason` as the bare `command_failed`; it now reads the status event's
+  `sentinel`, as the runner does, so `{{ priorResults.<id>.reason }}` after
+  a resume is the REASON line. A `command_failed` status with no sentinel
+  still reads `command_failed`.
+- **`minifac serve` load warnings survive a daemon restart** (SCARIFW-2259,
+  from SCARIFW-2255). The `__runner__` `warning:` events that open a serve
+  run's event stream were held only in the daemon's memory; they are now
+  also written to `runs.db` as the run's first events (through
+  `preludeEvents`), so a restarted daemon replays them, once.
+- **The serve viewer lays out a cycle closed only by value edges or
+  routes** (SCARIFW-2259, from SCARIFW-2251). A value edge or route was
+  treated as a back-edge only when its target reached its source over
+  `on_success` edges, so a cycle of routes (or of value edges) left the
+  layout to the order nodes were visited in. A value edge or route is now
+  a back-edge when its target reaches its source over the edges already
+  accepted for layout.
+- **The serve viewer draws parallel edges as distinct curves**
+  (SCARIFW-2259, from SCARIFW-2252). A route and an outcome edge between
+  the same pair of nodes were drawn on the same path; each edge between a
+  pair now gets its own lane.
 
 ## [0.3.0] — 2026-10-17
 
@@ -485,7 +534,8 @@ Initial public release.
   (`scripts/check-dep-freshness.mjs`)
 - npm publish gated through OIDC trusted publisher with provenance
 
-[Unreleased]: https://github.com/twinsunllc/minifac/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/twinsunllc/minifac/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/twinsunllc/minifac/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/twinsunllc/minifac/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/twinsunllc/minifac/compare/v0.1.3...v0.2.0
 [0.1.3]: https://github.com/twinsunllc/minifac/compare/v0.1.2...v0.1.3
