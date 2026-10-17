@@ -13,6 +13,7 @@ import { resolveExtendsChain } from "./extends.js";
 import { FactoryLoadError } from "./loader-error.js";
 import type { Factory, FactoryNode } from "./schema.js";
 import { startNodeIds } from "./start-nodes.js";
+import { validateValueEdges } from "./value-edges.js";
 
 export { FactoryLoadError };
 
@@ -36,7 +37,8 @@ export interface FactoryLoadWarning {
   sourcePath: string;
   /** The uncovered cycle's nodes, in cycle order. */
   nodes: string[];
-  /** The edge to cap with `max_traversals`. */
+  /** The edge to cap with `max_traversals`; `when` is its key form
+   *  (`edgeWhenKey`), e.g. `on_failure` or `output:result.decision="revise"`. */
   edge: { from: string; to: string; when: string };
   message: string;
 }
@@ -327,6 +329,7 @@ function validatePostSchema(factory: Factory, sourcePath: string): FactoryLoadWa
   }
 
   validateResume(factory, sourcePath, nodeIds);
+  validateValueEdges(factory, sourcePath);
 
   const uncovered = findUncoveredCycles(factory);
   if (uncovered.length > 0) {

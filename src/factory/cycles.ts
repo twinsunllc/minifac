@@ -1,5 +1,6 @@
 import type { Factory } from "./schema.js";
 import { startNodeIds } from "./start-nodes.js";
+import { edgeWhenKey } from "./value-edges.js";
 
 /**
  * Tarjan's strongly connected components. Each returned component is a list of
@@ -122,7 +123,8 @@ export function findUncoveredCycles(factory: Factory): UncoveredCycle[] {
 export interface UnbudgetedCycle {
   /** The cycle's nodes in traversal order, starting at the node the edge to cap enters. */
   nodes: string[];
-  /** The edge that closes the cycle; adding `max_traversals` to it covers the cycle. */
+  /** The edge that closes the cycle; adding `max_traversals` to it covers the
+   *  cycle. `when` is the edge's key form ({@link edgeWhenKey}). */
   edge: { from: string; to: string; when: string };
 }
 
@@ -170,7 +172,10 @@ export function findUnbudgetedCycles(factory: Factory): UnbudgetedCycle[] {
     live.delete(found.edgeIndex);
     const edge = factory.edges[found.edgeIndex];
     if (edge === undefined) return out;
-    out.push({ nodes: found.nodes, edge: { from: edge.from, to: edge.to, when: edge.when } });
+    out.push({
+      nodes: found.nodes,
+      edge: { from: edge.from, to: edge.to, when: edgeWhenKey(edge) },
+    });
   }
 }
 

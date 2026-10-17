@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, rm } from "node:fs/promises";
+import { mkdir, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import type { Brief } from "../brief/loader.js";
 import type { ExecutorRegistry } from "../executor/registry.js";
@@ -13,8 +13,14 @@ import type {
 } from "../executor/types.js";
 import type { LoadedFactory } from "../factory/loader.js";
 import { describeViolation } from "../factory/output-schema.js";
-import type { NodeOutputIndex } from "../factory/schema.js";
+import type { FactoryEdge, NodeOutputIndex } from "../factory/schema.js";
 import { startNodeIds } from "../factory/start-nodes.js";
+import {
+  conditionMatches,
+  edgeWhenKey,
+  isValueCondition,
+  splitOutputPath,
+} from "../factory/value-edges.js";
 import type { RunStore, StoredEventKind } from "../storage/run-store.js";
 import { minifacHome } from "../worktree/config.js";
 import { markBriefDone } from "./mark-done.js";
@@ -318,8 +324,9 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
 
     const iterations = new Map<string, number>();
     // Keyed `<from>-><to>:<when>`: the format `ParkedRun.edgeTraversals` and
-    // `ResumeState.edgeTraversals` carry (ADR 0048).
-    const edgeKey = (from: string, to: string, when: string): string => `${from}->${to}:${when}`;
+    // `ResumeState.edgeTraversals` carry (ADR 0048). A value edge's `<when>`
+    // is `output:<path>=<JSON>` or `output:<path> in <JSON array>` (ADR 0055).
+    const edgeKey = (edge: FactoryEdge): string => `${edge.from}->${edge.to}:${edgeWhenKey(edge)}`;
     const edgeTraversals = new Map<string, number>();
     for (const id of Object.keys(factory.nodes)) iterations.set(id, 0);
 
@@ -371,7 +378,7 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
         }
         // Edge budgets carry over (ADR 0048): a park must not hand a bounded
         // revise loop a fresh budget. Same rehydration rules as iterations.
-        const declaredEdges = new Set(factory.edges.map((e) => edgeKey(e.from, e.to, e.when)));
+        const declaredEdges = new Set(factory.edges.map(edgeKey));
         for (const [key, used] of Object.entries(resume.edgeTraversals ?? {})) {
           if (!declaredEdges.has(key)) continue;
           if (!Number.isFinite(used) || used < 0) continue;
@@ -383,7 +390,7 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
         // Only a declared edge INTO the seed counts; anything else is ignored.
         if (resume.via !== undefined) {
           const viaEdge = factory.edges.find(
-            (e) => edgeKey(e.from, e.to, e.when) === resume.via && e.to === resume.at,
+            (e) => edgeKey(e) === resume.via && e.to === resume.at,
           );
           if (viaEdge) {
             seedVia = { key: resume.via, traversals: edgeTraversals.get(resume.via) ?? 0 };
@@ -1339,12 +1346,35 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
           : finalOutcome === "error" && outbound.some((e) => e.when === "on_error")
             ? "on_error"
             : "on_failure";
+      // ADR 0055: on a success or a judged failure, the value edges that
+      // match the node's indexed outputs replace the outcome's edges; with
+      // none matching, the outcome's edges are taken. An error never takes a
+      // value edge. A matched edge that is budget-exhausted does not fall
+      // back below: the selection is made before budgets are read.
+      let selected = outbound.filter((e) => e.when === takeWhen);
+      const valueEdges = outbound.filter((e) => isValueCondition(e.when));
+      if (finalOutcome !== "error" && valueEdges.length > 0) {
+        const matched = await matchValueEdges(valueEdges, validatedIndex);
+        if (matched.length > 0) {
+          selected = matched;
+        } else {
+          const entry: EmittedEvent = {
+            nodeId,
+            iteration,
+            emittedAt: Date.now() - runStart,
+            event: {
+              kind: "stderr",
+              line: `value_edges: node "${nodeId}" matched no value edge; following ${takeWhen} edges`,
+            },
+          };
+          onEvent?.(entry);
+          await appendStoreEvent(nodeId, iteration, "stderr", entry.event, entry.emittedAt);
+        }
+      }
       let traversedAny = false;
       let skippedDueToBudget = false;
-      for (const edge of outbound) {
-        if (edge.when !== takeWhen) continue;
-
-        const key = edgeKey(edge.from, edge.to, edge.when);
+      for (const edge of selected) {
+        const key = edgeKey(edge);
         const used = edgeTraversals.get(key) ?? 0;
         if (edge.max_traversals !== undefined && used >= edge.max_traversals) {
           skippedDueToBudget = true;
@@ -1454,6 +1484,40 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
     // mid-run still releases the socket per ADR-0029's lifecycle scenario.
     await cleanupRunResources();
   }
+}
+
+/**
+ * The value edges whose condition holds on the node's indexed outputs
+ * (ADR 0055). Each referenced output is read once from its indexed
+ * `<key>.json`; an output that is not indexed (missing, or mismatching its
+ * schema) or does not parse matches no edge.
+ */
+async function matchValueEdges(
+  edges: FactoryEdge[],
+  index: NodeOutputIndex,
+): Promise<FactoryEdge[]> {
+  const values = new Map<string, { value: unknown } | null>();
+  const matched: FactoryEdge[] = [];
+  for (const edge of edges) {
+    const when = edge.when;
+    if (!isValueCondition(when)) continue;
+    const { key } = splitOutputPath(when.output);
+    if (!values.has(key)) {
+      const entry = index[key];
+      let read: { value: unknown } | null = null;
+      if (entry !== undefined) {
+        try {
+          read = { value: JSON.parse(await readFile(entry.path, "utf8")) };
+        } catch {
+          read = null;
+        }
+      }
+      values.set(key, read);
+    }
+    const read = values.get(key);
+    if (read && conditionMatches(when, read.value)) matched.push(edge);
+  }
+  return matched;
 }
 
 /** One stderr line per schema violation, every mismatched output. */

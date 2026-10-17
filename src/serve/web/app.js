@@ -1,6 +1,6 @@
 // minifac viewer — vanilla ES module, no build step.
 
-import { edgeStyle } from "./edge-style.js";
+import { edgeStyle, valueConditionText } from "./edge-style.js";
 
 const state = {
   factories: [],
@@ -269,6 +269,9 @@ function drawGraph(factory) {
     </marker>
     <marker id="arrow-error" viewBox="0 -5 10 10" refX="10" refY="0" markerWidth="6" markerHeight="6" orient="auto">
       <path d="M0,-5L10,0L0,5" fill="#ffae8a" />
+    </marker>
+    <marker id="arrow-value" viewBox="0 -5 10 10" refX="10" refY="0" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M0,-5L10,0L0,5" fill="#7aa2f7" />
     </marker>`;
   svg.appendChild(defs);
 
@@ -281,6 +284,12 @@ function drawGraph(factory) {
     path.setAttribute("class", cls);
     path.setAttribute("d", edgePath(a, b));
     path.setAttribute("marker-end", marker);
+    const condition = valueConditionText(e.when);
+    if (condition !== null) {
+      const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
+      title.textContent = condition;
+      path.appendChild(title);
+    }
     svg.appendChild(path);
   }
 
@@ -326,12 +335,13 @@ function edgePath(a, b) {
 }
 
 function layered(nodes, edges) {
-  // Compute longest path from any source to each node along on_success edges.
+  // Compute longest path from any source to each node along on_success edges
+  // and value edges (ADR 0055), which lay out like on_success edges.
   // Cycles via on_failure / on_error are ignored for layout purposes; place those nodes
   // at the level of their target.
   const inSucc = new Map(nodes.map((n) => [n, []]));
   for (const e of edges) {
-    if (e.when !== "on_success") continue;
+    if (e.when !== "on_success" && valueConditionText(e.when) === null) continue;
     inSucc.get(e.to)?.push(e.from);
   }
   const level = new Map();

@@ -157,3 +157,56 @@ edges:
     }
   });
 });
+
+describe("value edges and cycle budgets (ADR 0053, ADR 0055)", () => {
+  const yaml = (reviseExtra: string, verifyExtra: string) => `name: value-loop
+nodes:
+  implement:
+    executor: claude
+    start: true
+  evaluate:
+    executor: claude
+    outputs: { result: { type: value } }
+  verify:
+    executor: claude
+  done:
+    executor: claude
+    terminal: true
+edges:
+  - { from: implement, to: evaluate }
+  - { from: evaluate, to: implement, when: { output: result.decision, equals: revise }${reviseExtra} }
+  - { from: evaluate, to: verify, when: { output: result.decision, equals: approve } }
+  - { from: verify, to: implement, when: on_failure${verifyExtra} }
+  - { from: verify, to: done }
+`;
+
+  it("a cycle closed only by an unbudgeted value edge is a load error", async () => {
+    const file = await writeFactory("value-loop.yaml", yaml("", ""));
+    await expect(loadFactory(file)).rejects.toThrowError(
+      /Cycle is not covered by any budget \(nodes: .*implement.*\)/,
+    );
+  });
+
+  it("an uncovered value-edge cycle in a budgeted component warns, naming the value edge", async () => {
+    const file = await writeFactory("value-loop.yaml", yaml("", ", max_traversals: 2"));
+    const loaded = await loadFactory(file);
+    expect(loaded.warnings).toHaveLength(1);
+    expect(loaded.warnings?.[0]).toMatchObject({
+      code: "uncovered_cycle",
+      nodes: ["implement", "evaluate"],
+      edge: { from: "evaluate", to: "implement", when: 'output:result.decision="revise"' },
+    });
+    expect(loaded.warnings?.[0]?.message).toContain(
+      'output:result.decision="revise" edge evaluate → implement',
+    );
+  });
+
+  it("max_traversals on the value edge covers its cycle", async () => {
+    const file = await writeFactory(
+      "value-loop.yaml",
+      yaml(", max_traversals: 2", ", max_traversals: 2"),
+    );
+    const loaded = await loadFactory(file);
+    expect(loaded.warnings).toEqual([]);
+  });
+});
