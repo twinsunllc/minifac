@@ -137,6 +137,29 @@ auto-injects sentinel-emission instructions into every prompt. The
 factory's prompt only specifies per-node success/failure *criteria*.
 See [[0007-Sentinel-Runner-Injects]].
 
+## Outcome: error vs failure
+
+A terminal `status` event keeps `status: "succeeded" | "failed"` and may
+carry `outcome: "error"` on a `failed` status, meaning the executor could
+not produce a judgment; without it a `failed` status is a judged failure.
+The [[Runner]] routes an error on the node's `on_error` edges (falling
+back to `on_failure`), and fills `outcome` in on every terminal status
+event it delivers. The built-in mappings:
+
+- `claude`: `invalid_with`, `spawn_error`, `missing_binary`, and, with no
+  sentinel, a non-zero exit or a final `result` event with
+  `is_error: true` (even on exit 0) are errors. `MINIFAC_STATUS: failed`
+  is a failure whatever the exit code.
+- `command`: `invalid_with`, a command with no exit code (`host_missing`,
+  a spawn error, a signal), one that timed out or was aborted, and a
+  `result_parse` failure are errors. A command that exited outside its
+  `expect.exit` is a failure.
+- `check-merge`: `invalid_with`, `missing_base`, `missing_base_ref` and
+  `git_error` are errors; `merge_conflict` and `fast_forward_required`
+  are failures.
+
+See [[0052-On-Error-Edges]].
+
 ## Interface
 
 The executor interface is intentionally small (`type` + `run(node, ctx)`
@@ -153,3 +176,4 @@ new file plus registration; the runner is unchanged. Formal abstraction
 - [[0003-Claude-Streaming-Default]]
 - [[0007-Sentinel-Runner-Injects]]
 - [[0051-Command-Executor]]
+- [[0052-On-Error-Edges]]

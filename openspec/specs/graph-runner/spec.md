@@ -97,11 +97,23 @@ declaration order.
 
 ### Requirement: Edge traversal honors `when` condition
 
-When a node completes, the runner SHALL evaluate each outbound edge's
-`when` condition against the node's outcome and traverse only matching
-edges. An edge with `when: "on_success"` (default) traverses only when
-the source node reports a `succeeded` status; `when: "on_failure"`
-traverses only on `failed`.
+When a node completes, the runner SHALL classify the dispatch's outcome
+as `success`, `failure` or `error` (see "Node outcome classification
+and records") and traverse only the outbound edges that outcome
+selects:
+
+- `success` selects `when: "on_success"` (the default).
+- `failure`, a judged failure, selects `when: "on_failure"`. It SHALL
+  NOT select `on_error` edges.
+- `error` selects `when: "on_error"` when the node DECLARES at least one
+  `on_error` edge, and `when: "on_failure"` otherwise. Whether one is
+  declared decides, not whether one is traversable: when every declared
+  `on_error` edge is budget-exhausted, the runner SHALL NOT fall back to
+  `on_failure` edges, and the run ends `budget_exhausted`.
+
+A node that failed or errored and traversed no edge ends the run as
+"Run termination" describes (`node_failed`, or `budget_exhausted` when
+a selected edge was skipped on a budget).
 
 #### Scenario: Failed node does not traverse default edges
 
@@ -114,6 +126,86 @@ traverses only on `failed`.
 - **WHEN** node A fails and has an outbound edge A → R with
   `when: "on_failure"`
 - **THEN** R is scheduled
+
+#### Scenario: An errored node takes its on_error edge
+
+- **WHEN** node A errors and has outbound edges A → E (`on_error`) and
+  A → R (`on_failure`)
+- **THEN** E is scheduled and R is not
+
+#### Scenario: An errored node with no on_error edge falls back
+
+- **WHEN** node A errors and has only A → R (`on_failure`)
+- **THEN** R is scheduled, as before `on_error` existed
+
+#### Scenario: A judged failure never takes on_error
+
+- **WHEN** node A fails with a judgment (e.g. `MINIFAC_STATUS: failed`)
+  and has outbound edges A → E (`on_error`) and A → R (`on_failure`)
+- **THEN** R is scheduled and E is not
+
+#### Scenario: An exhausted on_error edge does not fall back
+
+- **WHEN** node A errors, its only `on_error` edge has spent its
+  `max_traversals`, and it also declares A → R (`on_failure`)
+- **THEN** R is not scheduled and the run ends `budget_exhausted`
+
+#### Scenario: on_error edges count against max_traversals
+
+- **WHEN** node A always errors and declares A → A (`on_error`,
+  `max_traversals: 2`)
+- **THEN** A is dispatched three times, the traversal count under key
+  `A->A:on_error` reaches 2, and the run ends `budget_exhausted`
+
+### Requirement: Node outcome classification and records
+
+The runner SHALL classify every dispatch it records into a
+`NodeOutcome` (`"success" | "failure" | "error"`):
+
+- From the executor's terminal `status` event: `succeeded` is
+  `success`; `failed` is `error` when the event carries
+  `outcome: "error"` and `failure` otherwise.
+- `error` for the runner's own failure paths: a pre-spawn
+  `resume_unavailable` or `resume_unsupported`; an event stream that
+  ends with no terminal status; and the `missing_required_output`
+  override of a claimed success. A template substitution error SHALL
+  record `outcome: "error"` on the node's store row; the run still
+  ends `node_failed` without routing.
+
+The outcome SHALL be carried on:
+
+- each `priorResults` entry (`NodeResult.outcome`);
+- each `RunResult.log` entry (`ExecutionLogEntry.outcome`), which SHALL
+  also reflect the `missing_required_output` override
+  (`status: "failed"`, `outcome: "error"`);
+- `recordNodeEnd` (`RecordNodeEndInput.outcome`) for every dispatch;
+- every terminal `status` event the runner delivers to `onEvent` and
+  persists, the runner setting `outcome` when the executor left it
+  out.
+
+`status`, `reason`, `meta` and `RunReason` SHALL keep their existing
+values. `NodeResult.outcome` SHALL be optional in the type so callers
+that build NodeResults themselves still type-check; the runner SHALL
+always set it.
+
+#### Scenario: A crash is recorded as an error everywhere
+
+- **WHEN** node A's executor yields `{ status: "failed",
+  outcome: "error" }` and A has an `on_error` edge to E
+- **THEN** `log[A].outcome`, the `priorResults` entry E sees, the store
+  row and the delivered status event all say `error`
+
+#### Scenario: A claimed success without outputs is an error
+
+- **WHEN** a node succeeds without a required declared output and every
+  nudge is spent
+- **THEN** its outcome is `error`, its log entry says `failed` / `error`,
+  and it takes its `on_error` edge when it declares one
+
+#### Scenario: A stream with no terminal status is an error
+
+- **WHEN** an executor's event stream ends without a terminal status
+- **THEN** the dispatch is `failed` with outcome `error`
 
 ### Requirement: Cycle budgets are enforced at runtime
 
@@ -138,7 +230,8 @@ node is not scheduled.
 
 A run SHALL end with status `succeeded` when a terminal node completes
 with status `succeeded`. A run SHALL end with status `failed` when:
-(a) a node fails and no outbound `on_failure` edges remain traversable,
+(a) a node fails or errors and no outbound edge its outcome selects
+(see "Edge traversal honors `when` condition") remains traversable,
 (b) all relevant cycle budgets are exhausted before any terminal node
 succeeds, or (c) the graph drains (no node is eligible to run) without a
 successful terminal node. A run SHALL end with status `parked` when the
@@ -2101,8 +2194,9 @@ resume cannot be satisfied. A silent fallback would produce a
 plausible-looking result from a node that was designed around
 context it never received.
 
-These are ordinary node failures: `on_failure` edges SHALL traverse
-normally, the failed iteration SHALL be recorded in prior results
+These are node errors (ADR 0052): the node's `on_error` edges SHALL
+traverse when it declares any, and its `on_failure` edges otherwise;
+the failed iteration SHALL be recorded in prior results
 and (when a store is in scope) in `node_executions`, and the run's
 terminal reason SHALL follow the existing "Run termination" rules.
 
@@ -2195,11 +2289,11 @@ Nodes that declare no `resume:` SHALL be dispatched with
   `resumeSessionId`, and the run's behavior is identical to
   pre-change behavior
 
-#### Scenario: Resume failure is an ordinary node failure for edges
+#### Scenario: Resume failure is a node error for edges
 
 - **WHEN** node `apply` fails with `reason: "resume_unavailable"` and
   the factory declares an edge `apply → recover` with
-  `when: "on_failure"`
+  `when: "on_failure"` and no `on_error` edge from `apply`
 - **THEN** the runner traverses the edge and schedules `recover`, and
   `recover`'s `priorResults` contains `apply`'s entry with
   `status: "failed"` and `reason: "resume_unavailable"`
