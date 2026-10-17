@@ -9,7 +9,7 @@
 // are also killed when the minifac process exits or receives SIGINT, SIGTERM
 // or SIGHUP (see `killAllCommandGroups`).
 //
-// Shape, defaults and rationale: `docs/decisions/0050-Command-Executor.md`
+// Shape, defaults and rationale: `docs/decisions/0051-Command-Executor.md`
 // and the `command-executor` capability spec.
 
 import { type ChildProcess, spawn as nodeSpawn } from "node:child_process";

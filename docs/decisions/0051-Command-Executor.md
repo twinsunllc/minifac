@@ -6,7 +6,7 @@ superseded-by: null
 tags: [decision]
 ---
 
-# 0050: A `command` executor
+# 0051: A `command` executor
 
 ## Context
 

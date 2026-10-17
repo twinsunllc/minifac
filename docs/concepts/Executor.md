@@ -21,7 +21,7 @@ in the [[Runs-DB]].
   merges cleanly into a base branch. See the `check-merge-step` spec.
 - **`command`** — runs declared shell commands in order, with no model,
   and maps their exit codes to the node's status, reason and `result`.
-  See [[#`command` executor]] and [[0050-Command-Executor]].
+  See [[#`command` executor]] and [[0051-Command-Executor]].
 
 ## `with:` schema (claude executor)
 
@@ -41,7 +41,7 @@ internally (`bypass_permissions` → `bypassPermissions`).
 
 Runs `with.commands` in order, each as `/bin/sh -c <run>` in its own
 process group, and writes `<outputs_dir>/result.json`. The node succeeds
-iff every command met its `expect`. Full rules: [[0050-Command-Executor]].
+iff every command met its `expect`. Full rules: [[0051-Command-Executor]].
 
 | Field | Purpose |
 |---|---|
@@ -149,4 +149,4 @@ new file plus registration; the runner is unchanged. Formal abstraction
 - [[Permission-Mode]] (in [[0003-Claude-Streaming-Default]])
 - [[0003-Claude-Streaming-Default]]
 - [[0007-Sentinel-Runner-Injects]]
-- [[0050-Command-Executor]]
+- [[0051-Command-Executor]]

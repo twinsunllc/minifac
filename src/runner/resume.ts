@@ -61,6 +61,14 @@ export interface ResumeState {
    * `max_iterations` exemption and, when `feedback` is non-empty, the
    * human-answer block. Every later dispatch is ordinary (ADR 0048 §4). */
   resumeSeed?: boolean;
+  /** `ParkedRun.via` from a park: the edge that queued the parked dispatch,
+   * keyed `<from>-><to>:<when>` (ADR 0050). The seed's `{{ edge.traversals }}`
+   * renders that edge's count from `edgeTraversals` and its
+   * `{{ edge.max_traversals }}` the edge's budget. Absent, or naming no
+   * declared edge into `at`, the seed renders `0` and the empty string: the
+   * seed itself traverses no edge. `resumeStateFromStore` never sets it,
+   * because runs.db does not record a dispatch's entering edge. */
+  via?: string;
 }
 
 /**

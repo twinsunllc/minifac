@@ -87,7 +87,7 @@ export interface RunContext {
   resumeSessionId?: string;
   /** Per-command environment for the `command` executor, keyed by command
    * id: the `MINIFAC_TOKEN_<n>` values the runner's shell-safe substitution
-   * of that command's `run` refers to (ADR 0050). Absent for every other
+   * of that command's `run` refers to (ADR 0051). Absent for every other
    * executor. */
   commandEnv?: Readonly<Record<string, Readonly<Record<string, string>>>>;
   /** The run's cancellation signal (`RunOptions.abortSignal`), when it has

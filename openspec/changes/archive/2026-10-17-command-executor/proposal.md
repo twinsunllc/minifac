@@ -39,4 +39,4 @@ are the prior art.
   `src/index.ts`.
 - Additive: `claude` and `check-merge` nodes see byte-identical `with:` and
   behaviour.
-- Docs: ADR 0050, `docs/concepts/Executor.md`, CHANGELOG.
+- Docs: ADR 0051, `docs/concepts/Executor.md`, CHANGELOG.

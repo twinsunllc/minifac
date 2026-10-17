@@ -184,7 +184,7 @@ async function inlineSteps(
 
 /**
  * Validate the `with:` of every `executor: command` node against the command
- * executor's schema (ADR 0050). Runs after step inlining, so it sees the
+ * executor's schema (ADR 0051). Runs after step inlining, so it sees the
  * `with:` a `uses:` node resolved to; a step file's own `with:` was already
  * checked when the step loaded, so a failure here names an inline node (or a
  * `with.secrets` a `uses:` node merged in). Other executors are untouched.
