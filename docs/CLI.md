@@ -115,6 +115,10 @@ dispatch's prompt (and to that dispatch only).
 The seeded dispatch is exempt from the resumed node's `max_iterations`
 and spends no `max_traversals` slot — the ask is not a cycle. Every
 dispatch after it is checked normally against the rehydrated counters.
+The seed's `{{ node.iteration }}` is the iteration it would have had
+(the rehydrated count plus one). runs.db does not record which edge
+queued a dispatch, so the seed renders `{{ edge.traversals }}` as `0` and
+`{{ edge.max_traversals }}` empty ([[0050-Iteration-Traversal-Tokens]]).
 
 The resumed dispatches append to the SAME `runs.db` row: no second run,
 no new worktree, no lazy prune, no lockfile. Refusals — an unknown or

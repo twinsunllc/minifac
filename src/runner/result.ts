@@ -54,7 +54,7 @@ export interface ParkedRun {
   iteration: number;
   /** Every dispatch pending at the boundary, including `nodeId`'s. A run
    * parks only with exactly one pending, so this holds that one entry. */
-  pending: Array<{ nodeId: string; iteration: number }>;
+  pending: Array<{ nodeId: string; iteration: number; via?: string }>;
   /** Edge traversal counts at the boundary, keyed `<from>-><to>:<when>`.
    * Hand them back as `ResumeState.edgeTraversals` so the resumed run's
    * `max_traversals` budgets start where this run's stopped. */
@@ -66,6 +66,11 @@ export interface ParkedRun {
    * `ResumeState.resumeSeed` on the pause resume and that one dispatch gets
    * them again. */
   resumeSeed: boolean;
+  /** The edge that queued the parked dispatch, keyed like `edgeTraversals`;
+   * absent when no edge did (a start node, or a resume seed with no `via`).
+   * Hand it back as `ResumeState.via` so the resumed dispatch renders the
+   * same `{{ edge.traversals }}` / `{{ edge.max_traversals }}` (ADR 0050). */
+  via?: string;
 }
 
 export interface RunResult {

@@ -139,9 +139,11 @@ describe("runFactory onNodeBoundary (ADR 0048)", () => {
     expect(result.parked).toEqual({
       nodeId: "B",
       iteration: 1,
-      pending: [{ nodeId: "B", iteration: 1 }],
+      pending: [{ nodeId: "B", iteration: 1, via: "A->B:on_success" }],
       edgeTraversals: { "A->B:on_success": 1 },
       resumeSeed: false,
+      // ADR 0050: the edge that queued B.
+      via: "A->B:on_success",
     });
 
     const row = await store.getRun("run-park");
@@ -172,6 +174,9 @@ describe("runFactory onNodeBoundary (ADR 0048)", () => {
     expect(exec.dispatches).toEqual([]);
     expect(result.status).toBe("parked");
     expect(result.parked).toMatchObject({ nodeId: "A", iteration: 1, edgeTraversals: {} });
+    // A start node was queued by no edge (ADR 0050).
+    expect(result.parked?.via).toBeUndefined();
+    expect(result.parked?.pending).toEqual([{ nodeId: "A", iteration: 1 }]);
   });
 
   // TS-2 / AC-5
@@ -309,7 +314,7 @@ describe("runFactory onNodeBoundary (ADR 0048)", () => {
     expect(exec.order()).toEqual(["A#1", "B#1"]);
     expect(result.status).toBe("parked");
     expect(result.parked?.nodeId).toBe("C");
-    expect(result.parked?.pending).toEqual([{ nodeId: "C", iteration: 1 }]);
+    expect(result.parked?.pending).toEqual([{ nodeId: "C", iteration: 1, via: "A->C:on_success" }]);
   });
 
   // TS-7 / AC-8
@@ -377,9 +382,10 @@ describe("runFactory onNodeBoundary (ADR 0048)", () => {
       expect(parked.parked).toEqual({
         nodeId: "implement",
         iteration: 2,
-        pending: [{ nodeId: "implement", iteration: 2 }],
+        pending: [{ nodeId: "implement", iteration: 2, via: "review->implement:on_failure" }],
         edgeTraversals: { "implement->review:on_success": 1, "review->implement:on_failure": 1 },
         resumeSeed: false,
+        via: "review->implement:on_failure",
       });
       const state = await resumeStateFromStore({ store, runId, at: "implement" });
       return { parked, state };

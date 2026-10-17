@@ -34,6 +34,17 @@ in the cycle. The loader rejects unbounded cycles. See
 This is enforced at load time, not runtime — so a buggy factory can't
 sneak through.
 
+## Knowing which pass you are on
+
+A node in a cycle can read its own pass and its loop budget from
+template tokens instead of counting earlier results or keeping a
+`max_cycles` input equal to the edge's budget by hand:
+`{{ node.iteration }}` (1, 2, 3, …), `{{ edge.traversals }}` (how many
+times the edge that queued this dispatch has been taken, `0` on a start
+node) and `{{ edge.max_traversals }}` (that edge's budget, empty when it
+has none). See [[Factory]]'s "Templating tokens" and
+[[0050-Iteration-Traversal-Tokens]].
+
 ## Results accumulate across iterations
 
 A node's second iteration in a cycle sees one `NodeResult` entry per

@@ -9,7 +9,7 @@ import type { SplitIntegrationState, SplitState } from "./resume.js";
  * any other token that carries one passes through verbatim, as it did
  * before the grammar allowed it. */
 const TOKEN_REGEX =
-  /\{\{\s*(brief|run|inputs)\.([a-zA-Z_][a-zA-Z0-9_]*)((?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)\s*\}\}/g;
+  /\{\{\s*(brief|run|inputs|node|edge)\.([a-zA-Z_][a-zA-Z0-9_]*)((?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)\s*\}\}/g;
 
 const PRIOR_RESULTS_TOKEN_REGEX =
   /\{\{\s*priorResults\.([a-zA-Z_][a-zA-Z0-9_-]*)\.outputs\.([a-zA-Z_][a-zA-Z0-9_]*)(:read)?\s*\}\}/g;
@@ -49,10 +49,22 @@ export interface Substitutions {
    * `{{ priorResults.<id>.outputs.<key>[:read] }}` and
    * `{{ priorResults.<id>.status|reason }}` tokens. */
   priorResults?: ReadonlyMap<string, NodeResult>;
+  /** Per-dispatch node scope (ADR 0050). `iteration` is the dispatch's
+   * 1-based iteration: the number its outputs dir, store row and events
+   * carry (Scarif's worker logs it as `[node:<id>#<n>]`). Absent →
+   * `{{ node.* }}` verbatim. */
+  node?: { iteration?: number };
+  /** The edge that queued this dispatch (ADR 0050). `traversals` counts that
+   * edge's traversals including the one that queued it, `0` when no edge
+   * did (a start node or a resume seed); `max_traversals` is its budget,
+   * `null` when it has none or there is no edge. Absent → `{{ edge.* }}`
+   * verbatim. */
+  edge?: { traversals?: number; max_traversals?: number | null };
 }
 
 /**
- * Substitute `{{ <ns>.<field> }}` tokens (ns ∈ {brief, run, inputs}),
+ * Substitute `{{ <ns>.<field> }}` tokens (ns ∈ {brief, run, inputs, node,
+ * edge}),
  * `{{ priorResults.<id>.outputs.<key>[:read] }}` tokens and
  * `{{ priorResults.<id>.status|reason }}` tokens in `input` using values
  * from `subs`. Unknown ns or unknown fields under a known ns pass through
@@ -133,6 +145,25 @@ function substituteOnce(input: string, subs: Substitutions): string {
       if (!Object.hasOwn(subs.inputs, field)) return "";
       return stringifyInputValue(subs.inputs[field]);
     }
+    if (ns === "node") {
+      if (field === "iteration" && subs.node?.iteration !== undefined) {
+        return String(subs.node.iteration);
+      }
+      return match;
+    }
+    if (ns === "edge") {
+      const edge = subs.edge;
+      if (!edge) return match;
+      // ADR 0050: the values that mean "no edge" — 0 traversals, no budget —
+      // rather than a pass-through, so a prompt can test for a first pass.
+      if (field === "traversals") return String(edge.traversals ?? 0);
+      if (field === "max_traversals") {
+        return edge.max_traversals === undefined || edge.max_traversals === null
+          ? ""
+          : String(edge.max_traversals);
+      }
+      return match;
+    }
     return match;
   });
   return out;
@@ -140,8 +171,8 @@ function substituteOnce(input: string, subs: Substitutions): string {
 
 /**
  * Load-time (step-inlining) substitution: resolve `{{ inputs.<field> }}`
- * tokens only. Every other token — `brief.*`, `run.*`, `priorResults.*`,
- * unknown namespaces — belongs to dispatch time and survives verbatim,
+ * tokens only. Every other token — `brief.*`, `run.*`, `node.*`, `edge.*`,
+ * `priorResults.*`, unknown namespaces — belongs to dispatch time and survives verbatim,
  * including a token an input value carries into the step body. The second
  * pass resolves an `inputs.*` token that an input value itself contained,
  * matching `substitute`'s two-pass shape.

@@ -80,8 +80,9 @@ authoring rules and lookup precedence.
 
 ## Templating tokens
 
-A node's `with.prompt` (when a string) and `cwd` fields accept template
-tokens substituted by the runner just before dispatch. The token grammar
+A node's `with.prompt` (when a string), `with.base` (when a string) and
+`cwd` fields accept template tokens substituted by the runner just before
+dispatch. The token grammar
 is `{{ <ns>.<field> }}` with optional whitespace inside the braces.
 
 Recognized namespaces:
@@ -120,10 +121,44 @@ Recognized namespaces:
   null/undefined and absent optional inputs substitute the empty
   string. Inline nodes have no inputs map, and `{{ inputs.* }}` tokens
   pass through verbatim.
+- `node.iteration` — this dispatch's 1-based iteration, the number its
+  outputs directory and its events carry (Scarif's worker tags its log
+  lines `[node:<id>#<n>]` with it)
+  ([[0050-Iteration-Traversal-Tokens]]).
+- `edge.traversals` / `edge.max_traversals` — the edge that queued this
+  dispatch: how many times it has been taken, counting this traversal,
+  and its `max_traversals` budget. A dispatch no edge queued (a start
+  node, or a resume seed with no recorded entering edge) renders `0`
+  and the empty string; an edge with no budget renders the empty
+  string. A pause resume that hands `ParkedRun.via` back as
+  `ResumeState.via` renders the counts the parked dispatch would have
+  had.
+
+`node.*` and `edge.*` tokens written in a `uses:` node's `inputs:`
+survive load-time inlining and resolve at dispatch, so a looping step
+can take its pass number and budget as inputs:
+
+```yaml
+nodes:
+  implement:
+    uses: myfac:implement
+    start: true
+    inputs:
+      cycle: "{{ edge.traversals }}"
+      max_cycles: "{{ edge.max_traversals }}"   # no hand-kept copy
+  review: { uses: myfac:review }
+edges:
+  - { from: implement, to: review, when: on_success }
+  - { from: review, to: implement, when: on_failure, max_traversals: 2 }
+```
+
+Unknown `node.*` / `edge.*` fields (e.g. `{{ node.foo }}`) pass through
+verbatim with no error, like unknown `brief.*` and `run.*` fields.
 
 Tokens with no resolvable value in the current run pass through
 verbatim — the executor sees the literal string. Substitution applies
-to **both** `with.prompt` and `cwd`; other node fields are not touched.
+to `with.prompt`, `with.base` and `cwd`; other node fields are not
+touched.
 
 ## Bundled built-in steps
 
