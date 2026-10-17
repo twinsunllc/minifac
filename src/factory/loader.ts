@@ -105,7 +105,7 @@ export async function loadFactory(
   const warnings = validatePostSchema(resolved.factory, absolute);
   if (options.strictBudgets === true && warnings.length > 0) {
     throw new FactoryLoadError(
-      `${warnings.map((w) => w.message).join(" ")} (--strict-budgets refuses uncovered cycles; see docs/decisions/0053-Loop-Budgets-Per-Cycle.md.)`,
+      `${warnings.map((w) => w.message).join(" ")} (Strict budgets refuse uncovered cycles; see docs/decisions/0053-Loop-Budgets-Per-Cycle.md.)`,
       absolute,
     );
   }
