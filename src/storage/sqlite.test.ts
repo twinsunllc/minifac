@@ -277,6 +277,88 @@ describe("SqliteRunStore", () => {
     }
   });
 
+  it("recordNodeEnd round-trips the outcome (ADR 0052); null when omitted", async () => {
+    const dbPath = path.join(dir, "outcome.db");
+    store = SqliteRunStore.open(dbPath);
+    await store.createRun({ id: "r1", factoryPath: "/p", factoryName: "f", startedAt: 0 });
+    await store.recordNodeStart("r1", "crash", 1, 1);
+    await store.recordNodeEnd("r1", "crash", 1, { status: "failed", outcome: "error", at: 2 });
+    await store.recordNodeStart("r1", "judge", 1, 3);
+    await store.recordNodeEnd("r1", "judge", 1, { status: "failed", outcome: "failure", at: 4 });
+    // No start row: the INSERT path writes it too.
+    await store.recordNodeEnd("r1", "inserted", 1, { status: "failed", outcome: "error", at: 5 });
+    // Written without one (a skipped node; a caller built against v5).
+    await store.recordNodeEnd("r1", "skipped", 1, { status: "skipped", at: 6 });
+
+    const rows = await store.getNodeExecutions("r1");
+    expect(rows.map((r) => [r.nodeId, r.outcome])).toEqual([
+      ["crash", "error"],
+      ["inserted", "error"],
+      ["judge", "failure"],
+      ["skipped", null],
+    ]);
+  });
+
+  it("applies 0006 to a pre-existing v5 database; old rows read back with a null outcome", async () => {
+    const dbPath = path.join(dir, "v5.db");
+    // A real v5 database: open with the migrations only up to 5 applied.
+    const seed = new DatabaseSync(dbPath);
+    seed.exec("CREATE TABLE schema_version (version INTEGER PRIMARY KEY)");
+    seed.exec(`
+      CREATE TABLE runs (
+        id TEXT PRIMARY KEY, factory_path TEXT NOT NULL, factory_name TEXT NOT NULL,
+        brief_path TEXT, change TEXT, base_branch TEXT, worktree_path TEXT,
+        status TEXT NOT NULL, reason TEXT, proximate_node_id TEXT,
+        started_at INTEGER NOT NULL, ended_at INTEGER, branch_name TEXT,
+        library_repo TEXT, library_ref TEXT, library_sha TEXT
+      );
+      CREATE TABLE node_executions (
+        run_id TEXT NOT NULL, node_id TEXT NOT NULL, iteration INTEGER NOT NULL,
+        status TEXT NOT NULL, started_at INTEGER NOT NULL, ended_at INTEGER,
+        sentinel_status TEXT, exit_code INTEGER, session_id TEXT,
+        PRIMARY KEY (run_id, node_id, iteration)
+      );
+    `);
+    for (const v of [1, 2, 3, 4, 5]) {
+      seed.prepare("INSERT INTO schema_version (version) VALUES (?)").run(v);
+    }
+    seed
+      .prepare(
+        "INSERT INTO runs (id, factory_path, factory_name, status, started_at) VALUES (?,?,?,?,?)",
+      )
+      .run("legacy-run", "/p/f.yaml", "f", "failed", 1);
+    seed
+      .prepare(
+        `INSERT INTO node_executions (run_id, node_id, iteration, status, started_at, ended_at)
+         VALUES (?,?,?,?,?,?)`,
+      )
+      .run("legacy-run", "plan", 1, "failed", 1, 2);
+    seed.close();
+
+    store = SqliteRunStore.open(dbPath);
+    const rows = await store.getNodeExecutions("legacy-run");
+    expect(rows).toEqual([expect.objectContaining({ nodeId: "plan", outcome: null })]);
+    await store.recordNodeStart("legacy-run", "plan", 2, 3);
+    await store.recordNodeEnd("legacy-run", "plan", 2, {
+      status: "failed",
+      outcome: "error",
+      at: 4,
+    });
+    expect((await store.getNodeExecutions("legacy-run")).map((r) => r.outcome)).toEqual([
+      null,
+      "error",
+    ]);
+    const inspector = new DatabaseSync(dbPath);
+    try {
+      const ver = inspector
+        .prepare("SELECT COALESCE(MAX(version), 0) AS v FROM schema_version")
+        .get() as { v: number };
+      expect(ver.v).toBe(6);
+    } finally {
+      inspector.close();
+    }
+  });
+
   it("createRun round-trips the library pin; runs without one read back null", async () => {
     const dbPath = path.join(dir, "lib.db");
     store = SqliteRunStore.open(dbPath);

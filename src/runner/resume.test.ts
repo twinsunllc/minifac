@@ -108,6 +108,25 @@ describe("resumeStateFromStore", () => {
     });
   });
 
+  it("rebuilds NodeResult.outcome from the row, or from status for a row written without one", async () => {
+    await seed();
+    // Seeded rows carry no outcome (as a v5 database's would).
+    const legacy = await resumeStateFromStore({ store, runId: RUN_ID, at: "evaluate" });
+    const legacyByNode = Object.fromEntries(legacy.priorResults.map((r) => [r.nodeId, r.outcome]));
+    expect(legacyByNode).toEqual({ plan: "success", evaluate: "failure" });
+
+    // A later dispatch that errored records it, and the rebuild reads it.
+    await store.recordNodeStart(RUN_ID, "evaluate", 2, 1_800);
+    await store.recordNodeEnd(RUN_ID, "evaluate", 2, {
+      status: "failed",
+      outcome: "error",
+      at: 1_900,
+    });
+    const state = await resumeStateFromStore({ store, runId: RUN_ID, at: "evaluate" });
+    const byNode = Object.fromEntries(state.priorResults.map((r) => [r.nodeId, r]));
+    expect(byNode.evaluate).toMatchObject({ iteration: 2, status: "failed", outcome: "error" });
+  });
+
   it("carries per-node iteration counts, including a skipped node's", async () => {
     await seed();
 

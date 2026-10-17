@@ -400,6 +400,8 @@ describe("CommandExecutor", () => {
       const out = await runAborting("trap 'exit 0' TERM; echo up; sleep 30 & wait");
       expect(out.result.commands[0]).toMatchObject({ exit_code: 0, met: false });
       expect(out.last).toMatchObject({ status: "failed", meta: { sentinel: "c: aborted" } });
+      // Its exit code was not its judgment (ADR 0052).
+      expect(out.last).toMatchObject({ outcome: "error" });
     });
 
     it("starts no further command after an abort, even under continue_on_red", async () => {
@@ -674,5 +676,92 @@ describe("validateCommandWith", () => {
         ],
       }),
     ).toBeNull();
+  });
+});
+
+describe("CommandExecutor outcome: error vs failure (ADR 0052)", () => {
+  /** The terminal status event's `outcome`, `undefined` when it set none. */
+  function outcomeOf(out: Outcome): unknown {
+    const last = [...out.events]
+      .reverse()
+      .find((e) => e.kind === "status" && e.status !== "started");
+    return last?.kind === "status" ? last.outcome : "no terminal status";
+  }
+
+  it("a timed-out command is an error", async () => {
+    const out = await runNode({ commands: [{ id: "slow", run: "sleep 5", timeout_seconds: 1 }] });
+    expect(out.status).toBe("failed");
+    expect(out.result.commands[0]?.timed_out).toBe(true);
+    expect(outcomeOf(out)).toBe("error");
+  });
+
+  it("a timed-out command is an error even when it handles SIGTERM and exits 0", async () => {
+    const out = await runNode({
+      commands: [{ id: "slow", run: "trap 'exit 0' TERM; sleep 30 & wait", timeout_seconds: 1 }],
+    });
+    expect(out.status).toBe("failed");
+    expect(out.result.commands[0]).toMatchObject({ timed_out: true, exit_code: 0 });
+    expect(outcomeOf(out)).toBe("error");
+  });
+
+  it("a host_missing tool is an error", async () => {
+    const out = await runNode({
+      commands: [{ id: "lint", tool: "definitely-not-a-binary-xyz", run: "true" }],
+    });
+    expect(out.status).toBe("failed");
+    expect(outcomeOf(out)).toBe("error");
+  });
+
+  it("a command killed by a signal is an error", async () => {
+    const out = await runNode({ commands: [{ id: "k", run: "kill -9 $$" }] });
+    expect(out.status).toBe("failed");
+    expect(out.result.commands[0]?.exit_code).toBeNull();
+    expect(outcomeOf(out)).toBe("error");
+  });
+
+  it("an exit outside expect.exit is a judged failure", async () => {
+    const out = await runNode({
+      commands: [
+        { id: "gate", run: "echo 'REASON: revise: too big'; exit 1", expect: { exit: 0 } },
+      ],
+    });
+    expect(out.status).toBe("failed");
+    expect(out.meta.sentinel).toBe("revise: too big");
+    expect(outcomeOf(out)).toBeUndefined();
+  });
+
+  it("a result_from parse failure is an error, even when every command met expect", async () => {
+    const out = await runNode({
+      commands: [{ id: "emit", run: "echo not-json" }],
+      result_from: "emit",
+    });
+    expect(out.status).toBe("failed");
+    expect(String(out.meta.sentinel)).toMatch(/^result_parse:/);
+    expect(outcomeOf(out)).toBe("error");
+  });
+
+  it("under continue_on_red, one failure and one timeout make an error", async () => {
+    const out = await runNode({
+      continue_on_red: true,
+      commands: [
+        { id: "red", run: "exit 1" },
+        { id: "slow", run: "sleep 5", timeout_seconds: 1 },
+      ],
+    });
+    expect(out.status).toBe("failed");
+    expect(out.result.commands.map((c) => c.met)).toEqual([false, false]);
+    expect(outcomeOf(out)).toBe("error");
+  });
+
+  it("an invalid with: is an error", async () => {
+    const out = await runNode({ commands: [] });
+    expect(out.meta.reason).toBe("invalid_with");
+    expect(outcomeOf(out)).toBe("error");
+  });
+
+  it("all green carries no outcome (the runner reads it as success)", async () => {
+    const out = await runNode({ commands: [{ id: "ok", run: "true" }] });
+    expect(out.status).toBe("succeeded");
+    expect(outcomeOf(out)).toBeUndefined();
   });
 });

@@ -988,3 +988,111 @@ describe("ClaudeExecutor sentinel-instruction injection", () => {
     });
   });
 });
+
+describe("ClaudeExecutor outcome: error vs failure (ADR 0052)", () => {
+  /** An executor whose child prints `lines` on stdout and exits `code`. */
+  function scripted(lines: string[], code: number): ClaudeExecutor {
+    return new ClaudeExecutor({
+      spawn: () => {
+        const c = makeFakeChild();
+        setImmediate(() => {
+          for (const line of lines) c.emitOutput(line);
+          c.finish(code);
+        });
+        return c as unknown as ReturnType<typeof import("node:child_process").spawn>;
+      },
+    });
+  }
+
+  async function terminal(executor: ClaudeExecutor) {
+    const events = await collect(executor, makeNode(), makeCtx());
+    return events[events.length - 1];
+  }
+
+  it("exit 1 with no sentinel is an error", async () => {
+    const last = await terminal(scripted([], 1));
+    expect(last).toEqual({
+      kind: "status",
+      status: "failed",
+      meta: { exitCode: 1 },
+      outcome: "error",
+    });
+  });
+
+  it("a final result event with is_error true (a rate limit) is an error, even on exit 0", async () => {
+    const line = JSON.stringify({
+      type: "result",
+      subtype: "error_during_execution",
+      is_error: true,
+      result: "API Error: 429 rate_limit_error",
+    });
+    for (const code of [0, 1]) {
+      const last = await terminal(scripted([line], code));
+      expect(last).toEqual({
+        kind: "status",
+        status: "failed",
+        meta: { exitCode: code, subtype: "error_during_execution" },
+        outcome: "error",
+      });
+    }
+  });
+
+  it("an earlier is_error result followed by a clean final result is not an error", async () => {
+    const first = JSON.stringify({ type: "result", is_error: true, result: "overloaded" });
+    const last = await terminal(scripted([first, resultEventLine("all done")], 0));
+    expect(last).toEqual({ kind: "status", status: "succeeded", meta: { exitCode: 0 } });
+  });
+
+  it("MINIFAC_STATUS: failed with exit 1 is a judged failure, not an error", async () => {
+    const last = await terminal(
+      scripted([resultEventLine("MINIFAC_STATUS: failed\nREASON: revise: tests missing")], 1),
+    );
+    expect(last).toMatchObject({
+      kind: "status",
+      status: "failed",
+      meta: { reason: "sentinel_failed", sentinel: "revise: tests missing", exitCode: 1 },
+    });
+    expect((last as { outcome?: unknown }).outcome).toBeUndefined();
+  });
+
+  it("exit 0 with no sentinel stays succeeded", async () => {
+    const last = await terminal(scripted([resultEventLine("no sentinel here")], 0));
+    expect(last).toEqual({ kind: "status", status: "succeeded", meta: { exitCode: 0 } });
+  });
+
+  it("a missing binary is an error", async () => {
+    const executor = new ClaudeExecutor({
+      spawn: () => {
+        const c = makeFakeChild();
+        setImmediate(() => {
+          c.emit("error", Object.assign(new Error("not found"), { code: "ENOENT" }));
+        });
+        return c as unknown as ReturnType<typeof import("node:child_process").spawn>;
+      },
+    });
+    expect(await terminal(executor)).toMatchObject({
+      status: "failed",
+      meta: { reason: "missing_binary" },
+      outcome: "error",
+    });
+  });
+
+  it("a spawn that throws, and an invalid `with:`, are errors", async () => {
+    const throwing = new ClaudeExecutor({
+      spawn: () => {
+        throw new Error("EAGAIN");
+      },
+    });
+    expect(await terminal(throwing)).toMatchObject({
+      status: "failed",
+      meta: { reason: "spawn_error" },
+      outcome: "error",
+    });
+    const events = await collect(scripted([], 0), makeNode({ with: {} }), makeCtx());
+    expect(events[events.length - 1]).toMatchObject({
+      status: "failed",
+      meta: { reason: "invalid_with" },
+      outcome: "error",
+    });
+  });
+});

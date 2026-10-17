@@ -560,9 +560,10 @@ export class CommandExecutor implements NodeExecutor {
 
     const records: CommandRecord[] = [];
     let firstRed: string | null = null;
-    // ADR 0052: a red command that never produced an exit code of its own
-    // choosing (host_missing, spawn error, timeout, signal, abort) is an
-    // error, not a judged failure.
+    // ADR 0052: a red command that produced no exit code (host_missing, a
+    // spawn error, a signal), timed out, or was aborted is an error, not a
+    // judged failure. A timed-out or aborted command can still exit with a
+    // code of its own if it handles SIGTERM, so those are checked by name.
     let errored = false;
     let lastReason: string | null = null;
     let resultFromStdout: string | null | undefined;
@@ -640,16 +641,7 @@ export class CommandExecutor implements NodeExecutor {
         }
 
         records.push(rec);
-        if (
-          !rec.met &&
-          (rec.host_missing ||
-            spawnError !== null ||
-            cmdAborted ||
-            rec.timed_out ||
-            rec.exit_code === null)
-        ) {
-          errored = true;
-        }
+        if (!rec.met && (rec.exit_code === null || rec.timed_out)) errored = true;
         if (cmdAborted) {
           aborted = true;
           if (firstRed === null) firstRed = redReason(cmd, rec, spawnError, true);

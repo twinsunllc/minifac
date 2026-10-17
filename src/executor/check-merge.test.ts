@@ -361,3 +361,80 @@ describe("CheckMergeExecutor", () => {
     }
   });
 });
+
+describe("CheckMergeExecutor outcome: error vs failure (ADR 0052)", () => {
+  function terminalOutcome(events: NodeEvent[]): unknown {
+    const last = events[events.length - 1];
+    return last?.kind === "status" ? last.outcome : "no terminal status";
+  }
+
+  /** feature and main both edit a.txt, checked out on feature. */
+  async function conflictingRepo(): Promise<string> {
+    const repo = await makeRepo();
+    await commitFile(repo, "a.txt", "1\n", "init");
+    await git(repo, "checkout", "-q", "-b", "feature");
+    await commitFile(repo, "a.txt", "feature line\n", "feature edit");
+    await git(repo, "checkout", "-q", "main");
+    await commitFile(repo, "a.txt", "main line\n", "main edit");
+    await git(repo, "checkout", "-q", "feature");
+    return repo;
+  }
+
+  it("merge_conflict is a judged failure", async () => {
+    const repo = await conflictingRepo();
+    try {
+      const events = await collect(
+        new CheckMergeExecutor(),
+        makeNode({ base: "main", mode: "any-merge" }),
+        makeCtx(repo),
+      );
+      expect(finalStatus(events)).toMatchObject({
+        status: "failed",
+        meta: { reason: "merge_conflict" },
+      });
+      expect(terminalOutcome(events)).toBeUndefined();
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("git_error (merge-tree exits outside 0, 1, 128) is an error", async () => {
+    const repo = await conflictingRepo();
+    try {
+      const exec = new CheckMergeExecutor({
+        gitRunner: async (inv) =>
+          inv.args[0] === "merge-tree"
+            ? { code: 2, stdout: "", stderr: "fatal: simulated" }
+            : runGit(inv.cwd, [...inv.args]),
+      });
+      const events = await collect(exec, makeNode({ base: "main" }), makeCtx(repo));
+      expect(finalStatus(events)).toMatchObject({
+        status: "failed",
+        meta: { reason: "git_error" },
+      });
+      expect(terminalOutcome(events)).toBe("error");
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("missing_base, missing_base_ref and invalid_with are errors", async () => {
+    const repo = await makeRepo();
+    try {
+      await commitFile(repo, "a.txt", "1\n", "init");
+      const exec = new CheckMergeExecutor();
+      for (const [withVal, reason] of [
+        [{ base: "" }, "missing_base"],
+        [{ base: "no-such-branch" }, "missing_base_ref"],
+        [{ base: "main", bogus: 1 }, "invalid_with"],
+        [{ base: "main", mode: "squash" }, "invalid_with"],
+      ] as const) {
+        const events = await collect(exec, makeNode(withVal), makeCtx(repo));
+        expect(finalStatus(events)).toMatchObject({ status: "failed", meta: { reason } });
+        expect(terminalOutcome(events)).toBe("error");
+      }
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  });
+});
