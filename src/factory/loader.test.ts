@@ -139,6 +139,118 @@ edges:
     await expect(loadFactory(file)).rejects.toThrowError(/when/);
   });
 
+  it("accepts `when: on_error` on an edge (ADR 0052)", async () => {
+    const file = await writeFactory(
+      "onerror.yaml",
+      `name: errs
+nodes:
+  a:
+    executor: claude
+  fix:
+    executor: claude
+  recover:
+    executor: claude
+    terminal: true
+  done:
+    executor: claude
+    terminal: true
+edges:
+  - from: a
+    to: done
+  - from: a
+    to: fix
+    when: on_failure
+  - from: a
+    to: recover
+    when: on_error
+`,
+    );
+    const loaded = await loadFactory(file);
+    expect(loaded.factory.edges.map((e) => [e.to, e.when])).toEqual([
+      ["done", "on_success"],
+      ["fix", "on_failure"],
+      ["recover", "on_error"],
+    ]);
+    // An on_error edge is an inbound edge like any other: its target is not
+    // a start node.
+    expect(startNodeIds(loaded.factory)).toEqual(["a"]);
+  });
+
+  it("rejects an unknown `when`, listing all three accepted values", async () => {
+    const file = await writeFactory(
+      "badwhen3.yaml",
+      `name: bad
+nodes:
+  a:
+    executor: claude
+  b:
+    executor: claude
+    terminal: true
+edges:
+  - from: a
+    to: b
+    when: on_crash
+`,
+    );
+    const err = await loadFactory(file).then(
+      () => null,
+      (e: unknown) => e as Error,
+    );
+    expect(err).not.toBeNull();
+    expect(err?.message).toMatch(/when/);
+    expect(err?.message).toMatch(/on_success/);
+    expect(err?.message).toMatch(/on_failure/);
+    expect(err?.message).toMatch(/on_error/);
+  });
+
+  it("rejects a cycle closed only by an on_error edge with no budget", async () => {
+    const file = await writeFactory(
+      "errcycle.yaml",
+      `name: errcyc
+nodes:
+  a:
+    executor: claude
+    start: true
+  b:
+    executor: claude
+    terminal: true
+edges:
+  - from: a
+    to: b
+  - from: b
+    to: a
+    when: on_error
+`,
+    );
+    await expect(loadFactory(file)).rejects.toThrowError(
+      /cycle.*\ba\b.*\bb\b|cycle.*\bb\b.*\ba\b/is,
+    );
+  });
+
+  it("accepts the same on_error cycle once its edge has max_traversals", async () => {
+    const file = await writeFactory(
+      "errcycle-ok.yaml",
+      `name: errcyc-ok
+nodes:
+  a:
+    executor: claude
+    start: true
+  b:
+    executor: claude
+    terminal: true
+edges:
+  - from: a
+    to: b
+  - from: b
+    to: a
+    when: on_error
+    max_traversals: 2
+`,
+    );
+    const loaded = await loadFactory(file);
+    expect(loaded.factory.edges[1]).toMatchObject({ when: "on_error", max_traversals: 2 });
+  });
+
   it("rejects unbounded cycles", async () => {
     // a is the declared start node (b loops back into it on_failure, so it
     // needs `start: true`); no budget on either the edge or a node in the

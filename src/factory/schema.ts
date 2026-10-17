@@ -93,7 +93,7 @@ export const EdgeSchema = z
     from: z.string().min(1),
     to: z.string().min(1),
     max_traversals: PositiveInt.optional(),
-    when: z.enum(["on_success", "on_failure"]).default("on_success"),
+    when: z.enum(["on_success", "on_failure", "on_error"]).default("on_success"),
   })
   .strict();
 

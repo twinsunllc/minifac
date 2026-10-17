@@ -104,9 +104,10 @@ preserved through step inlining on the same independence basis.
 
 Each edge SHALL declare `from` (node id) and `to` (node id), both of which
 MUST reference declared nodes. An edge MAY declare `max_traversals`
-(positive integer) and `when` (a string condition; semantics are
-runner-defined — for v0, only the literal `"on_failure"` and `"on_success"`
-are recognized, defaulting to `"on_success"`).
+(positive integer) and `when`, one of the literals `"on_success"`,
+`"on_failure"` and `"on_error"`, defaulting to `"on_success"`. What each
+value matches is defined by the graph-runner's "Edge traversal honors
+`when` condition" requirement (ADR 0052).
 
 #### Scenario: Edge to undeclared node fails validation
 
@@ -118,6 +119,12 @@ are recognized, defaulting to `"on_success"`).
 
 - **WHEN** an edge declares `when: "on_weekend"`
 - **THEN** validation fails with an error listing the supported values
+  `on_success`, `on_failure` and `on_error`
+
+#### Scenario: `on_error` is accepted
+
+- **WHEN** an edge declares `when: "on_error"`
+- **THEN** the factory loads and the edge's `when` is `"on_error"`
 
 ### Requirement: Cycle budgets are mandatory
 
@@ -138,6 +145,25 @@ factory containing an uncovered cycle.
 
 - **WHEN** the loader reads a factory whose graph contains nodes A → B → A
   where the B → A edge has `max_traversals: 3`
+- **THEN** validation succeeds
+
+### Requirement: Cycles closed by `on_error` edges need a budget
+
+"Cycle budgets are mandatory" SHALL apply to `on_error` edges exactly as
+to any other edge: a cycle is a cycle whatever the `when` of the edges
+that close it, and an `on_error` edge's `max_traversals` covers the
+cycles it lies on.
+
+#### Scenario: An unbudgeted `on_error` cycle is rejected
+
+- **WHEN** the loader reads A → B (`on_success`) and B → A (`on_error`)
+  with no `max_traversals` on either edge and no `max_iterations` on
+  either node
+- **THEN** validation fails with the uncovered-cycle error naming A and B
+
+#### Scenario: A budgeted `on_error` cycle is accepted
+
+- **WHEN** the same graph declares `max_traversals: 2` on B → A
 - **THEN** validation succeeds
 
 ### Requirement: Terminal node is required

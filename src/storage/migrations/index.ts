@@ -91,6 +91,10 @@ ALTER TABLE runs ADD COLUMN library_ref TEXT;
 ALTER TABLE runs ADD COLUMN library_sha TEXT;
 `;
 
+const SQL_0006 = `
+ALTER TABLE node_executions ADD COLUMN outcome TEXT;
+`;
+
 export interface Migration {
   version: number;
   name: string;
@@ -103,6 +107,7 @@ export const MIGRATIONS: readonly Migration[] = Object.freeze([
   { version: 3, name: "add_node_outputs", sql: SQL_0003 },
   { version: 4, name: "add_session_id", sql: SQL_0004 },
   { version: 5, name: "add_run_library", sql: SQL_0005 },
+  { version: 6, name: "add_node_outcome", sql: SQL_0006 },
 ]);
 
 export function highestMigration(): number {

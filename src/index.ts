@@ -15,6 +15,7 @@ export {
 export type {
   NodeEvent,
   NodeExecutor,
+  NodeOutcome,
   ResolvedNode,
   RunContext,
   NodeResult,

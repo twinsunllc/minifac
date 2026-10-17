@@ -23,7 +23,13 @@ canonical templates like `minifac:sdd`) or in
   `terminal: true` marker, an optional `start: true` marker, and an
   optional `max_iterations` budget.
 - **Edges** carry `from` / `to` / optional `when` (`on_success` default,
-  or `on_failure`) and an optional `max_traversals` budget.
+  `on_failure`, or `on_error`) and an optional `max_traversals` budget.
+  A node **fails** when it ran and judged failure, and **errors** when
+  its executor could not produce a judgment (a crash, a timeout, a rate
+  limit, an unparseable result). An error takes the node's `on_error`
+  edges when it declares any and its `on_failure` edges otherwise; a
+  failure never takes `on_error`. `on_error` edges count against
+  `max_traversals` like any edge. See [[0052-On-Error-Edges]].
 - **Start nodes** are nodes with no inbound edge from another node —
   of any kind — plus any node declaring `start: true`. A node reached
   only by `on_failure` edges (an escalation, wait, or re-poll node) is
@@ -387,7 +393,7 @@ at dispatch time. The factory loader treats `with:` as an opaque map.
 |---|---|---|---|---|
 | `from` | string (min 1) | yes | — | Source node id. Must match a key in `nodes:`. |
 | `to` | string (min 1) | yes | — | Destination node id. Must match a key in `nodes:`. |
-| `when` | `"on_success"` \| `"on_failure"` | no | `"on_success"` | Condition for traversing this edge. `"on_failure"` edges form recovery paths (e.g. verify → apply retry loop). |
+| `when` | `"on_success"` \| `"on_failure"` \| `"on_error"` | no | `"on_success"` | Condition for traversing this edge. `"on_failure"` edges form recovery paths for a judged failure (e.g. verify → apply retry loop). `"on_error"` edges take a node whose executor could not produce a judgment; a node with none sends its errors along its `"on_failure"` edges instead. When every `"on_error"` edge is budget-exhausted the run ends `budget_exhausted` rather than falling back. See [[0052-On-Error-Edges]]. |
 | `max_traversals` | positive integer | no | — | Maximum times this edge may be traversed in a single run. Absent means unlimited. Use to bound [[Cycle]]s. |
 
 Source: `src/factory/schema.ts`, `src/executor/claude.ts`
@@ -398,6 +404,7 @@ Source: `src/factory/schema.ts`, `src/executor/claude.ts`
 - [[Runner]] — orchestrator that executes the factory
 - [[Executor]] — what runs each node
 - [[Cycle]] — bounded recovery loops
+- [[0052-On-Error-Edges]] — error vs failure, and `on_error` edges
 - [[SDD-Loop]] — canonical example
 - [[0004-Factory-vs-Input-Separation]]
 - [[0002-Cycles-First-Class]]

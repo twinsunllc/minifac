@@ -14,7 +14,7 @@
  * See `docs/decisions/0042-Resume-At-Node.md`.
  */
 
-import type { NodeResult } from "../executor/types.js";
+import type { NodeOutcome, NodeResult } from "../executor/types.js";
 import type { NodeOutputIndex } from "../factory/schema.js";
 import type { RunStore, StoredEvent } from "../storage/run-store.js";
 
@@ -191,6 +191,8 @@ export interface NodeExecutionRow {
   startedAt: number;
   endedAt: number | null;
   sessionId: string | null;
+  /** Schema v6 (ADR 0052); `null` or absent for a row written without one. */
+  outcome?: NodeOutcome | null;
 }
 
 /** The read surface `resumeStateFromStore` needs off a store. */
@@ -284,6 +286,9 @@ export async function resumeStateFromStore(input: ResumeStateFromStoreInput): Pr
         nodeId: row.nodeId,
         iteration: row.iteration,
         status,
+        // A row written before schema v6 has no outcome: its status is all
+        // that was recorded, so it reads as that status's outcome.
+        outcome: row.outcome ?? (status === "succeeded" ? "success" : "failure"),
         reason:
           status === "failed"
             ? (reasons.get(dispatchKey(row.nodeId, row.iteration)) ?? null)

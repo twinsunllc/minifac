@@ -11,6 +11,29 @@ conflict; a duplicate or oddly-ordered bullet is tidied when a release is cut.
 
 ## [Unreleased]
 
+### Added
+
+- **`when: on_error` edges, and a node error distinct from a judged
+  failure** (SCARIFW-2247, [ADR 0052](docs/decisions/0052-On-Error-Edges.md)).
+  A node *errors* when its executor could not produce a judgment (a
+  crash, a timeout, an API or rate-limit failure, an unparseable result,
+  invalid configuration); it *fails* when it ran and reported failure.
+  An errored node takes its `on_error` edges when it declares any and its
+  `on_failure` edges otherwise, so a graph with no `on_error` edge routes
+  as before; a judged failure never takes `on_error`. `on_error` edges
+  count against `max_traversals`, and an exhausted one ends the run
+  `budget_exhausted` rather than falling back. The outcome
+  (`success | failure | error`, exported as `NodeOutcome`) is on the
+  terminal `status` event (`outcome`, filled in by the runner on every
+  one it delivers), `NodeResult.outcome`, `ExecutionLogEntry.outcome`,
+  and runs.db `node_executions.outcome` (schema v6, via
+  `RecordNodeEndInput.outcome`; an older build refuses a v6 database).
+  `status`, `reason` and `RunReason` values are unchanged. The `claude`,
+  `command` and `check-merge` executors map their failure reasons; a
+  `claude` result with `is_error: true` and no sentinel is now `failed`
+  even on exit 0. A `RunResult.log` entry now records the
+  `missing_required_output` override as `failed`.
+
 ## [0.2.0] — 2026-10-17
 
 ### Added

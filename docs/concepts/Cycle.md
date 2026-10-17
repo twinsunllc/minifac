@@ -29,7 +29,9 @@ bounded.
 Every cycle MUST be covered by at least one budget — either
 `max_traversals` on an edge in the cycle or `max_iterations` on a node
 in the cycle. The loader rejects unbounded cycles. See
-[[0002-Cycles-First-Class]].
+[[0002-Cycles-First-Class]]. The edge's `when` makes no difference: a
+cycle closed only by `on_error` edges needs a budget too
+([[0052-On-Error-Edges]]).
 
 This is enforced at load time, not runtime — so a buggy factory can't
 sneak through.

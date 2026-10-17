@@ -6,6 +6,7 @@ import type { ExecutorRegistry } from "../executor/registry.js";
 import type {
   EmittedEvent,
   NodeEvent,
+  NodeOutcome,
   NodeResult,
   ResolvedNode,
   RunContext,
@@ -657,6 +658,7 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
               try {
                 await store.recordNodeEnd(runId, nodeId, iteration, {
                   status: "failed",
+                  outcome: "error",
                   at: Date.now(),
                 });
               } catch (err2) {
@@ -786,6 +788,9 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
 
       const startedAt = Date.now() - runStart;
       let finalStatus: "succeeded" | "failed" | null = null;
+      // ADR 0052: what the terminal status means for routing. Taken from the
+      // terminal status event; the runner's own failures below are errors.
+      let finalOutcome: NodeOutcome | null = null;
       let terminalMeta: unknown = undefined;
       // Session id announced by this dispatch. The CLI emits a
       // `system` / `init` line per TURN (a nudged dispatch emits several),
@@ -952,7 +957,8 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
       // Pre-spawn resume failure: emit the terminal status event and skip
       // the dispatch entirely. Everything downstream (prior-results entry,
       // `recordNodeEnd`, edge traversal) treats it as an ordinary node
-      // failure, so `on_failure` recovery edges still fire.
+      // error: it takes `on_error` edges when the node declares any, and
+      // `on_failure` recovery edges otherwise (ADR 0052).
       if (resumeFailure !== null) {
         const failEvent: EmittedEvent = {
           nodeId,
@@ -962,6 +968,7 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
             kind: "status",
             status: "failed",
             meta: { reason: resumeFailure.reason, detail: resumeFailure.detail },
+            outcome: "error",
           },
         };
         onEvent?.(failEvent);
@@ -975,6 +982,7 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
         onEvent?.(errEvent);
         await appendStoreEvent(nodeId, iteration, "stderr", errEvent.event, errEvent.emittedAt);
         finalStatus = "failed";
+        finalOutcome = "error";
         terminalMeta = { reason: resumeFailure.reason, detail: resumeFailure.detail };
       }
 
@@ -984,10 +992,25 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
         resumeFailure !== null ? EMPTY_EVENTS : executor.run(resolvedNode, ctx);
 
       let aborted = false;
-      for await (const event of dispatchEvents) {
+      for await (const executorEvent of dispatchEvents) {
         if (options.abortSignal?.aborted) {
           aborted = true;
           break;
+        }
+        // A terminal status is delivered with its outcome always set
+        // (ADR 0052), so a consumer never has to derive it from `status`.
+        let event = executorEvent;
+        if (
+          event.kind === "status" &&
+          (event.status === "succeeded" || event.status === "failed")
+        ) {
+          const terminal = event.status;
+          const outcome: NodeOutcome =
+            terminal === "succeeded" ? "success" : event.outcome === "error" ? "error" : "failure";
+          event = { ...event, outcome };
+          finalStatus = terminal;
+          finalOutcome = outcome;
+          terminalMeta = event.meta;
         }
         const emittedAt = Date.now() - runStart;
         const entry: EmittedEvent = {
@@ -999,12 +1022,7 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
         onEvent?.(entry);
         await appendStoreEvent(nodeId, iteration, event.kind, event, emittedAt);
 
-        if (event.kind === "status") {
-          if (event.status === "succeeded" || event.status === "failed") {
-            finalStatus = event.status;
-            terminalMeta = event.meta;
-          }
-        } else if (event.kind === "stdout") {
+        if (event.kind === "stdout") {
           // Session capture runs on every stdout line, including after the
           // runner has closed stdin — the last announcement in the dispatch
           // wins.
@@ -1037,11 +1055,21 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
 
       const endedAt = Date.now() - runStart;
 
-      if (finalStatus === null) {
+      // The stream ended with no terminal status: no judgment was produced.
+      if (finalStatus === null || finalOutcome === null) {
         finalStatus = "failed";
+        finalOutcome = "error";
       }
 
-      log.push({ nodeId, iteration, status: finalStatus, startedAt, endedAt });
+      const logEntry: ExecutionLogEntry = {
+        nodeId,
+        iteration,
+        status: finalStatus,
+        outcome: finalOutcome,
+        startedAt,
+        endedAt,
+      };
+      log.push(logEntry);
 
       // De-register the dispatching node's MCP tools immediately after the
       // executor's event stream drains, before validation. A late tool call
@@ -1108,7 +1136,12 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
         // override below fires.
         outputsForResult = Object.keys(validation.index).length > 0 ? validation.index : null;
         if (validation.missing.length > 0) {
+          // The node claimed success without its declared outputs, after
+          // every nudge: no usable judgment, so an error (ADR 0052).
           finalStatus = "failed";
+          finalOutcome = "error";
+          logEntry.status = finalStatus;
+          logEntry.outcome = finalOutcome;
           resultReason = "missing_required_output";
           // Compose the detail map. When a stdin-write failure broke the
           // nudge loop, suffix the detail strings so operators can
@@ -1160,6 +1193,7 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
                 partial_index: validation.index,
                 nudges_used: nudgesUsed,
               },
+              outcome: "error",
             },
           };
           onEvent?.(statusEvent);
@@ -1177,6 +1211,7 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
         nodeId,
         iteration,
         status: finalStatus,
+        outcome: finalOutcome,
         reason: resultReason,
         startedAt,
         endedAt,
@@ -1199,6 +1234,7 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
         try {
           await store.recordNodeEnd(runId, nodeId, iteration, {
             status: finalStatus,
+            outcome: finalOutcome,
             sessionId: sessionIdBox.value,
             at: Date.now(),
           });
@@ -1219,13 +1255,21 @@ export async function runFactory(loaded: LoadedFactory, options: RunOptions): Pr
       }
 
       const outbound = factory.edges.filter((e) => e.from === nodeId);
+      // ADR 0052: an error takes the node's `on_error` edges when it declares
+      // any, and its `on_failure` edges otherwise (today's routing). Whether
+      // one is DECLARED decides, not whether one is traversable, so an
+      // exhausted `on_error` budget ends the run rather than falling into a
+      // revise loop. A judged failure never takes `on_error`.
+      const takeWhen =
+        finalOutcome === "success"
+          ? "on_success"
+          : finalOutcome === "error" && outbound.some((e) => e.when === "on_error")
+            ? "on_error"
+            : "on_failure";
       let traversedAny = false;
       let skippedDueToBudget = false;
       for (const edge of outbound) {
-        const matchesWhen =
-          (finalStatus === "succeeded" && edge.when === "on_success") ||
-          (finalStatus === "failed" && edge.when === "on_failure");
-        if (!matchesWhen) continue;
+        if (edge.when !== takeWhen) continue;
 
         const key = edgeKey(edge.from, edge.to, edge.when);
         const used = edgeTraversals.get(key) ?? 0;

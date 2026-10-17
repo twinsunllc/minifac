@@ -1,3 +1,5 @@
+import type { NodeOutcome } from "../executor/types.js";
+
 /**
  * `parked` is neither: the run stopped at a node boundary because the
  * caller's `onNodeBoundary` hook asked it to, and it can be resumed at the
@@ -10,8 +12,10 @@ export type RunStatus = "succeeded" | "failed" | "parked";
  *
  * - `terminal_node_succeeded` — a `terminal: true` node completed with
  *   `succeeded`.
- * - `node_failed` — a node failed and no `on_failure` outbound edge was
- *   traversable (either because none exist or every one was budget-exhausted).
+ * - `node_failed` — a node failed or errored and declares no outbound edge
+ *   for its outcome (when it declares some and every one is budget-exhausted,
+ *   the reason is `budget_exhausted`). See ADR 0052 for which edges an
+ *   errored node takes.
  * - `budget_exhausted` — the queue drained after at least one budget-driven
  *   skip and no terminal node ever succeeded.
  * - `graph_drained` — the queue drained naturally (no budget hits) without a
@@ -39,6 +43,8 @@ export interface ExecutionLogEntry {
   nodeId: string;
   iteration: number;
   status: "succeeded" | "failed";
+  /** `success`, a judged `failure`, or an `error` (ADR 0052). */
+  outcome: NodeOutcome;
   startedAt: number;
   endedAt: number;
 }

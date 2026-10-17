@@ -155,6 +155,7 @@ export class CheckMergeExecutor implements NodeExecutor {
             key: k,
             message: `Unknown \`with:\` key \`${k}\` for executor \`check-merge\`. Accepted keys: base, mode.`,
           },
+          outcome: "error",
         };
         return;
       }
@@ -174,6 +175,7 @@ export class CheckMergeExecutor implements NodeExecutor {
         kind: "status",
         status: "failed",
         meta: { reason: "invalid_with", message },
+        outcome: "error",
       };
       return;
     }
@@ -189,6 +191,7 @@ export class CheckMergeExecutor implements NodeExecutor {
           message:
             "Resolved `with.base` is empty; declare `with: { base: <branch> }` explicitly or run from a worktree whose `run.base_branch` is set.",
         },
+        outcome: "error",
       };
       return;
     }
@@ -205,6 +208,7 @@ export class CheckMergeExecutor implements NodeExecutor {
           base,
           message: `Base ref \`${base}\` does not exist in the worktree at ${cwd}.`,
         },
+        outcome: "error",
       };
       return;
     }
@@ -292,6 +296,7 @@ export class CheckMergeExecutor implements NodeExecutor {
         exitCode: mergeTree.code,
         message: `git merge-tree exited ${mergeTree.code}: ${mergeTree.stderr.trim() || "(no stderr)"}`,
       },
+      outcome: "error",
     };
   }
 
@@ -325,6 +330,7 @@ export class CheckMergeExecutor implements NodeExecutor {
           mode,
           message: "git merge fallback did not return a result",
         },
+        outcome: "error",
       };
     }
     if (mergeResult.code === 0) {
