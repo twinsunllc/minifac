@@ -70,9 +70,13 @@ describe("routes schema", () => {
 
   it.each([
     ["a duplicate target", ["a", { to: "a", max_traversals: 1 }], 'duplicate route "a"'],
-    ["an unknown key", [{ to: "a", when: "on_success" }], "Unrecognized key(s) in object: 'when'"],
-    ["a zero budget", [{ to: "a", max_traversals: 0 }], "Number must be greater than 0"],
-    ["a non-integer budget", [{ to: "a", max_traversals: 1.5 }], "Expected integer"],
+    ["an unknown key", [{ to: "a", when: "on_success" }], 'Unrecognized key: "when"'],
+    ["a zero budget", [{ to: "a", max_traversals: 0 }], "Too small: expected number to be >0"],
+    [
+      "a non-integer budget",
+      [{ to: "a", max_traversals: 1.5 }],
+      "invalid route at max_traversals: Invalid input: expected int",
+    ],
     ["an empty id", [""], "a route must name a node"],
     ["a number", [3], "a route must be a node id or { to: <id>, max_traversals: <n> }"],
     ["an empty list", [], "routes must list at least one node"],
@@ -114,7 +118,7 @@ with:
 `,
       },
     );
-    expect(msg).toContain("Unrecognized key(s) in object: 'routes'");
+    expect(msg).toContain('Unrecognized key: "routes"');
   });
 });
 

@@ -11,6 +11,17 @@ conflict; a duplicate or oddly-ordered bullet is tidied when a release is cut.
 
 ## [Unreleased]
 
+### Security
+
+- **zod 3 → 4** (SCARIFW-2406). zod is now `^4.6.7`, fixing
+  [GHSA-mrhx-c7xc-m3w5](https://github.com/advisories/GHSA-mrhx-c7xc-m3w5)
+  (memory exhaustion validating oversized constrained collections), which has
+  no 3.x patch. Load errors whose text comes from zod's defaults now use zod
+  4's wording (`Unrecognized key: "x"` instead of
+  `Unrecognized key(s) in object: 'x'`). Custom messages are unchanged. A
+  route mapping with a non-integer `max_traversals` now reports
+  `invalid route at max_traversals: <message>`.
+
 ## [0.4.0] — 2026-10-17
 
 ### Added

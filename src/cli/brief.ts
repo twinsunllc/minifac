@@ -53,7 +53,7 @@ async function fileExists(p: string): Promise<boolean> {
   }
 }
 
-function describeAnswersError(err: ZodError): string {
+function describeAnswersError(err: ZodError, input: unknown): string {
   const issue = err.issues[0];
   if (!issue) return "invalid answers file";
   const idList = ALL_IDS.join(" | ");
@@ -64,13 +64,22 @@ function describeAnswersError(err: ZodError): string {
   }
   const dotted = issue.path.join(".") || "(root)";
   if (issue.code === "invalid_type") {
-    const it = issue as unknown as { received?: string; expected?: string };
-    if (it.received === "undefined") {
+    // zod 4 issues carry no `received`, so look the value up in the input.
+    if (valueAt(input, issue.path) === undefined) {
       return `missing required answer \`${dotted}\``;
     }
     return `answer \`${dotted}\` must be a string`;
   }
   return `answer \`${dotted}\`: ${issue.message}`;
+}
+
+function valueAt(input: unknown, path: ReadonlyArray<PropertyKey>): unknown {
+  let cur: unknown = input;
+  for (const seg of path) {
+    if (typeof cur !== "object" || cur === null) return undefined;
+    cur = (cur as Record<PropertyKey, unknown>)[seg];
+  }
+  return cur;
 }
 
 function computeIncompleteAt(answers: AuthoringAnswers): AuthoringQuestionId | undefined {
@@ -131,7 +140,7 @@ async function runFromMode(opts: BriefCommandOpts, outPath: string): Promise<num
     answers = AuthoringAnswersSchema.parse(parsed) as AuthoringAnswers;
   } catch (err) {
     if (err instanceof ZodError) {
-      opts.io.stderr.write(`${describeAnswersError(err)}\n`);
+      opts.io.stderr.write(`${describeAnswersError(err, parsed)}\n`);
       return 1;
     }
     throw err;

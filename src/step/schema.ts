@@ -40,7 +40,7 @@ export const InputDefSchema = InputDefBase.superRefine((val, ctx) => {
 
 export type StepInputDef = z.infer<typeof InputDefSchema>;
 
-export const StepInputsRecord = z.record(InputDefSchema).superRefine((rec, ctx) => {
+export const StepInputsRecord = z.record(z.string(), InputDefSchema).superRefine((rec, ctx) => {
   for (const key of Object.keys(rec)) {
     if (!INPUT_NAME_RE.test(key)) {
       ctx.addIssue({
@@ -59,7 +59,7 @@ export const StepSchema = z
     description: z.string().optional(),
     inputs: StepInputsRecord.optional(),
     executor: z.string().min(1),
-    with: z.record(z.unknown()),
+    with: z.record(z.string(), z.unknown()),
     // The step's declared outputs, in the same shape a node declares them.
     // A `uses:` node without its own `outputs:` inherits this map (ADR 0054).
     outputs: OutputsMapSchema.optional(),

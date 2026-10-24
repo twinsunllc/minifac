@@ -18,7 +18,7 @@ import type { Factory, FactoryEdge } from "./schema.js";
 const OUTPUT_PATH_REGEX = /^[a-zA-Z_][a-zA-Z0-9_]*(\.[a-zA-Z0-9_-]+)*$/;
 
 const ScalarSchema = z.union([z.string(), z.number(), z.boolean(), z.null()], {
-  errorMap: () => ({ message: "must be a JSON scalar (string, number, boolean or null)" }),
+  error: "must be a JSON scalar (string, number, boolean or null)",
 });
 
 export const ValueConditionSchema = z
