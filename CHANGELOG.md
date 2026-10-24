@@ -21,6 +21,14 @@ conflict; a duplicate or oddly-ordered bullet is tidied when a release is cut.
   `Unrecognized key(s) in object: 'x'`). Custom messages are unchanged. A
   route mapping with a non-integer `max_traversals` now reports
   `invalid route at max_traversals: <message>`.
+- **Transitive dependency relock** (SCARIFW-2407). `package-lock.json` now
+  resolves body-parser 2.4.0
+  ([GHSA-27r3-jxmh-p828](https://github.com/advisories/GHSA-27r3-jxmh-p828)),
+  fast-uri 3.1.9 (GHSA-w74x-v6f9-j3xg, GHSA-xhq7-xmqj-769h,
+  GHSA-wjr9-j795-jxcr, GHSA-333x-w4r6-6crp) and ip-address 10.7.4
+  ([GHSA-rxp7-6hxx-x8q5](https://github.com/advisories/GHSA-rxp7-6hxx-x8q5)),
+  along with body-parser 2.4.0's own minimums (content-type 2.1.0,
+  iconv-lite 0.7.3, qs 6.16.1). `package.json` is unchanged.
 
 ## [0.4.0] — 2026-10-17
 
