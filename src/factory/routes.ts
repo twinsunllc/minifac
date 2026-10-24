@@ -28,13 +28,22 @@ export const RouteEntrySchema = z.union(
       .strict(),
   ],
   {
-    // Reached only when neither form fits the value's type (a number, a
-    // list); a mapping with a bad key or budget reports the object form's
-    // own issue.
-    errorMap: (issue, ctx) =>
-      issue.code === z.ZodIssueCode.invalid_union
-        ? { message: "a route must be a node id or { to: <id>, max_traversals: <n> }" }
-        : { message: ctx.defaultError },
+    // A mapping with a bad key or zero budget reports the object form's own
+    // issue without reaching this. A non-integer budget aborts the object
+    // form, so the union fails as a whole: for a mapping, name the object
+    // form's first issue; for anything else (a number, a list), the forms.
+    error: (issue) => {
+      if (issue.code !== "invalid_union") return undefined;
+      const input = issue.input;
+      if (typeof input === "object" && input !== null && !Array.isArray(input)) {
+        const inner = issue.errors[1]?.[0];
+        if (inner) {
+          const at = inner.path.length > 0 ? ` at ${inner.path.join(".")}` : "";
+          return `invalid route${at}: ${inner.message}`;
+        }
+      }
+      return "a route must be a node id or { to: <id>, max_traversals: <n> }";
+    },
   },
 );
 

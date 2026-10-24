@@ -92,11 +92,11 @@ export const CommandWithSchema = z
 export type CommandWith = z.infer<typeof CommandWithSchema>;
 export type CommandEntry = z.infer<typeof CommandEntrySchema>;
 
-function formatPath(p: ReadonlyArray<string | number>): string {
+function formatPath(p: ReadonlyArray<PropertyKey>): string {
   let out = "";
   for (const seg of p) {
     if (typeof seg === "number") out += `[${seg}]`;
-    else out += out.length === 0 ? seg : `.${seg}`;
+    else out += out.length === 0 ? String(seg) : `.${String(seg)}`;
   }
   return out;
 }

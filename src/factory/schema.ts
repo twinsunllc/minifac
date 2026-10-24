@@ -59,7 +59,7 @@ export const OutputDefSchema = z
     }
   });
 
-export const OutputsMapSchema = z.record(OutputDefSchema).superRefine((map, ctx) => {
+export const OutputsMapSchema = z.record(z.string(), OutputDefSchema).superRefine((map, ctx) => {
   for (const key of Object.keys(map)) {
     if (!OUTPUT_KEY_REGEX.test(key)) {
       ctx.addIssue({
@@ -77,9 +77,9 @@ export const NodeSchema = z
     terminal: z.boolean().default(false),
     max_iterations: PositiveInt.optional(),
     cwd: z.string().optional(),
-    with: z.record(z.unknown()).optional(),
+    with: z.record(z.string(), z.unknown()).optional(),
     uses: z.string().min(1).optional(),
-    inputs: z.record(z.unknown()).optional(),
+    inputs: z.record(z.string(), z.unknown()).optional(),
     outputs: OutputsMapSchema.optional(),
     // Per-node in-turn nudge budget for missing-required-output recovery.
     // The runner reads this after the outputs validator finds an
@@ -116,10 +116,10 @@ const OUTCOME_WHENS = ["on_success", "on_failure", "on_error"] as const;
 // the load error, so a failed union reports the value-condition issue for a
 // mapping and the supported literals for anything else.
 const EdgeWhenSchema = z.union([z.enum(OUTCOME_WHENS), ValueConditionSchema], {
-  errorMap: (issue, ctx) => {
-    if (issue.code !== z.ZodIssueCode.invalid_union) return { message: ctx.defaultError };
-    if (typeof ctx.data === "object" && ctx.data !== null && !Array.isArray(ctx.data)) {
-      const inner = issue.unionErrors[1]?.issues[0];
+  error: (issue) => {
+    if (issue.code !== "invalid_union") return undefined;
+    if (typeof issue.input === "object" && issue.input !== null && !Array.isArray(issue.input)) {
+      const inner = issue.errors[1]?.[0];
       if (inner) {
         const at = inner.path.length > 0 ? ` at ${inner.path.join(".")}` : "";
         return { message: `invalid value condition${at}: ${inner.message}` };
@@ -148,7 +148,7 @@ export const EdgeSchema = z
 // `extends:` — only the loaded file's own key counts (see `mergeLayers`).
 export const UsesServicesSchema = z
   .array(z.string().min(1, "service name must be a non-empty string"), {
-    invalid_type_error: "uses_services must be a list of service names",
+    error: "uses_services must be a list of service names",
   })
   .superRefine((names, ctx) => {
     const seen = new Set<string>();
@@ -176,7 +176,7 @@ export const NeedsSchema = z
     z
       .string()
       .refine((token) => token.trim().length > 0, "capability token must be a non-empty string"),
-    { invalid_type_error: "needs must be a list of capability tokens" },
+    { error: "needs must be a list of capability tokens" },
   )
   .superRefine((tokens, ctx) => {
     const seen = new Set<string>();
@@ -203,7 +203,7 @@ export const FactoryLayerSchema = z
     name: z.string().min(1).optional(),
     description: z.string().optional(),
     brief: z.enum(["required", "optional", "none"]).optional(),
-    nodes: z.record(NodeSchema).optional(),
+    nodes: z.record(z.string(), NodeSchema).optional(),
     edges: z.array(EdgeSchema).optional(),
     extends: z.string().min(1).optional(),
     uses_services: UsesServicesSchema.optional(),
@@ -219,7 +219,7 @@ export const FactorySchema = z
     name: z.string().min(1),
     description: z.string().optional(),
     brief: z.enum(["required", "optional", "none"]).default("required"),
-    nodes: z.record(NodeSchema),
+    nodes: z.record(z.string(), NodeSchema),
     edges: z.array(EdgeSchema),
     uses_services: UsesServicesSchema.optional(),
     needs: NeedsSchema.optional(),
