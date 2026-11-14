@@ -11,6 +11,14 @@ conflict; a duplicate or oddly-ordered bullet is tidied when a release is cut.
 
 ## [Unreleased]
 
+### Added
+
+- **`{{ brief.start_branch }}`** (SCARIFW-3040). The brief frontmatter may
+  carry `start_branch`, the branch a run's working branch was cut from when a
+  Scarif order named one apart from its `base_branch`. The token substitutes
+  that value, or the empty string when the brief has none, like
+  `{{ brief.base_branch }}`.
+
 ### Security
 
 - **zod 3 → 4** (SCARIFW-2406). zod is now `^4.6.7`, fixing
