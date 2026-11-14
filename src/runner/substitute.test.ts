@@ -49,6 +49,20 @@ describe("substituteBriefTokens", () => {
     expect(substituteBriefTokens("Base: {{ brief.base_branch }}.", b)).toBe("Base: main.");
   });
 
+  it("substitutes brief.start_branch when the brief carries it", () => {
+    const b = brief({
+      frontmatter: { change: "c", factory: "sdd", base_branch: "main", start_branch: "office/x" },
+    });
+    expect(
+      substituteBriefTokens("Start: {{ brief.start_branch }}; base: {{ brief.base_branch }}.", b),
+    ).toBe("Start: office/x; base: main.");
+  });
+
+  it("substitutes the empty string for an absent brief.start_branch, never the token", () => {
+    const b = brief({ frontmatter: { change: "c", factory: "sdd", base_branch: "main" } });
+    expect(substituteBriefTokens("Start: [{{ brief.start_branch }}].", b)).toBe("Start: [].");
+  });
+
   it("leaves unknown identifiers verbatim", () => {
     expect(substituteBriefTokens("Future: {{ brief.depends_on }}.", brief())).toBe(
       "Future: {{ brief.depends_on }}.",
