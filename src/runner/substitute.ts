@@ -151,6 +151,10 @@ function resolveToken(
         return brief.body;
       case "base_branch":
         return brief.frontmatter.base_branch ?? "";
+      case "start_branch":
+        // SCARIFW-3040: where the run's working branch was cut from, when an
+        // order named one apart from its base_branch. Empty when absent.
+        return brief.frontmatter.start_branch ?? "";
       case "model":
         return brief.frontmatter.model ?? "";
       default:
