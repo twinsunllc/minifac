@@ -29,7 +29,7 @@ jobs:
       # 0024 rule 2. Allowlisting bypasses publisher verification but
       # still enforces the SHA pin (the checker is pinned above).
       - name: Audit GitHub Actions
-        uses: twinsunllc/github-actions-security-checker@0ad4f2eca85a1c0a633674e88a1c30e574c22927  # v1.4.3
+        uses: twinsunllc/github-actions-security-checker@fd75b665d78f1156d08da7bfad3255f322e085c3  # v1.5.0
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           allowlist: twinsunllc
