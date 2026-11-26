@@ -30,6 +30,13 @@ export class LibraryError extends Error {
 export interface LibraryDeclaration {
   repo: string;
   ref: string;
+  /**
+   * The declared `range` (e.g. `"~> 2.23"`), carried verbatim. The loader
+   * neither interprets it nor resolves with it: the library is always fetched
+   * at `ref`. Judging `ref` against it belongs to the caller (Scarif's droid
+   * preflight, SCARIFW-3294).
+   */
+  range?: string;
   /** Absolute path of the file that declared the library. */
   declaredIn: string;
 }
@@ -111,13 +118,16 @@ function parseDeclaration(value: unknown, file: string): LibraryDeclaration {
       file,
     );
   }
-  const { repo, ref, ...rest } = value as Record<string, unknown>;
+  const { repo, ref, range, ...rest } = value as Record<string, unknown>;
   const extra = Object.keys(rest);
   if (extra.length > 0) {
     throw new LibraryError(
-      `\`library:\` in ${file} has unknown key(s): ${extra.join(", ")} (expected \`repo\` and \`ref\`)`,
+      `\`library:\` in ${file} has unknown key(s): ${extra.join(", ")} (expected \`repo\`, \`ref\` and optionally \`range\`)`,
       file,
     );
+  }
+  if (range !== undefined && (typeof range !== "string" || range.length === 0)) {
+    throw new LibraryError(`\`library.range\` in ${file} must be a string such as "~> 2.23"`, file);
   }
   if (typeof repo !== "string" || repo.length === 0) {
     throw new LibraryError(`\`library.repo\` in ${file} must be a non-empty string`, file);
@@ -143,7 +153,9 @@ function parseDeclaration(value: unknown, file: string): LibraryDeclaration {
     );
   }
   repoUrl(repo, file); // validates
-  return { repo, ref, declaredIn: file };
+  return range === undefined
+    ? { repo, ref, declaredIn: file }
+    : { repo, ref, range, declaredIn: file };
 }
 
 /**

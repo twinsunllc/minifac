@@ -143,6 +143,7 @@ A project can pin one **library** — a git repo with `steps/` and
 library:
   repo: acme/workflows     # owner/name, a git URL, or an absolute path
   ref: v0.4.0              # a tag or a full 40-character commit sha
+  range: "~> 0.4"          # optional; minifac ignores it (see below)
 
 # workflows/standard_implementation.yaml
 extends: library:standard_implementation
@@ -160,6 +161,12 @@ extends: library:standard_implementation
   is refused at load, naming the ref. A tag resolves to its sha once;
   if the tag later moves, the load fails. A pin that no longer exists
   in the library fails naming the ref and the library's current head.
+- **`range` is carried, not used.** An optional `range` string (such
+  as `"~> 0.4"`) is accepted and ignored by minifac: the library is
+  always fetched at `ref`, never at the newest tag in range. It bounds
+  bump automation, and Scarif's droid preflight refuses a `ref`
+  outside it. A `range` that is not a non-empty string is refused at
+  load; any other extra key still is.
 - The library is fetched with your normal git credentials into
   `~/.minifac/cache/library/`, one tree per resolved sha. A warm
   cache works offline (with a warning); a cold cache with no network

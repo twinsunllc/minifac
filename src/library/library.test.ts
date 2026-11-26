@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { RunArgResolutionError, resolveFactoryByName, resolveRunArg } from "../cli/resolve.js";
 import { FactoryLoadError, loadFactory } from "../factory/loader.js";
-import { _clearLibraryMemo, loadProjectLayout } from "./library.js";
+import { _clearLibraryMemo, loadProjectLayout, readLibraryDeclaration } from "./library.js";
 
 // A local bare repository stands in for the library remote: no network.
 
@@ -175,6 +175,58 @@ describe("library pin validation", () => {
     );
     await expect(loadProjectLayout(dir)).rejects.toThrow(
       /`library\.ref: 2107410`.*abbreviated commit sha.*not an immutable pin/s,
+    );
+  });
+
+  it("accepts an optional `range` and still resolves at `ref` when a newer tag exists", async () => {
+    const lib = await makeLibrary(root);
+    await writeAt(lib.work, "steps/review.yaml", `${REVIEW_STEP}# v0.1.5\n`);
+    git(lib.work, "commit", "--quiet", "-am", "v0.1.5");
+    git(lib.work, "tag", "-a", "v0.1.5", "-m", "v0.1.5");
+    git(lib.work, "push", "--quiet", "origin", "HEAD:main", "refs/tags/v0.1.5");
+    const dir = path.join(root, "ranged");
+    await writeAt(
+      dir,
+      "factory.yaml",
+      `name: c\nlibrary:\n  repo: ${lib.remote}\n  ref: v0.1.0\n  range: "~> 0.1"\n`,
+    );
+    expect((await readLibraryDeclaration(dir))?.range).toBe("~> 0.1");
+    const layout = await loadProjectLayout(dir);
+    expect(layout.library?.ref).toBe("v0.1.0");
+    expect(layout.library?.sha).toBe(lib.v1);
+  });
+
+  it("carries no `range` key when none is declared", async () => {
+    const decl = await readLibraryDeclaration(await makeConsumer(root, "acme/lib", "v0.1.0"));
+    expect(decl).toBeDefined();
+    expect(Object.keys(decl ?? {})).not.toContain("range");
+  });
+
+  it.each([
+    ["a YAML number", "2.23"],
+    ["an empty string", '""'],
+    ["a list", '["~> 2.23"]'],
+  ])("refuses a `range` that is %s, naming the file", async (_label, literal) => {
+    const dir = path.join(root, "bad-range");
+    const file = await writeAt(
+      dir,
+      "factory.yaml",
+      `name: c\nlibrary:\n  repo: ${path.join(root, "no-such-remote.git")}\n  ref: v0.1.0\n  range: ${literal}\n`,
+    );
+    await expect(loadProjectLayout(dir)).rejects.toThrow(
+      `\`library.range\` in ${file} must be a string such as "~> 2.23"`,
+    );
+  });
+
+  it("still refuses any other key in `library:`", async () => {
+    const dir = path.join(root, "extra-key");
+    await writeAt(
+      dir,
+      "factory.yaml",
+      `name: c\nlibrary:\n  repo: acme/lib\n  ref: v0.1.0\n  range: "~> 0.1"\n  foo: bar\n`,
+    );
+    await expect(loadProjectLayout(dir)).rejects.toThrow(
+      /`library:` in .*factory\.yaml has unknown key\(s\): foo \(expected `repo`, `ref` and optionally `range`\)/,
     );
   });
 
