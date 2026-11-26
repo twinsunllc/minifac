@@ -13,6 +13,12 @@ conflict; a duplicate or oddly-ordered bullet is tidied when a release is cut.
 
 ### Added
 
+- **`library.range`** (SCARIFW-3294). A `library:` declaration may carry an
+  optional `range` string, such as `"~> 2.23"`, beside `repo` and `ref`. The
+  loader carries it on `LibraryDeclaration` and does not interpret it: the
+  library is still resolved and fetched at `ref`. Scarif's droid preflight
+  checks `ref` against it. A `range` that is not a non-empty string is a load
+  error naming the file, and any other extra key is still refused.
 - **`{{ brief.start_branch }}`** (SCARIFW-3040). The brief frontmatter may
   carry `start_branch`, the branch a run's working branch was cut from when a
   Scarif order named one apart from its `base_branch`. The token substitutes
